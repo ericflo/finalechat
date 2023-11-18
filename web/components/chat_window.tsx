@@ -56,12 +56,24 @@ export default function ChatWindow() {
     setNewMessage("");
   }, []);
 
+  const handleSendClick = useCallback(
+    () => addMessage(newMessage),
+    [newMessage, addMessage]
+  );
+
   useEffect(() => {
     // Scroll to the bottom of the chat history whenever messages update
     if (chatHistoryRef.current) {
       chatHistoryRef.current.scrollTop = chatHistoryRef.current.scrollHeight;
     }
   }, [messages]);
+
+  const handleTextareaChange = useCallback(
+    (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+      setNewMessage(event.target.value);
+    },
+    []
+  );
 
   // Handle Enter to send, Shift+Enter for newline
   const handleKeyDown = useCallback(
@@ -94,14 +106,11 @@ export default function ChatWindow() {
             className="form-control"
             placeholder="Type a message..."
             value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
+            onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
             style={{ height: "50px", resize: "none" }}
           />
-          <button
-            className="btn btn-primary"
-            onClick={() => addMessage(newMessage)}
-          >
+          <button className="btn btn-primary" onClick={handleSendClick}>
             Send
           </button>
         </div>
