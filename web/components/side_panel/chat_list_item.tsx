@@ -19,10 +19,12 @@ const ChatListItem = ({ chat, onSelect }: ChatListItemProps) => {
     [onSelect]
   );
   return (
-    <li className="list-group-item" onClick={handleClick}>
-      <button className="btn" onClick={handleClick}>
-        {chat.summary}
-      </button>
+    <li className="list-group-item p-0" onClick={handleClick}>
+      <div className="me-2 text-nowrap overflow-hidden">
+        <button className="btn" onClick={handleClick}>
+          {chat.summary}
+        </button>
+      </div>
     </li>
   );
 };
