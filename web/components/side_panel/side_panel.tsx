@@ -5,12 +5,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import SearchBar from "./search_bar";
 import ChatList from "./chat_list";
 import UserProfileSection from "./user_profile_section";
-
-export interface Chat {
-  id: number;
-  title: string;
-  // Add more chat-related properties here
-}
+import { Chat } from "../../types";
 
 // Temporary for demo purposes
 let GLOBAL_CHAT_ID = 1;

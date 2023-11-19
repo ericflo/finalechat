@@ -1,7 +1,7 @@
 "use client";
 // Code Context: React TypeScript with bootstrap 5.3.2 and bootstrap-icons injected
 
-import { Chat } from "./side_panel";
+import { Chat } from "../../types";
 
 interface ChatListItemProps {
   chat: Chat;

@@ -1,7 +1,7 @@
 "use client";
 // Code Context: React TypeScript with bootstrap 5.3.2 and bootstrap-icons injected
 
-import { Message } from "./chat_window";
+import { Message } from "../../types";
 
 export interface ChatMessageProps {
   message: Message;
