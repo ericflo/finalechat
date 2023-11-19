@@ -24,14 +24,6 @@ async function fetchMessages(): Promise<Message[]> {
   ];
 }
 
-// This component is the main chat window that displays the messages between the user and
-// an assistant. It should produce a center column that displays the messages, with a small left
-// column that displays the user's profile, and the right column that displays the user or agent
-// name in bold, and then the chat history. The chat history should be scrollable.
-// At the bottom is a sticky footer that contains a text input and a send button, which should
-// send the message to the assistant when clicked. The text input should be cleared after the
-// message is sent. Also, hitting enter while typing should send the input, but shift+enter should
-// insert a newline into the input.
 export default function ChatWindow() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState<string>("");

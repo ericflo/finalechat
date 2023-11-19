@@ -25,14 +25,6 @@ async function fetchChats(): Promise<Chat[]> {
   ];
 }
 
-// This component is intended to be the side panel of the chatbot application, it is
-// responsible for rendering the list of chats and options and actions.
-// The top item should be a search bar and a new chat icon
-// After that, a section for a list of chats, which should expand to fill the available
-// vertical space, and have a scrollbar if necessary, along with infinite scroll to load
-// more chats as the user scrolls down.
-// At the bottom, there should be a user profile section which, when tapped or clicked,
-// opens a menu to go to settings, logout, or other user-related actions.
 export default function SidePanel() {
   const [chats, setChats] = useState<Chat[]>([]);
   const [isLoading, setIsLoading] = useState(false);
