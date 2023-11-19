@@ -9,9 +9,9 @@ export interface ChatMessageProps {
 
 const ChatMessage = ({ message }: ChatMessageProps) => (
   <div className="message py-2 my-1">
-    <strong>{message.sender}</strong>
+    <strong>{message.sender_type}</strong>
     <br />
-    <span>{message.content}</span>
+    <span>{message.text}</span>
   </div>
 );
 

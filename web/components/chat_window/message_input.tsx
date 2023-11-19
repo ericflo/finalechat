@@ -1,13 +1,17 @@
 "use client";
 // Code Context: React TypeScript with bootstrap 5.3.2 and bootstrap-icons injected
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 
 export interface MessageInputProps {
+  chatId: number;
   onSendMessage: (message: string) => void;
 }
 
-const MessageInput: React.FC<MessageInputProps> = ({ onSendMessage }) => {
+const MessageInput: React.FC<MessageInputProps> = ({
+  chatId,
+  onSendMessage,
+}) => {
   const [newMessage, setNewMessage] = useState<string>("");
 
   const handleTextareaChange = useCallback(
@@ -36,6 +40,11 @@ const MessageInput: React.FC<MessageInputProps> = ({ onSendMessage }) => {
       setNewMessage("");
     }
   }, [newMessage, onSendMessage]);
+
+  // Clear the input when the chatId changes
+  useEffect(() => {
+    setNewMessage("");
+  }, [chatId]);
 
   return (
     <div className="mt-auto p-4">

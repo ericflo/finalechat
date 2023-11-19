@@ -1,51 +1,33 @@
 "use client";
 // Code Context: React TypeScript with bootstrap 5.3.2 and bootstrap-icons injected
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useEffect, useCallback } from "react";
 import SearchBar from "./search_bar";
 import ChatList from "./chat_list";
 import UserProfileSection from "./user_profile_section";
-import { Chat } from "../../types";
+import { useGetChats } from "../../hooks/api";
 
-// Temporary for demo purposes
-let GLOBAL_CHAT_ID = 1;
-
-async function fetchChats(): Promise<Chat[]> {
-  // Replace with actual data fetching logic
-  return [
-    { id: GLOBAL_CHAT_ID++, title: "Chat 1" },
-    { id: GLOBAL_CHAT_ID++, title: "Chat 2" },
-    { id: GLOBAL_CHAT_ID++, title: "Chat 3" },
-    { id: GLOBAL_CHAT_ID++, title: "Chat 4" },
-  ];
+export interface SidePanelProps {
+  chatId: number;
+  onChatSelected: (chatId: number) => void;
 }
 
-export default function SidePanel() {
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-
-  const loadMoreChats = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      // Replace with actual data fetching logic
-      const newChats = await fetchChats();
-      setChats((prevChats) => [...prevChats, ...newChats]);
-    } catch (error) {
-      // Handle error appropriately
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
+export default function SidePanel({ chatId, onChatSelected }: SidePanelProps) {
+  const { getChats, chats, loading, error } = useGetChats();
   useEffect(() => {
-    loadMoreChats();
-  }, [loadMoreChats]);
-
+    getChats();
+  }, [chatId, getChats]);
+  const handleNewChat = useCallback(() => onChatSelected(-1), [onChatSelected]);
   return (
     <div className="d-flex flex-column h-100">
-      <SearchBar />
+      {error && <div className="alert alert-danger">{error}</div>}
+      <SearchBar onNewChat={handleNewChat} />
       <div className="flex-grow-1 overflow-auto">
-        <ChatList chats={chats} isLoading={isLoading} />
+        <ChatList
+          chats={chats?.items || []}
+          isLoading={loading}
+          onChatSelected={onChatSelected}
+        />
       </div>
       <div className="mt-auto">
         <UserProfileSection />

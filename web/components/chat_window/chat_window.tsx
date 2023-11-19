@@ -1,49 +1,74 @@
 "use client";
 // Code Context: React TypeScript with bootstrap 5.3.2 and bootstrap-icons injected
 
-import React, { useState, useEffect, useCallback } from "react";
-import { Message } from "../../types";
+import React, { useCallback, useEffect } from "react";
 import MessageList from "./message_list";
-import MessageInput from "./message_input"; // Import the new component
+import MessageInput from "./message_input";
+import {
+  useGetMessages,
+  useCreateMessage,
+  useCreateChat,
+} from "../../hooks/api";
 
-async function fetchMessages(): Promise<Message[]> {
-  // Replace with actual data fetching logic
-  return [
-    { sender: "User", content: "Hello!" },
-    { sender: "Agent", content: "Hi, how can I help you?" },
-    { sender: "User", content: "I have a question about my order." },
-    { sender: "Agent", content: "Sure, what's your order number?" },
-    { sender: "User", content: "123456789" },
-    { sender: "Agent", content: "Thanks, let me check on that." },
-    { sender: "Agent", content: "It looks like your order is on the way!" },
-    { sender: "Agent", content: "It should arrive by tomorrow." },
-    { sender: "User", content: "Great, thanks!" },
-  ];
+export interface ChatWindowProps {
+  chatId: number;
+  onChatCreated: (chatId: number) => void;
 }
 
-const ChatWindow: React.FC = () => {
-  const [messages, setMessages] = useState<Message[]>([]);
-
-  const loadInitialMessages = useCallback(async () => {
-    const newMessages = await fetchMessages();
-    setMessages(newMessages);
-  }, []);
+const ChatWindow = ({ chatId, onChatCreated }: ChatWindowProps) => {
+  const {
+    getMessages,
+    messages,
+    //loading: messagesLoading,
+    error: messagesError,
+  } = useGetMessages();
+  const {
+    createMessage,
+    //message: createdMessage,
+    //loading: messageLoading,
+    error: messageError,
+  } = useCreateMessage();
+  const {
+    createChat,
+    //chat: createdChat,
+    //loading: chatLoading,
+    error: chatError,
+  } = useCreateChat();
 
   useEffect(() => {
-    loadInitialMessages();
-  }, [loadInitialMessages]);
+    if (chatId > 0) {
+      getMessages(chatId);
+    }
+  }, [chatId, getMessages]);
 
-  const addMessage = useCallback((content: string) => {
-    setMessages((prevMessages) => [
-      ...prevMessages,
-      { sender: "User", content },
-    ]);
-  }, []);
+  const handleSendMessage = useCallback(
+    (text: string) => {
+      (async () => {
+        if (chatId < 0) {
+          const newChatId = await createChat();
+          await createMessage(newChatId, text, "user");
+          onChatCreated(newChatId);
+          return;
+        } else {
+          await createMessage(chatId, text, "user");
+          getMessages(chatId);
+        }
+      })();
+    },
+    [chatId, createChat, createMessage, getMessages, onChatCreated]
+  );
+
+  const msgs = (chatId > 0 ? messages?.items : null) || [];
 
   return (
     <div className="d-flex flex-column h-100">
-      <MessageList messages={messages} />
-      <MessageInput onSendMessage={addMessage} />
+      {chatError && <div className="alert alert-danger">{chatError}</div>}
+      {messagesError && (
+        <div className="alert alert-danger">{messagesError}</div>
+      )}
+      {messageError && <div className="alert alert-danger">{messageError}</div>}
+      <MessageList messages={msgs} />
+      <MessageInput chatId={chatId} onSendMessage={handleSendMessage} />
     </div>
   );
 };
