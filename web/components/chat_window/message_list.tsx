@@ -24,7 +24,7 @@ const MessageList = ({ messages }: MessageListProps) => {
       <div className="d-flex justify-content-center w-100">
         <div
           className="chat-history"
-          style={{ maxWidth: "800px", width: "100%", padding: "0 0 100px 0" }}
+          style={{ maxWidth: "800px", width: "100%", padding: "0 0 50px 0" }}
         >
           {messages.length > 0 ? (
             messages.map((message, index) => (

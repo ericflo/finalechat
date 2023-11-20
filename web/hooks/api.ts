@@ -4,7 +4,7 @@ import { shouldUpdateState, usePaginatedFetch } from "./utils";
 import { fromIsoString } from "../utils";
 
 // Base URL for the API
-const API_BASE_URL = "http://127.0.0.1:7025";
+const API_BASE_URL = "/api";
 
 // Helper function to handle fetch responses
 async function handleResponse<T>(response: Response): Promise<T> {
