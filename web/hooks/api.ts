@@ -1,8 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo, use } from "react";
 import { Chat, Message, PaginatedResponse } from "../types";
+import { shouldUpdateState, usePaginatedFetch } from "./utils";
+import { fromIsoString } from "../utils";
 
 // Base URL for the API
-const API_BASE_URL = "http://127.0.0.1:5000";
+const API_BASE_URL = "http://127.0.0.1:7025";
 
 // Helper function to handle fetch responses
 async function handleResponse<T>(response: Response): Promise<T> {
@@ -15,27 +17,38 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
 // Hook to get chats
 export function useGetChats() {
-  const [chats, setChats] = useState<PaginatedResponse<Chat> | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Create a factory function that returns the fetch function
+  const fetchChatsFactory = useCallback(
+    ({ reverse }: { reverse?: boolean }) => {
+      return async (page: number, perPage: number) => {
+        const queryParams = new URLSearchParams({
+          page: page.toString(),
+          per_page: perPage.toString(),
+          order: reverse ? "asc" : "desc",
+        });
+        const response = await fetch(`${API_BASE_URL}/chats?${queryParams}`);
+        return handleResponse<PaginatedResponse<Chat>>(response);
+      };
+    },
+    []
+  );
 
-  const getChats = useCallback(async (page?: number, perPage?: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const queryParams = new URLSearchParams();
-      if (page) queryParams.append("page", page.toString());
-      if (perPage) queryParams.append("per_page", perPage.toString());
-      const response = await fetch(`${API_BASE_URL}/chats?${queryParams}`);
-      const data: PaginatedResponse<Chat> = await handleResponse(response);
-      setChats(data);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
+  const sortFunc = useCallback((a: Chat, b: Chat): number => {
+    return (
+      fromIsoString(a.created_timestamp).getTime() -
+      fromIsoString(b.created_timestamp).getTime()
+    );
   }, []);
 
+  // Use the factory function with usePaginatedFetch
+  const {
+    data: chats,
+    loading,
+    error,
+    fetchPaginatedData: getChats,
+  } = usePaginatedFetch<Chat>(fetchChatsFactory, sortFunc);
+
+  // Usage example: getChats({ maxPages: 5, perPage: 20 })
   return { getChats, chats, loading, error };
 }
 
@@ -56,14 +69,16 @@ export function useCreateChat() {
         },
       });
       const data: Chat = await handleResponse(response);
-      setChat(data);
+      if (shouldUpdateState(chat, data)) {
+        await setChat(data);
+      }
       return data.id;
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [chat]);
 
   return { createChat, chat, loading, error };
 }
@@ -74,19 +89,24 @@ export function useGetChat() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const getChat = useCallback(async (chatId: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`${API_BASE_URL}/chats/${chatId}`);
-      const data: Chat = await handleResponse(response);
-      setChat(data);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const getChat = useCallback(
+    async (chatId: number) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetch(`${API_BASE_URL}/chats/${chatId}`);
+        const data: Chat = await handleResponse(response);
+        if (shouldUpdateState(chat, data)) {
+          await setChat(data);
+        }
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [chat]
+  );
 
   return { getChat, chat, loading, error };
 }
@@ -117,35 +137,44 @@ export function useDeleteChat() {
 }
 
 // Hook to get messages for a chat
-export function useGetMessages() {
-  const [messages, setMessages] = useState<PaginatedResponse<Message> | null>(
-    null
-  );
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+export function useGetMessages(options: { sort?: boolean }) {
+  const [optionsSort, _] = useState(options?.sort);
 
-  const getMessages = useCallback(
-    async (chatId: number, page?: number, perPage?: number) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const queryParams = new URLSearchParams();
-        if (page) queryParams.append("page", page.toString());
-        if (perPage) queryParams.append("per_page", perPage.toString());
+  const fetchMessagesFactory = useCallback(
+    (config: { chatId: number; reverse: boolean }) => {
+      return async (page: number, perPage: number) => {
+        const { chatId } = config;
+        const queryParams = new URLSearchParams({
+          page: page.toString(),
+          per_page: perPage.toString(),
+          order: config.reverse ? "asc" : "desc",
+        });
         const response = await fetch(
           `${API_BASE_URL}/chats/${chatId}/messages?${queryParams}`
         );
-        const data: PaginatedResponse<Message> = await handleResponse(response);
-        setMessages(data);
-      } catch (err: any) {
-        setError(err.message);
-      } finally {
-        setLoading(false);
-      }
+        return handleResponse<PaginatedResponse<Message>>(response);
+      };
     },
     []
   );
+  const sortFunc = useCallback((a: Message, b: Message): number => {
+    return (
+      fromIsoString(a.timestamp).getTime() -
+      fromIsoString(b.timestamp).getTime()
+    );
+  }, []);
 
+  const {
+    data: messages,
+    loading,
+    error,
+    fetchPaginatedData: getMessages,
+  } = usePaginatedFetch<Message>(
+    fetchMessagesFactory,
+    options?.sort ? sortFunc : null
+  );
+
+  // Usage example: getMessages({ maxPages: 5, perPage: 20, chatId: 123 })
   return { getMessages, messages, loading, error };
 }
 
@@ -171,7 +200,9 @@ export function useCreateMessage() {
           }
         );
         const data: Message = await handleResponse(response);
-        setMessage(data);
+        if (shouldUpdateState(message, data)) {
+          await setMessage(data);
+        }
         return data.id;
       } catch (err: any) {
         setError(err.message);
@@ -179,7 +210,7 @@ export function useCreateMessage() {
         setLoading(false);
       }
     },
-    []
+    [message]
   );
 
   return { createMessage, message, loading, error };
@@ -191,19 +222,24 @@ export function useGetMessage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const getMessage = useCallback(async (messageId: number) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`${API_BASE_URL}/messages/${messageId}`);
-      const data: Message = await handleResponse(response);
-      setMessage(data);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const getMessage = useCallback(
+    async (messageId: number) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetch(`${API_BASE_URL}/messages/${messageId}`);
+        const data: Message = await handleResponse(response);
+        if (shouldUpdateState(message, data)) {
+          await setMessage(data);
+        }
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [message]
+  );
 
   return { getMessage, message, loading, error };
 }
@@ -214,25 +250,30 @@ export function useUpdateMessage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const updateMessage = useCallback(async (messageId: number, text: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`${API_BASE_URL}/messages/${messageId}`, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ text }),
-      });
-      const data: Message = await handleResponse(response);
-      setUpdatedMessage(data);
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const updateMessage = useCallback(
+    async (messageId: number, text: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetch(`${API_BASE_URL}/messages/${messageId}`, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ text }),
+        });
+        const data: Message = await handleResponse(response);
+        if (shouldUpdateState(updatedMessage, data)) {
+          await setUpdatedMessage(data);
+        }
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [updatedMessage]
+  );
 
   return { updateMessage, updatedMessage, loading, error };
 }

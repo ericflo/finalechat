@@ -1,7 +1,7 @@
 "use client";
 // Code Context: React TypeScript with bootstrap 5.3.2 and bootstrap-icons injected
 
-import React, { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import MessageList from "./message_list";
 import MessageInput from "./message_input";
 import {
@@ -10,36 +10,55 @@ import {
   useCreateChat,
 } from "../../hooks/api";
 
+const DEFAULT_POLL_INTERVAL = 1000;
+
 export interface ChatWindowProps {
   chatId: number;
+  pollInterval?: number;
   onChatCreated: (chatId: number) => void;
 }
 
-const ChatWindow = ({ chatId, onChatCreated }: ChatWindowProps) => {
+const ChatWindow = ({
+  chatId,
+  pollInterval,
+  onChatCreated,
+}: ChatWindowProps) => {
   const {
     getMessages,
     messages,
-    //loading: messagesLoading,
     error: messagesError,
-  } = useGetMessages();
-  const {
-    createMessage,
-    //message: createdMessage,
-    //loading: messageLoading,
-    error: messageError,
-  } = useCreateMessage();
-  const {
-    createChat,
-    //chat: createdChat,
-    //loading: chatLoading,
-    error: chatError,
-  } = useCreateChat();
+  } = useGetMessages({ sort: true });
+  const { createMessage, error: messageError } = useCreateMessage();
+  const { createChat, error: chatError } = useCreateChat();
+  const [isPolling, _setIsPolling] = useState(true);
+
+  // Set isPolling to false when the window is unfocused
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      _setIsPolling(!document.hidden);
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (chatId > 0) {
-      getMessages(chatId);
+      getMessages({ chatId });
     }
   }, [chatId, getMessages]);
+
+  useEffect(() => {
+    let intervalId;
+    if (isPolling && chatId > 0) {
+      intervalId = setInterval(
+        () => getMessages({ chatId }),
+        pollInterval || DEFAULT_POLL_INTERVAL
+      );
+    }
+    return () => clearInterval(intervalId);
+  }, [chatId, isPolling, getMessages]);
 
   const handleSendMessage = useCallback(
     (text: string) => {
@@ -51,14 +70,12 @@ const ChatWindow = ({ chatId, onChatCreated }: ChatWindowProps) => {
           return;
         } else {
           await createMessage(chatId, text, "user");
-          getMessages(chatId);
+          getMessages({ chatId });
         }
       })();
     },
     [chatId, createChat, createMessage, getMessages, onChatCreated]
   );
-
-  const msgs = (chatId > 0 ? messages?.items : null) || [];
 
   return (
     <div className="d-flex flex-column h-100">
@@ -67,7 +84,7 @@ const ChatWindow = ({ chatId, onChatCreated }: ChatWindowProps) => {
         <div className="alert alert-danger">{messagesError}</div>
       )}
       {messageError && <div className="alert alert-danger">{messageError}</div>}
-      <MessageList messages={msgs} />
+      <MessageList messages={chatId > 0 ? messages : []} />
       <MessageInput chatId={chatId} onSendMessage={handleSendMessage} />
     </div>
   );

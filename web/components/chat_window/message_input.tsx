@@ -47,7 +47,7 @@ const MessageInput: React.FC<MessageInputProps> = ({
   }, [chatId]);
 
   return (
-    <div className="mt-auto p-4">
+    <div className="mt-auto pt-1 pe-2 pb-2 ps-4">
       <div className="input-group">
         <textarea
           className="form-control"

@@ -3,6 +3,7 @@
 
 import React, { useEffect, useRef } from "react";
 import ChatMessage from "./chat_message";
+import EmptyState from "./empty_state";
 import { Message } from "../../types";
 
 export interface MessageListProps {
@@ -23,11 +24,15 @@ const MessageList = ({ messages }: MessageListProps) => {
       <div className="d-flex justify-content-center w-100">
         <div
           className="chat-history"
-          style={{ maxWidth: "800px", width: "100%" }}
+          style={{ maxWidth: "800px", width: "100%", padding: "0 0 100px 0" }}
         >
-          {messages.map((message, index) => (
-            <ChatMessage key={index} message={message} />
-          ))}
+          {messages.length > 0 ? (
+            messages.map((message, index) => (
+              <ChatMessage key={index} message={message} />
+            ))
+          ) : (
+            <EmptyState />
+          )}
         </div>
       </div>
     </div>

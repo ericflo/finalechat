@@ -1,6 +1,7 @@
 export interface Chat {
   id: number;
   summary: string;
+  created_timestamp: string;
   messages?: Message[];
 }
 

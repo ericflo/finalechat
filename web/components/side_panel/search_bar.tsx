@@ -10,7 +10,7 @@ const SearchBar = ({ onNewChat }: SearchBarProps) => (
     <input
       type="text"
       className="form-control me-2"
-      placeholder="Search"
+      placeholder="Chat search coming soon..."
       disabled
     />
     <button className="btn btn-outline-primary" onClick={onNewChat}>

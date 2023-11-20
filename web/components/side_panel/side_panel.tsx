@@ -15,7 +15,7 @@ export interface SidePanelProps {
 export default function SidePanel({ chatId, onChatSelected }: SidePanelProps) {
   const { getChats, chats, loading, error } = useGetChats();
   useEffect(() => {
-    getChats();
+    getChats({ reverse: false });
   }, [chatId, getChats]);
   const handleNewChat = useCallback(() => onChatSelected(-1), [onChatSelected]);
   return (
@@ -24,7 +24,7 @@ export default function SidePanel({ chatId, onChatSelected }: SidePanelProps) {
       <SearchBar onNewChat={handleNewChat} />
       <div className="flex-grow-1 overflow-auto">
         <ChatList
-          chats={chats?.items || []}
+          chats={chats}
           isLoading={loading}
           onChatSelected={onChatSelected}
         />

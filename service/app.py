@@ -12,6 +12,7 @@ db = SQLAlchemy(app)
 class Chat(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     summary = db.Column(db.String(1024), nullable=False, default="")
+    created_timestamp = db.Column(db.DateTime, default=datetime.now)
     messages = db.relationship(
         "Message", backref="chat", lazy=True, cascade="all, delete-orphan"
     )
@@ -20,6 +21,7 @@ class Chat(db.Model):
         return {
             "id": self.id,
             "summary": self.summary,
+            "created_timestamp": self.created_timestamp.isoformat(),
             "messages": [message.to_dict() for message in self.messages],
         }
 
@@ -31,7 +33,7 @@ class Message(db.Model):
     )
     text = db.Column(db.String(1024), nullable=False)
     sender_type = db.Column(db.String(50), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=datetime.now)
 
     def to_dict(self):
         return {
@@ -51,7 +53,7 @@ with app.app_context():
 # Helper functions
 def paginate_query(query):
     page = request.args.get("page", 1, type=int)
-    per_page = request.args.get("per_page", 10, type=int)
+    per_page = request.args.get("per_page", 100, type=int)
     paginated_query = query.paginate(page=page, per_page=per_page, error_out=False)
     return {
         "items": [item.to_dict() for item in paginated_query.items],
@@ -59,6 +61,13 @@ def paginate_query(query):
         "pages": paginated_query.pages,
         "page": page,
     }
+
+
+def order_query(query, field, default_order):
+    order = request.args.get("order", default_order, type=str)
+    if order == "desc":
+        return query.order_by(field.desc())
+    return query.order_by(field.asc())
 
 
 def validate_message_data(data, required_fields):
@@ -72,7 +81,7 @@ def validate_message_data(data, required_fields):
 # API Endpoints
 @app.route("/chats", methods=["GET"])
 def get_chats():
-    chats_query = Chat.query
+    chats_query = order_query(Chat.query, Chat.created_timestamp, "desc")
     return jsonify(paginate_query(chats_query))
 
 
@@ -104,6 +113,7 @@ def delete_chat(chat_id):
 def get_messages(chat_id):
     Chat.query.get_or_404(chat_id)  # Ensure chat exists
     messages_query = Message.query.filter_by(chat_id=chat_id)
+    messages_query = order_query(messages_query, Message.timestamp, "desc")
     return jsonify(paginate_query(messages_query))
 
 
@@ -160,6 +170,18 @@ def not_found(error):
     return jsonify({"error": "Not found"}), 404
 
 
+@app.route("/<path:path>", methods=["OPTIONS"])
+def handle_options(path):
+    response = app.make_default_options_response()
+    response.headers.add("Access-Control-Allow-Origin", "*")
+    response.headers.add(
+        "Access-Control-Allow-Headers",
+        "Content-Type,Authorization,Origin,X-Requested-With,Accept,Accept-Language,Content-Language",
+    )
+    response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
+    return response
+
+
 # This is how we allow all origins to access our API
 # This is not secure and should not be used in production
 @app.after_request
@@ -169,9 +191,11 @@ def after_request(response):
         "Access-Control-Allow-Headers",
         "Content-Type,Authorization,Origin,X-Requested-With,Accept,Accept-Language,Content-Language",
     )
-    # response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE")
+    response.headers.add("Access-Control-Allow-Methods", "GET,PUT,POST,DELETE,OPTIONS")
     return response
 
 
 if __name__ == "__main__":
-    app.run(debug=False)  # Turn off debug mode for production
+    app.run(
+        host="0.0.0.0", port=7025, debug=False
+    )  # Turn off debug mode for production
