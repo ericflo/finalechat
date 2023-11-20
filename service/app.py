@@ -95,7 +95,9 @@ def get_chats():
 @app.route("/chats", methods=["POST"])
 def create_chat():
     chat = Chat()
-    chat.model = request.args.get("model", "GeneZC/MiniChat-3B", type=str)
+    # chat.model = request.args.get("model", "GeneZC/MiniChat-3B", type=str)
+    # chat.model = request.args.get("model", "Xwin-LM/Xwin-LM-13B-V0.2", type=str)
+    chat.model = request.args.get("model", "Xwin-LM/Xwin-LM-7B-V0.2", type=str)
     chat.sampling_params = request.args.get("sampling_params", "{}", type=str)
     db.session.add(chat)
     db.session.commit()

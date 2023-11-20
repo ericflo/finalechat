@@ -5,7 +5,7 @@ import json
 
 from vllm import LLM, SamplingParams
 
-from minichat_convo import get_minichat_prompt
+from minichat_convo import get_minichat_prompt, get_xwin_prompt
 from client import DEFAULT_CLIENT
 
 LLM_INSTANCE = {"inst": None}
@@ -93,7 +93,12 @@ def process_chat(chat, messages):
         DEFAULT_CLIENT.update_chat(chat["id"], status="processing")
         llm = get_llm(model=chat["model"])
         sampling_params = get_sampling_params(json.loads(chat["sampling_params"]))
-        prompt = get_minichat_prompt(messages=messages)
+        if chat["model"] == "GeneZC/MiniChat-3B":
+            prompt = get_minichat_prompt(messages=messages)
+        elif chat["model"].startswith("Xwin-LM/Xwin-LM"):
+            prompt = get_xwin_prompt(messages=messages)
+        else:
+            raise ValueError(f"Invalid model: {chat['model']}")
         print(prompt)
         response = llm.generate([prompt], sampling_params=sampling_params)[0]
         print(response)

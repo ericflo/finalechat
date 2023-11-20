@@ -168,3 +168,31 @@ def get_minichat_prompt(
     conv.append_message(conv.roles[1], None)
     # print([conv.get_prompt()])
     return conv.get_prompt()
+
+
+def get_xwin_prompt(
+    messages: Optional[List[Any]] = None,
+    system_message="A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.",
+) -> str:
+    conv = Conversation(
+        system=system_message,
+        roles=("USER", "ASSISTANT"),
+        messages=[],
+        offset=0,
+        sep_style=SeparatorStyle.ADD_COLON_TWO,
+        sep=" ",
+        sep2="</s>",
+    )
+    print(f"messages: {messages}")
+    if messages:
+        for message in messages:
+            role = conv.roles[0]
+            message_role = message.get("role", message.get("sender_type", None))
+            if message_role == "user":
+                role = conv.roles[0]
+            elif message_role == "assistant":
+                role = conv.roles[1]
+            conv.append_message(role, message.get("content", message.get("text", None)))
+    conv.append_message(conv.roles[1], None)
+    # print([conv.get_prompt()])
+    return conv.get_prompt()
