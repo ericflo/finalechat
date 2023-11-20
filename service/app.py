@@ -1,6 +1,7 @@
+from datetime import datetime
 from flask import Flask, request, jsonify, abort
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
+
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///chat.db"
@@ -12,6 +13,9 @@ db = SQLAlchemy(app)
 class Chat(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     summary = db.Column(db.String(1024), nullable=False, default="")
+    model = db.Column(db.String(1024), nullable=False)
+    status = db.Column(db.String(50), nullable=False, default="idle")
+    sampling_params = db.Column(db.Text, nullable=False, default="{}")
     created_timestamp = db.Column(db.DateTime, default=datetime.now)
     messages = db.relationship(
         "Message", backref="chat", lazy=True, cascade="all, delete-orphan"
@@ -21,8 +25,11 @@ class Chat(db.Model):
         return {
             "id": self.id,
             "summary": self.summary,
+            "model": self.model,
+            "status": self.status,
+            "sampling_params": self.sampling_params,
             "created_timestamp": self.created_timestamp.isoformat(),
-            "messages": [message.to_dict() for message in self.messages],
+            # "messages": [message.to_dict() for message in self.messages],
         }
 
 
@@ -88,17 +95,38 @@ def get_chats():
 @app.route("/chats", methods=["POST"])
 def create_chat():
     chat = Chat()
+    chat.model = request.args.get("model", "GeneZC/MiniChat-3B", type=str)
+    chat.sampling_params = request.args.get("sampling_params", "{}", type=str)
     db.session.add(chat)
     db.session.commit()
     return jsonify({"id": chat.id}), 201
 
 
+@app.route("/chats/<int:chat_id>", methods=["PUT"])
+def update_chat(chat_id):
+    chat = Chat.query.get_or_404(chat_id)
+    data = request.get_json()
+    if not data:
+        abort(400, description="Request data is missing.")
+    changed = False
+    if "summary" in data:
+        chat.summary = data["summary"]
+        changed = True
+    if "status" in data:
+        chat.status = data["status"]
+        changed = True
+    # if "sampling_params" in data:
+    #     chat.sampling_params = data["sampling_params"]
+    #     changed = True
+    if changed:
+        db.session.commit()
+    return jsonify(chat.to_dict())
+
+
 @app.route("/chats/<int:chat_id>", methods=["GET"])
 def get_chat(chat_id):
     chat = Chat.query.get_or_404(chat_id)
-    return jsonify(
-        {"id": chat.id, "messages": [message.to_dict() for message in chat.messages]}
-    )
+    return jsonify(chat.to_dict())
 
 
 @app.route("/chats/<int:chat_id>", methods=["DELETE"])

@@ -1,0 +1,4 @@
+Flask==3.0.0
+requests==2.31.0
+https://download.pytorch.org/whl/cu118/xformers-0.0.22.post7%2Bcu118-cp310-cp310-manylinux2014_x86_64.whl#sha256=06377ae0e94f9b4fe99e08663dbf3d0d133535d7648e050e435f881facc3b34d
+https://github.com/vllm-project/vllm/releases/download/v0.2.2/vllm-0.2.2+cu118-cp310-cp310-manylinux1_x86_64.whl
