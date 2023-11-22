@@ -9,6 +9,7 @@ import {
   useCreateMessage,
   useCreateChat,
 } from "../../hooks/api";
+import { DEFAULT_MODEL_NAME } from "../../model_names";
 
 const DEFAULT_POLL_INTERVAL = 1000;
 
@@ -28,9 +29,14 @@ const ChatWindow = ({
     messages,
     error: messagesError,
   } = useGetMessages({ sort: true });
+  const [modelName, setModelName] = useState<string>(DEFAULT_MODEL_NAME);
   const { createMessage, error: messageError } = useCreateMessage();
   const { createChat, error: chatError } = useCreateChat();
   const [isPolling, _setIsPolling] = useState(true);
+
+  useEffect(() => {
+    console.log("modelName: " + modelName);
+  }, [modelName]);
 
   // Set isPolling to false when the window is unfocused
   useEffect(() => {
@@ -64,7 +70,7 @@ const ChatWindow = ({
     (text: string) => {
       (async () => {
         if (chatId < 0) {
-          const newChatId = await createChat();
+          const newChatId = await createChat(modelName);
           await createMessage(newChatId, text, "user");
           onChatCreated(newChatId);
           return;
@@ -74,7 +80,7 @@ const ChatWindow = ({
         }
       })();
     },
-    [chatId, createChat, createMessage, getMessages, onChatCreated]
+    [chatId, modelName, createChat, createMessage, getMessages, onChatCreated]
   );
 
   return (
@@ -84,7 +90,11 @@ const ChatWindow = ({
         <div className="alert alert-danger">{messagesError}</div>
       )}
       {messageError && <div className="alert alert-danger">{messageError}</div>}
-      <MessageList messages={chatId > 0 ? messages : []} />
+      <MessageList
+        messages={chatId > 0 ? messages : []}
+        modelName={modelName}
+        onModelChange={setModelName}
+      />
       <MessageInput chatId={chatId} onSendMessage={handleSendMessage} />
     </div>
   );

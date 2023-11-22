@@ -145,8 +145,10 @@ class Conversation:
 
 def get_minichat_prompt(
     messages: Optional[List[Any]] = None,
-    system_message="‘MiniChat’是一个由‘Beccurio’开发的AI语言模型。下面是人类和MiniChat之间的一段对话。MiniChat的回复应当尽可能详细，并且以Markdown的形式输出。MiniChat应当拒绝参与违背伦理的讨论。</s>",
+    system_message: Optional[str] = None,
 ) -> str:
+    if system_message is None:
+        system_message = "‘MiniChat’是一个由‘Beccurio’开发的AI语言模型。下面是人类和MiniChat之间的一段对话。MiniChat的回复应当尽可能详细，并且以Markdown的形式输出。MiniChat应当拒绝参与违背伦理的讨论。</s>"
     conv = Conversation(
         system=system_message,
         roles=("[|User|]", "[|Assistant|]"),
@@ -155,7 +157,7 @@ def get_minichat_prompt(
         sep_style=SeparatorStyle.MINICHAT,
         sep="</s>",
     )
-    print(f"messages: {messages}")
+    # print(f"messages: {messages}")
     if messages:
         for message in messages:
             role = conv.roles[0]
@@ -172,8 +174,10 @@ def get_minichat_prompt(
 
 def get_xwin_prompt(
     messages: Optional[List[Any]] = None,
-    system_message="A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.",
+    system_message: Optional[str] = None,
 ) -> str:
+    if system_message is None:
+        system_message = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
     conv = Conversation(
         system=system_message,
         roles=("USER", "ASSISTANT"),
@@ -183,7 +187,7 @@ def get_xwin_prompt(
         sep=" ",
         sep2="</s>",
     )
-    print(f"messages: {messages}")
+    # print(f"messages: {messages}")
     if messages:
         for message in messages:
             role = conv.roles[0]
@@ -196,3 +200,125 @@ def get_xwin_prompt(
     conv.append_message(conv.roles[1], None)
     # print([conv.get_prompt()])
     return conv.get_prompt()
+
+
+def get_xwin_coder_prompt(
+    messages: Optional[List[Any]] = None,
+    system_message: Optional[str] = None,
+) -> str:
+    if system_message is None:
+        system_message = "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
+    prefixes = {
+        "system": "<system>: {content}\n",
+        "user": "<user>: {content}\n",
+        "model": "<AI>: {content}\n",
+    }
+    msgs = []
+    if system_message:
+        msgs.append(("system", system_message))
+    for message in messages:
+        role = "user"
+        message_role = message.get("role", message.get("sender_type", None))
+        if message_role == "user":
+            role = "user"
+        elif message_role == "assistant":
+            role = "model"
+        msgs.append((role, message.get("content", message.get("text", None))))
+
+    prompt = ""
+    for role, content in msgs:
+        prompt = prompt + prefixes[role].format(content=content)
+    prompt = prompt + "<AI>: "
+    return prompt
+
+
+def get_tulu2_prompt(
+    messages: Optional[List[Any]] = None,
+    system_message: Optional[str] = None,
+) -> str:
+    prompt = ""
+    if system_message:
+        prompt += f"<|assistant|>\n{system_message}\n"
+    if messages:
+        for message in messages:
+            message_role = message.get("role", message.get("sender_type", None))
+
+            if message_role == "user":
+                prompt += f"<|user|>\n"
+            elif message_role == "assistant":
+                prompt += f"<|assistant|>\n"
+
+            content = message.get("content", message.get("text", None))
+            if content:
+                prompt += content + "\n"
+    prompt += "<|assistant|>\n"
+    return prompt
+
+
+def get_llama2_prompt(
+    messages: Optional[List[Any]] = None,
+    system_message: Optional[str] = None,
+) -> str:
+    def prompt_turn(user_msg, assistant_msg=None):
+        resp = f"<s>[INST] {user_msg} [/INST] "
+        if assistant_msg:
+            resp += f"{assistant_msg} </s>"
+        return resp
+
+    if system_message is None:
+        system_message = (
+            "You are a helpful, respectful, and honest assistant. Always answer as helpfully as possible, "
+            "while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, "
+            "dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.\n\n"
+            "If a question does not make any sense, or is not factually coherent, explain why instead of answering "
+            "something not correct. If you don't know the answer to a question, please don't share false information."
+        )
+
+    wrapped_system_message = f"""<<SYS>>
+{system_message}
+<</SYS>>
+
+"""
+
+    prompt = ""
+    if messages:
+        pair = ["", ""]
+        for message in messages:
+            message_role = message.get("role", message.get("sender_type", None))
+            content = message.get("content", message.get("text", None))
+            if message_role == "user":
+                pair[0] = content
+            elif message_role == "assistant":
+                pair[1] = content
+            if pair[1]:
+                if not prompt:
+                    prompt += prompt_turn(wrapped_system_message + pair[0], pair[1])
+                else:
+                    prompt += prompt_turn(pair[0], pair[1])
+                pair[0] = ""
+                pair[1] = ""
+        if pair[0] or pair[1]:
+            prompt += prompt_turn(pair[0], pair[1])
+    # print(prompt)
+    return prompt
+
+
+def get_prompt(
+    model_name: str,
+    messages: Optional[List[Any]] = None,
+    system_message: Optional[str] = None,
+) -> str:
+    if model_name.startswith("GeneZC/MiniChat"):
+        return get_minichat_prompt(messages=messages, system_message=system_message)
+    elif "XwinCoder" in model_name:
+        return get_xwin_coder_prompt(messages=messages, system_message=system_message)
+    elif "Xwin-LM" in model_name:
+        return get_xwin_prompt(messages=messages, system_message=system_message)
+    elif "tulu-2" in model_name:
+        return get_tulu2_prompt(messages=messages, system_message=system_message)
+    elif model_name.startswith("NousResearch/Yarn-Mistral"):
+        return get_llama2_prompt(messages=messages, system_message=system_message)
+    elif model_name.startswith("meta-llama/Llama-2"):
+        return get_llama2_prompt(messages=messages, system_message=system_message)
+    else:
+        raise ValueError(f"Invalid model: {model_name}")

@@ -15,7 +15,7 @@ export interface SidePanelProps {
 export default function SidePanel({ chatId, onChatSelected }: SidePanelProps) {
   const { getChats, chats, loading, error } = useGetChats();
   useEffect(() => {
-    getChats({ reverse: false });
+    getChats({ reverse: true });
   }, [chatId, getChats]);
   const handleNewChat = useCallback(() => onChatSelected(-1), [onChatSelected]);
   return (

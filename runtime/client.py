@@ -13,7 +13,7 @@ class ChatAPIClient:
         )
         return response.json()
 
-    def create_chat(self, model="GeneZC/MiniChat-3B", sampling_params="{}"):
+    def create_chat(self, model, sampling_params="{}"):
         response = requests.post(
             f"{self.base_url}/chats",
             params={"model": model, "sampling_params": sampling_params},

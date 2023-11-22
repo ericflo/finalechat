@@ -5,7 +5,7 @@ import json
 
 from vllm import LLM, SamplingParams
 
-from minichat_convo import get_minichat_prompt, get_xwin_prompt
+from minichat_convo import get_prompt
 from client import DEFAULT_CLIENT
 
 LLM_INSTANCE = {"inst": None}
@@ -25,7 +25,7 @@ def get_sampling_params(data):
     presence_penalty = data.get("presence_penalty", 0.0)
     frequency_penalty = data.get("frequency_penalty", 0.0)
     repetition_penalty = data.get("repetition_penalty", 1.0)
-    temperature = data.get("temperature", 1.0)
+    temperature = data.get("temperature", 0.2)
     top_p = data.get("top_p", 1.0)
     top_k = data.get("top_k", -1)
     min_p = data.get("min_p", 0.0)
@@ -64,6 +64,44 @@ def get_sampling_params(data):
     )
 
 
+def get_llm_kwargs(model, llm_params):
+    default_llm_params = {
+        "tokenizer_mode": "auto",
+        "trust_remote_code": False,
+        "tensor_parallel_size": 1,
+        "dtype": "auto",
+        "seed": 0,
+        "gpu_memory_utilization": 0.9,
+        "swap_space": 4,
+    }
+    resp = {"model": model}
+    data = json.loads(llm_params) if llm_params else {}
+    if "tokenizer" in data:
+        resp["tokenizer"] = data["tokenizer"]
+    resp["tokenizer_mode"] = data.get(
+        "tokenizer_mode", default_llm_params["tokenizer_mode"]
+    )
+    resp["trust_remote_code"] = data.get(
+        "trust_remote_code", default_llm_params["trust_remote_code"]
+    )
+    resp["tensor_parallel_size"] = data.get(
+        "tensor_parallel_size", default_llm_params["tensor_parallel_size"]
+    )
+    resp["dtype"] = data.get("dtype", default_llm_params["dtype"])
+    if "quantization" in data:
+        resp["quantization"] = data["quantization"]
+    if "revision" in data:
+        resp["revision"] = data["revision"]
+    if "tokenizer_revision" in data:
+        resp["tokenizer_revision"] = data["tokenizer_revision"]
+    resp["seed"] = data.get("seed", default_llm_params["seed"])
+    resp["gpu_memory_utilization"] = data.get(
+        "gpu_memory_utilization", default_llm_params["gpu_memory_utilization"]
+    )
+    resp["swap_space"] = data.get("swap_space", default_llm_params["swap_space"])
+    return resp
+
+
 def get_all_chats():
     all_chats = []
     more_pages = True
@@ -91,17 +129,14 @@ def get_all_messages(chat_id):
 def process_chat(chat, messages):
     try:
         DEFAULT_CLIENT.update_chat(chat["id"], status="processing")
-        llm = get_llm(model=chat["model"])
+        llm = get_llm(
+            **get_llm_kwargs(model=chat["model"], llm_params=chat["llm_params"])
+        )
         sampling_params = get_sampling_params(json.loads(chat["sampling_params"]))
-        if chat["model"] == "GeneZC/MiniChat-3B":
-            prompt = get_minichat_prompt(messages=messages)
-        elif chat["model"].startswith("Xwin-LM/Xwin-LM"):
-            prompt = get_xwin_prompt(messages=messages)
-        else:
-            raise ValueError(f"Invalid model: {chat['model']}")
-        print(prompt)
+        prompt = get_prompt(model_name=chat["model"], messages=messages)
+        # print(prompt)
         response = llm.generate([prompt], sampling_params=sampling_params)[0]
-        print(response)
+        # print(response)
         output = "\n".join([o.text for o in response.outputs])
         DEFAULT_CLIENT.create_message(chat["id"], output, "assistant")
     except (KeyboardInterrupt, SystemExit):

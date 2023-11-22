@@ -15,6 +15,7 @@ class Chat(db.Model):
     summary = db.Column(db.String(1024), nullable=False, default="")
     model = db.Column(db.String(1024), nullable=False)
     status = db.Column(db.String(50), nullable=False, default="idle")
+    llm_params = db.Column(db.Text, nullable=False, default="{}")
     sampling_params = db.Column(db.Text, nullable=False, default="{}")
     created_timestamp = db.Column(db.DateTime, default=datetime.now)
     messages = db.relationship(
@@ -27,6 +28,7 @@ class Chat(db.Model):
             "summary": self.summary,
             "model": self.model,
             "status": self.status,
+            "llm_params": self.llm_params,
             "sampling_params": self.sampling_params,
             "created_timestamp": self.created_timestamp.isoformat(),
             # "messages": [message.to_dict() for message in self.messages],
@@ -97,8 +99,16 @@ def create_chat():
     chat = Chat()
     # chat.model = request.args.get("model", "GeneZC/MiniChat-3B", type=str)
     # chat.model = request.args.get("model", "Xwin-LM/Xwin-LM-13B-V0.2", type=str)
-    chat.model = request.args.get("model", "Xwin-LM/Xwin-LM-7B-V0.2", type=str)
+    # chat.model = request.args.get("model", "Xwin-LM/Xwin-LM-7B-V0.2", type=str)
+    # chat.model = request.args.get("model", "TheBloke/Xwin-LM-13B-v0.2-AWQ", type=str)
+    # chat.model = request.args.get("model", "TheBloke/Xwin-LM-70B-V0.1-AWQ", type=str)
+    # chat.model = request.args.get("model", "TheBloke/XwinCoder-34B-AWQ", type=str)
+    # chat.model = request.args.get("model", "allenai/tulu-2-dpo-70b", type=str)
+    chat.model = request.args.get("model", "allenai/tulu-2-dpo-13b", type=str)
+    # chat.model = request.args.get("model", "NousResearch/Yarn-Mistral-7b-128k", type=str)
+    # chat.model = request.args.get("model", "meta-llama/Llama-2-7b-chat-hf", type=str)
     chat.sampling_params = request.args.get("sampling_params", "{}", type=str)
+    chat.llm_params = request.args.get("llm_params", "{}", type=str)
     db.session.add(chat)
     db.session.commit()
     return jsonify({"id": chat.id}), 201

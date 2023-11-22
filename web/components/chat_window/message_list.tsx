@@ -8,9 +8,15 @@ import { Message } from "../../types";
 
 export interface MessageListProps {
   messages: Message[];
+  modelName: string;
+  onModelChange: (modelName: string) => void;
 }
 
-const MessageList = ({ messages }: MessageListProps) => {
+const MessageList = ({
+  messages,
+  modelName,
+  onModelChange,
+}: MessageListProps) => {
   const chatHistoryRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -31,7 +37,7 @@ const MessageList = ({ messages }: MessageListProps) => {
               <ChatMessage key={index} message={message} />
             ))
           ) : (
-            <EmptyState />
+            <EmptyState modelName={modelName} onModelChange={onModelChange} />
           )}
         </div>
       </div>

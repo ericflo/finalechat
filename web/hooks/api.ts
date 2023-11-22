@@ -35,8 +35,8 @@ export function useGetChats() {
 
   const sortFunc = useCallback((a: Chat, b: Chat): number => {
     return (
-      fromIsoString(a.created_timestamp).getTime() -
-      fromIsoString(b.created_timestamp).getTime()
+      fromIsoString(b.created_timestamp).getTime() -
+      fromIsoString(a.created_timestamp).getTime()
     );
   }, []);
 
@@ -58,27 +58,33 @@ export function useCreateChat() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const createChat = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await fetch(`${API_BASE_URL}/chats`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
-      const data: Chat = await handleResponse(response);
-      if (shouldUpdateState(chat, data)) {
-        await setChat(data);
+  const createChat = useCallback(
+    async (model: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const queryParams = new URLSearchParams({
+          model: model,
+        });
+        const response = await fetch(`${API_BASE_URL}/chats?${queryParams}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
+        const data: Chat = await handleResponse(response);
+        if (shouldUpdateState(chat, data)) {
+          await setChat(data);
+        }
+        return data.id;
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
       }
-      return data.id;
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [chat]);
+    },
+    [chat]
+  );
 
   return { createChat, chat, loading, error };
 }
