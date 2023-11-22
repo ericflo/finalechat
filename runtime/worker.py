@@ -81,7 +81,9 @@ def _sort_chats(chats):
 
 def _sort_messages(messages):
     return sorted(
-        messages, key=lambda m: datetime.datetime.fromisoformat(m["timestamp"])
+        messages,
+        key=lambda m: datetime.datetime.fromisoformat(m["timestamp"]),
+        reverse=True,
     )
 
 
