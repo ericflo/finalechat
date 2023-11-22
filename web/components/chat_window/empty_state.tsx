@@ -1,6 +1,6 @@
 import React, { useCallback } from "react";
 
-import { MODEL_NAMES } from "../../model_names";
+import { MODEL_NAMES } from "../../constants";
 
 export interface EmptyStateProps {
   modelName?: string;

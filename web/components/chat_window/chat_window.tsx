@@ -9,7 +9,7 @@ import {
   useCreateMessage,
   useCreateChat,
 } from "../../hooks/api";
-import { DEFAULT_MODEL_NAME } from "../../model_names";
+import { DEFAULT_MODEL_NAME } from "../../constants";
 
 const DEFAULT_POLL_INTERVAL = 1000;
 
