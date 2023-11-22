@@ -119,10 +119,12 @@ def main():
         try:
             for chat in DEFAULT_CLIENT.get_chats().get("items", []):
                 chat_id = chat["id"]
-                messages = DEFAULT_CLIENT.get_messages(chat_id).get("items", [])
+                messages = DEFAULT_CLIENT.get_messages(chat_id, order="asc").get(
+                    "items", []
+                )
                 if (
                     not messages
-                    or messages[0]["sender_type"] != "user"
+                    or messages[-1]["sender_type"] != "user"
                     or chat["status"] != "idle"
                 ):
                     continue
