@@ -116,7 +116,7 @@ def update_chat(chat_id):
         abort(400, description="Request data is missing.")
     changed = False
     if "summary" in data:
-        chat.summary = data["summary"]
+        chat.summary = data["summary"][:256]
         changed = True
     if "status" in data:
         chat.status = data["status"]
