@@ -1,3 +1,3 @@
-# Build an Assistant
+# FinaleChat
 
 Fully-integrated assistant builder with open models

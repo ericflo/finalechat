@@ -63,5 +63,4 @@ class ChatAPIClient:
         return response.json()
 
 
-# DEFAULT_CLIENT = ChatAPIClient("http://localhost:7025")
-DEFAULT_CLIENT = ChatAPIClient("https://buildassistant.ngrok.dev/api")
+DEFAULT_CLIENT = ChatAPIClient("http://localhost:7025")
