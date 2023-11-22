@@ -73,20 +73,6 @@ def get_llm_kwargs(model, llm_params):
     return resp
 
 
-def _sort_chats(chats):
-    return sorted(
-        chats, key=lambda c: datetime.datetime.fromisoformat(c["created_timestamp"])
-    )
-
-
-def _sort_messages(messages):
-    return sorted(
-        messages,
-        key=lambda m: datetime.datetime.fromisoformat(m["timestamp"]),
-        reverse=True,
-    )
-
-
 def process_chat(
     chat_id, model, llm_params, sampling_params_json, task_queue, result_queue
 ):
@@ -120,72 +106,57 @@ def process_chat(
 
 def main():
     round = 0
-    result_queue = multiprocessing.Queue()
-    worker_processes = {}
-    worker_task_queues = {}
-    worker_models = {}  # Track models for each chat
-
     while True:
         round += 1
         print(f"Round {round}")
+
+        result_queue = multiprocessing.Queue()
+        task_queue = multiprocessing.Queue()
+
+        current_process = None
+        current_model = None
+
         try:
-            chats = _sort_chats(DEFAULT_CLIENT.get_chats()["items"])
-            if chats is not None:
-                for chat in chats:
-                    chat_id = chat["id"]
-                    messages = _sort_messages(
-                        DEFAULT_CLIENT.get_messages(chat_id)["items"]
+            for chat in DEFAULT_CLIENT.get_chats().get("items", []):
+                chat_id = chat["id"]
+                messages = DEFAULT_CLIENT.get_messages(chat_id).get("items", [])
+                if (
+                    not messages
+                    or messages[0]["sender_type"] != "user"
+                    or chat["status"] != "idle"
+                ):
+                    continue
+
+                chat_model = chat["model"]
+                if chat_model != current_model:
+                    if current_process:
+                        task_queue.put("TERMINATE")
+                        current_process.join()
+                    current_process = multiprocessing.Process(
+                        target=process_chat,
+                        args=(
+                            chat_id,
+                            chat_model,
+                            chat["llm_params"],
+                            chat["sampling_params"],
+                            task_queue,
+                            result_queue,
+                        ),
                     )
+                    current_process.start()
+                    current_model = chat_model
 
-                    if (
-                        not messages
-                        or messages[-1]["sender_type"] != "user"
-                        or chat["status"] != "idle"
-                    ):
-                        continue
-
-                    current_model = chat["model"]
-                    if (
-                        chat_id not in worker_processes
-                        or worker_models.get(chat_id) != current_model
-                    ):
-                        if chat_id in worker_processes:
-                            worker_task_queues[chat_id].put("TERMINATE")
-                            worker_processes[chat_id].join()
-                            del worker_processes[chat_id]
-                            del worker_task_queues[chat_id]
-
-                        task_queue = multiprocessing.Queue()
-                        p = multiprocessing.Process(
-                            target=process_chat,
-                            args=(
-                                chat_id,
-                                current_model,
-                                chat["llm_params"],
-                                chat["sampling_params"],
-                                task_queue,
-                                result_queue,
-                            ),
-                        )
-                        p.start()
-                        worker_processes[chat_id] = p
-                        worker_task_queues[chat_id] = task_queue
-                        worker_models[chat_id] = current_model
-
-                    worker_task_queues[chat_id].put((chat, messages))
+                task_queue.put((chat, messages))
+                chat_id, status, error_message = result_queue.get()
+                if status == "error":
+                    print(f"Error processing chat {chat_id}: {error_message}")
+                elif status == "terminated":
+                    print(f"Chat {chat_id} process terminated.")
+                elif status == "model_change":
+                    print(f"Model change detected for chat {chat_id}.")
 
         except Exception as e:
             traceback.print_exception(e)
-
-        # Handling results from subprocesses
-        while not result_queue.empty():
-            chat_id, status, error_message = result_queue.get()
-            if status == "error":
-                print(f"Error processing chat {chat_id}: {error_message}")
-            elif status == "terminated":
-                print(f"Chat {chat_id} process terminated.")
-            elif status == "model_change":
-                print(f"Model change detected for chat {chat_id}.")
 
         time.sleep(1.0)
 
