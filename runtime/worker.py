@@ -83,12 +83,12 @@ def process_chat(
         while True:
             task = task_queue.get()  # Blocking call
             if task == "TERMINATE":
-                result_queue.put((chat_id, "terminated"))
+                result_queue.put((chat_id, "terminated", None))
                 break  # Gracefully exit the loop for termination
 
             chat, messages = task
             if chat["model"] != model:
-                result_queue.put((chat_id, "model_change"))
+                result_queue.put((chat_id, "model_change", None))
                 break  # Exit if model has changed
 
             DEFAULT_CLIENT.update_chat(chat_id, status="processing")
@@ -96,7 +96,7 @@ def process_chat(
             response = llm.generate([prompt], sampling_params=sampling_params)[0]
             output = "\n".join([o.text for o in response.outputs])
             DEFAULT_CLIENT.create_message(chat_id, output, "assistant")
-            result_queue.put((chat_id, "success"))
+            result_queue.put((chat_id, "success", None))
     except Exception as e:
         traceback.print_exc()  # Improved error logging
         result_queue.put((chat_id, "error", str(e)))
