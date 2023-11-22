@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: service
+  namespace: finalechat
+spec:
+  type: NodePort
+  ports:
+    - port: 7025
+      targetPort: 7025
+      protocol: TCP
+  selector:
+    app: service
