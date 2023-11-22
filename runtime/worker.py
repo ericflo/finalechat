@@ -127,11 +127,13 @@ def main():
         round += 1
         print(f"Round {round}")
         try:
-            chats = _sort_chats(DEFAULT_CLIENT.get_chats())
+            chats = _sort_chats(DEFAULT_CLIENT.get_chats()["items"])
             if chats is not None:
                 for chat in chats:
                     chat_id = chat["id"]
-                    messages = _sort_messages(DEFAULT_CLIENT.get_messages(chat_id))
+                    messages = _sort_messages(
+                        DEFAULT_CLIENT.get_messages(chat_id)["items"]
+                    )
 
                     if (
                         not messages
