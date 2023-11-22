@@ -1,5 +1,5 @@
+import os
 import requests
-import json
 
 
 class ChatAPIClient:
@@ -63,4 +63,5 @@ class ChatAPIClient:
         return response.json()
 
 
-DEFAULT_CLIENT = ChatAPIClient("http://localhost:7025")
+FINALECHAT_API_URL = os.environ.get("FINALECHAT_API_URL", "http://localhost:7025")
+DEFAULT_CLIENT = ChatAPIClient(FINALECHAT_API_URL)
