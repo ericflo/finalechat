@@ -102,27 +102,39 @@ def get_llm_kwargs(model, llm_params):
     return resp
 
 
+def _sort_chats(chats):
+    return chats.sort(
+        key=lambda c: datetime.datetime.fromisoformat(c["created_timestamp"])
+    )
+
+
 def get_all_chats():
     all_chats = []
     more_pages = True
+    page = 1
     while more_pages:
-        chats = DEFAULT_CLIENT.get_chats()
+        chats = DEFAULT_CLIENT.get_chats(page=page)
         all_chats.extend(chats["items"])
         more_pages = chats["page"] < chats["pages"]
-    all_chats.sort(
-        key=lambda c: datetime.datetime.fromisoformat(c["created_timestamp"])
-    )
+        page += 1
+    _sort_chats(all_chats)
     return all_chats
+
+
+def _sort_messages(messages):
+    return messages.sort(key=lambda m: datetime.datetime.fromisoformat(m["timestamp"]))
 
 
 def get_all_messages(chat_id):
     all_messages = []
     more_pages = True
+    page = 1
     while more_pages:
-        messages = DEFAULT_CLIENT.get_messages(chat_id)
+        messages = DEFAULT_CLIENT.get_messages(chat_id, page=page)
         all_messages.extend(messages["items"])
         more_pages = messages["page"] < messages["pages"]
-    all_messages.sort(key=lambda m: datetime.datetime.fromisoformat(m["timestamp"]))
+        page += 1
+    _sort_messages(all_messages)
     return all_messages
 
 
@@ -151,8 +163,10 @@ def main():
         round += 1
         print(f"Round {round}")
         try:
-            for chat in get_all_chats():
-                messages = get_all_messages(chat["id"])
+            # for chat in get_all_chats():
+            for chat in _sort_chats(DEFAULT_CLIENT.get_chats()):
+                # messages = get_all_messages(chat["id"])
+                messages = _sort_messages(DEFAULT_CLIENT.get_messages(chat["id"]))
                 if (
                     messages
                     and len(messages) > 0
