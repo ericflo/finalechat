@@ -43,7 +43,7 @@ class Message(db.Model):
     chat_id = db.Column(
         db.Integer, db.ForeignKey("chat.id", ondelete="CASCADE"), nullable=False
     )
-    text = db.Column(db.String(1024), nullable=False)
+    text = db.Column(db.Text, nullable=False)
     sender_type = db.Column(db.String(50), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.now)
 
