@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: basic-auth
+  namespace: finalechat
+data:
+  auth: ZmluYWxlY2hhdDokYXByMSRvallpbWpOQiRzMHZEWm1HV1NmUW4yNWNGeWp5MWgwCg==

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web
+  namespace: finalechat
+data:
+  NEXT_PUBLIC_FINALECHAT_API_URL: https://api.finalechat.com

@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service
+  namespace: finalechat
+spec:
+  selector:
+    matchLabels:
+      app: service
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: service
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: service
+          image: dreamfacelab/finalechat-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5055
+          envFrom:
+            - secretRef:
+                name: service

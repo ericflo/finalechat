@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: finalechat
+  name: postgres
+spec:
+  selector:
+    matchLabels:
+      app: postgres
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      volumes:
+        - name: postgres
+          persistentVolumeClaim:
+            claimName: postgres
+      containers:
+        - name: postgres
+          image: postgres:16.1-alpine
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: finalechat
+            - name: POSTGRES_USER
+              value: finalechat
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: service
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: postgres
+              mountPath: /var/lib/postgresql/data
+        - name: rclone-backup
+          image: ericflo/rclone-backup:latest
+          imagePullPolicy: Always
+          command:
+            ["rclone-backup", "--source", "/var/lib/postgresql/data/pgdata"]
+          volumeMounts:
+            - name: postgres
+              mountPath: /var/lib/postgresql/data
+          env:
+            - name: BACKUP_TARGET
+              value: rclone-backups-maxint/finalechat-postgres
+            - name: RCLONE_CONFIG_BACKUP_TYPE
+              value: b2
+            - name: RCLONE_CONFIG_BACKUP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: service
+                  key: BACKUP_KEY
+            - name: RCLONE_CONFIG_BACKUP_ACCOUNT
+              valueFrom:
+                secretKeyRef:
+                  name: service
+                  key: BACKUP_ACCOUNT

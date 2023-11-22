@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: finalechat
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/auth-secret: basic-auth
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/from-to-www-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: 512m
+    acme.cert-manager.io/http01-edit-in-place: "true"
+spec:
+  ingressClassName: public
+  defaultBackend:
+    service:
+      name: web
+      port:
+        number: 3000
+  tls:
+    - secretName: web-api-cert
+      hosts:
+        - finalechat.com
+        - www.finalechat.com
+  rules:
+    - host: www.finalechat.com
+      http:
+        paths:
+          - path: /
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: web
+                port:
+                  number: 3000
