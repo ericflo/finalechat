@@ -44,6 +44,7 @@ def get_llm_kwargs(model, llm_params):
         "seed": 0,
         "gpu_memory_utilization": 0.9,
         "swap_space": 4,
+        # "max_seq_len": "auto",
     }
     resp = {"model": model}
     data = json.loads(llm_params) if llm_params else {}
@@ -96,7 +97,11 @@ def process_chat(
             response = llm.generate([prompt], sampling_params=sampling_params)[0]
             output = "\n".join([o.text for o in response.outputs])
             DEFAULT_CLIENT.create_message(chat_id, output, "assistant")
+            DEFAULT_CLIENT.update_chat(chat_id, status="idle")
             result_queue.put((chat_id, "success", None))
+    except (KeyboardInterrupt, SystemExit):
+        result_queue.put((chat_id, "terminated", None))
+        raise
     except Exception as e:
         traceback.print_exc()  # Improved error logging
         result_queue.put((chat_id, "error", str(e)))
@@ -122,11 +127,21 @@ def main():
                 messages = DEFAULT_CLIENT.get_messages(chat_id, order="asc").get(
                     "items", []
                 )
+                summary = ", ".join(
+                    json.dumps((m["id"], m["sender_type"])) for m in messages
+                )
+                print(summary)
                 if (
                     not messages
                     or messages[-1]["sender_type"] != "user"
                     or chat["status"] != "idle"
                 ):
+                    if not messages:
+                        print(f"No messages found for chat {chat_id}.")
+                    elif messages[-1]["sender_type"] != "user":
+                        print(f"Last message is not from user for chat {chat_id}.")
+                    elif chat["status"] != "idle":
+                        print(f'Chat {chat_id} is not idle (is {chat["status"]}).')
                     continue
 
                 chat_model = chat["model"]

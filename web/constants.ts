@@ -1,5 +1,6 @@
 export const MODEL_NAMES = [
   "GeneZC/MiniChat-3B",
+  "TheBloke/OpenHermes-2.5-Mistral-7B-16k-AWQ",
   "Xwin-LM/Xwin-LM-13B-V0.2",
   "Xwin-LM/Xwin-LM-7B-V0.2",
   "TheBloke/Xwin-LM-13B-v0.2-AWQ",
@@ -11,4 +12,4 @@ export const MODEL_NAMES = [
   "meta-llama/Llama-2-7b-chat-hf",
 ];
 
-export const DEFAULT_MODEL_NAME = "TheBloke/Xwin-LM-13B-v0.2-AWQ";
+export const DEFAULT_MODEL_NAME = "GeneZC/MiniChat-3B";

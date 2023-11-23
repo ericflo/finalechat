@@ -7,7 +7,7 @@ ENV FINALECHAT_API_URL https://api.finalechat.com
 RUN mkdir -p ${SERVICE_DIR}
 WORKDIR ${SERVICE_DIR}
 
-RUN apt-get update && apt-get install -y libpq-dev gcc && pip install psycopg2==2.9.9
+RUN apt-get update && apt-get install -y libpq-dev gcc postgresql-client && pip install psycopg2==2.9.9
 
 COPY requirements.txt ${SERVICE_DIR}/requirements.txt
 RUN pip install -r ${SERVICE_DIR}/requirements.txt

@@ -303,6 +303,34 @@ def get_llama2_prompt(
     return prompt
 
 
+def get_chatml_prompt(
+    messages: Optional[List[Any]] = None,
+    system_message: Optional[str] = None,
+) -> str:
+    """<|im_start|>system
+    {system_message}<|im_end|>
+    <|im_start|>user
+    {prompt}<|im_end|>
+    <|im_start|>assistant"""
+    prompt = ""
+    if system_message:
+        prompt += f"<|im_start|>system\n{system_message}<|im_end|>\n"
+    if messages:
+        for message in messages:
+            message_role = message.get("role", message.get("sender_type", None))
+
+            if message_role == "user":
+                prompt += f"<|im_start|>user\n"
+            elif message_role == "assistant":
+                prompt += f"<|im_start|>assistant\n"
+
+            content = message.get("content", message.get("text", None))
+            if content:
+                prompt += content + "\n"
+    prompt += "<|im_start|>assistant"
+    return prompt
+
+
 def get_prompt(
     model_name: str,
     messages: Optional[List[Any]] = None,
@@ -310,6 +338,8 @@ def get_prompt(
 ) -> str:
     if model_name.startswith("GeneZC/MiniChat"):
         return get_minichat_prompt(messages=messages, system_message=system_message)
+    elif "OpenHermes" in model_name:
+        return get_chatml_prompt(messages=messages, system_message=system_message)
     elif "XwinCoder" in model_name:
         return get_xwin_coder_prompt(messages=messages, system_message=system_message)
     elif "Xwin-LM" in model_name:
