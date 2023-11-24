@@ -1,8 +1,12 @@
 export interface Chat {
   id: number;
   summary: string;
+  model: string;
+  status: string;
+  llm_params: string;
+  sampling_params: string;
   created_timestamp: string;
-  messages?: Message[];
+  //messages?: Message[];
 }
 
 export interface Message {

@@ -8,6 +8,7 @@ import {
   useGetMessages,
   useCreateMessage,
   useCreateChat,
+  useGetChat,
 } from "../../hooks/api";
 import { DEFAULT_MODEL_NAME } from "../../constants";
 
@@ -29,6 +30,7 @@ const ChatWindow = ({
     messages,
     error: messagesError,
   } = useGetMessages({ sort: true });
+  const { getChat, chat } = useGetChat();
   const [modelName, setModelName] = useState<string>(DEFAULT_MODEL_NAME);
   const { createMessage, error: messageError } = useCreateMessage();
   const { createChat, error: chatError } = useCreateChat();
@@ -37,6 +39,12 @@ const ChatWindow = ({
   useEffect(() => {
     console.log("modelName: " + modelName);
   }, [modelName]);
+
+  useEffect(() => {
+    if (chatId > 0) {
+      getChat(chatId);
+    }
+  }, [chatId]);
 
   // Set isPolling to false when the window is unfocused
   useEffect(() => {
@@ -91,6 +99,7 @@ const ChatWindow = ({
       )}
       {messageError && <div className="alert alert-danger">{messageError}</div>}
       <MessageList
+        chat={chat}
         messages={chatId > 0 ? messages : []}
         modelName={modelName}
         onModelChange={setModelName}
