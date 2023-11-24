@@ -2,23 +2,18 @@ import { useState, useCallback, useMemo } from "react";
 import { PaginatedResponse, Chat, Message } from "../types";
 
 export function shouldUpdateState<T extends Chat | Message>(currentValue: T[], newValue: T[]): boolean {
-  // Check if the current or new value is null or undefined
-  if (!currentValue || !newValue) {
-    return true;
-  }
-
   // Check if the length of arrays is different
-  if (currentValue.length !== newValue.length) {
+  if (currentValue?.length !== newValue?.length) {
     return true;
   }
 
   // Compare each item in the arrays
-  for (let i = 0; i < currentValue.length; i++) {
+  for (let i = 0; i < currentValue?.length ?? 0; i++) {
     const currentItem = currentValue[i];
     const newItem = newValue[i];
 
     // Compare the id property
-    if (currentItem.id !== newItem.id) {
+    if (currentItem?.id !== newItem?.id) {
       return true;
     }
 
