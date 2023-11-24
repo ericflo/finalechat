@@ -28,11 +28,11 @@ spec:
               value: finalechat
             - name: POSTGRES_USER
               value: finalechat
-            - name: POSTGRES_PASSWORD
+            - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
                   name: service
-                  key: POSTGRES_PASSWORD
+                  key: PGPASSWORD
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           volumeMounts:
