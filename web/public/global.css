@@ -1,1 +1,25 @@
-/* TODO: Write some of these */
+@media (max-width: 768px) {
+  body {
+    font-size: 14px;
+    overflow-x: hidden;
+  }
+  .btn {
+    padding: 0.375rem 0.75rem;
+    font-size: 1rem;
+  }
+  .modal-dialog {
+    margin: 0.5rem;
+  }
+  .modal-content {
+    max-width: 100%;
+  }
+  input,
+  textarea,
+  select,
+  button {
+    font-size: 16px; /* Prevent zoom on focus in iOS */
+  }
+  textarea {
+    min-height: 100px; /* Easier to type longer messages */
+  }
+}

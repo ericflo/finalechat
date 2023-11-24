@@ -22,7 +22,7 @@ export default function ChatBot() {
   const authModalShowing = !user && !userLoading;
 
   return (
-    <div className="vh-100 d-flex">
+    <div className="container-fluid vh-100 d-flex">
       <div
         style={{
           transition: "opacity 0.3s ease",
@@ -35,7 +35,7 @@ export default function ChatBot() {
           setToken={setToken}
         />
       </div>
-      <div className="col-3">
+      <div className="col-3 col-md-4 col-lg-3">
         <SidePanel
           user={user}
           token={token}
@@ -44,7 +44,8 @@ export default function ChatBot() {
           onChatSelected={setChatId}
         />
       </div>
-      <div className="col-9">
+
+      <div className="col-9 col-md-8 col-lg-9">
         <ChatWindow
           token={token}
           setToken={setToken}
