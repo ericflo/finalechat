@@ -32,6 +32,9 @@ const MessageList = ({
           className="chat-history"
           style={{ maxWidth: "800px", width: "100%", padding: "0 0 50px 0" }}
         >
+          <h6 className="text-muted text-nowrap my-4" style={{ opacity: 0.5 }}>
+            Model: {modelName}
+          </h6>
           {messages.length > 0 ? (
             messages.map((message, index) => (
               <ChatMessage key={index} message={message} />
