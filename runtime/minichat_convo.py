@@ -336,21 +336,24 @@ def get_prompt(
     messages: Optional[List[Any]] = None,
     system_message: Optional[str] = None,
 ) -> str:
+    model = model_name.lower()
     if model_name.startswith("GeneZC/MiniChat"):
         return get_minichat_prompt(messages=messages, system_message=system_message)
-    elif "OpenHermes" in model_name:
+    elif "openhermes" in model:
         return get_chatml_prompt(messages=messages, system_message=system_message)
-    elif "XwinCoder" in model_name:
+    elif "xwincoder" in model:
         return get_xwin_coder_prompt(messages=messages, system_message=system_message)
-    elif "Xwin-LM" in model_name:
+    elif "xwin-lm" in model:
         return get_xwin_prompt(messages=messages, system_message=system_message)
-    elif "tulu-2" in model_name:
+    elif "tulu-2" in model:
         return get_tulu2_prompt(messages=messages, system_message=system_message)
-    elif model_name.startswith("NousResearch/Yarn-Mistral"):
+    elif "yarn-mistral" in model:
         return get_llama2_prompt(messages=messages, system_message=system_message)
-    elif model_name.startswith("meta-llama/Llama-2"):
+    elif "llama-2" in model:
         return get_llama2_prompt(messages=messages, system_message=system_message)
-    elif "llama-2" in model_name.lower() and "chat" in model_name.lower():
+    elif "orca-2" in model:
+        return get_chatml_prompt(messages=messages, system_message=system_message)
+    elif "codellama" in model:
         return get_llama2_prompt(messages=messages, system_message=system_message)
     else:
         raise ValueError(f"Invalid model: {model_name}")
