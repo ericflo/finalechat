@@ -3,20 +3,51 @@ import datetime
 import time
 from client import DEFAULT_CLIENT
 
-# Duration to wait before shutting down an idle worker (30 minutes)
-IDLE_TIMEOUT = 1800
-
 
 class WorkerManager:
-    def __init__(self):
+    def __init__(self, max_workers):
         self.workers = {}  # Dictionary to store subprocesses
+        self.max_workers = max_workers
+
+    def get_worker_count(self):
+        """Return the current number of active workers."""
+        return len(
+            [
+                worker
+                for worker in self.workers.values()
+                if worker["process"].poll() is None
+            ]
+        )
+
+    def terminate_oldest_worker(self):
+        """Terminate the oldest worker process."""
+        oldest_model = None
+        oldest_time = datetime.datetime.now()
+
+        for model, worker in self.workers.items():
+            if worker["last_active"] < oldest_time:
+                oldest_time = worker["last_active"]
+                oldest_model = model
+
+        if oldest_model:
+            self.workers[oldest_model]["process"].terminate()
+            del self.workers[oldest_model]
+            print(f"Terminated oldest worker for model '{oldest_model}'.")
 
     def start_worker(self, model):
         """Start a new worker subprocess for a given model."""
-        if (
+        # Check if a new worker is needed
+        worker_needed = (
             model not in self.workers
             or self.workers[model]["process"].poll() is not None
-        ):
+        )
+
+        # If a new worker is needed and worker count exceeds the limit, terminate the oldest worker
+        if worker_needed and self.get_worker_count() >= self.max_workers:
+            self.terminate_oldest_worker()
+
+        # Start a new worker if needed
+        if worker_needed:
             command = ["python", "model_worker.py", "--model", model]
             process = subprocess.Popen(command)
             self.workers[model] = {
@@ -25,23 +56,9 @@ class WorkerManager:
             }
             print(f"Started a new worker for model '{model}'.")
 
-    def update_last_active(self, model):
-        """Update the last active time of a worker."""
-        if model in self.workers:
-            self.workers[model]["last_active"] = datetime.datetime.now()
-
-    def remove_idle_workers(self):
-        """Shut down workers that have been idle for more than IDLE_TIMEOUT."""
-        current_time = datetime.datetime.now()
-        for model, worker in list(self.workers.items()):
-            if (current_time - worker["last_active"]).total_seconds() > IDLE_TIMEOUT:
-                worker["process"].terminate()
-                del self.workers[model]
-                print(f"Shut down worker for model '{model}' due to inactivity.")
-
 
 def main():
-    worker_manager = WorkerManager()
+    worker_manager = WorkerManager(max_workers=1)
 
     while True:
         chats = DEFAULT_CLIENT.get_chats().get("items", [])
@@ -57,9 +74,6 @@ def main():
                 and chat["status"] == "idle"
             ):
                 worker_manager.start_worker(model)
-                worker_manager.update_last_active(model)
-
-        worker_manager.remove_idle_workers()
         time.sleep(1.0)  # Check for new chats and manage workers every second
 
 
