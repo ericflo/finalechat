@@ -162,7 +162,7 @@ def create_message(chat_id):
 
     # If this is the first message in the chat, set the summary to the message text
     if not chat.messages:
-        chat.summary = data["text"]
+        chat.summary = data["text"][:256]
 
     db.session.add(message)
     db.session.commit()
