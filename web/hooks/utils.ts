@@ -1,49 +1,32 @@
 import { useState, useCallback, useMemo } from "react";
-import { PaginatedResponse } from "../types";
+import { PaginatedResponse, Chat, Message } from "../types";
 
-// Utility function to perform deep comparison of two objects
-export function deepEqual<T>(obj1: T, obj2: T): boolean {
-  if (obj1 === obj2) {
+export function shouldUpdateState<T extends Chat | Message>(currentValue: T[], newValue: T[]): boolean {
+  // Check if the length of arrays is different
+  if (currentValue.length !== newValue.length) {
     return true;
   }
 
-  // Ensuring both objects are of the same type
-  if (typeof obj1 !== typeof obj2) {
-    return false;
-  }
+  // Compare each item in the arrays
+  for (let i = 0; i < currentValue.length; i++) {
+    const currentItem = currentValue[i];
+    const newItem = newValue[i];
 
-  // Check for the primitive types
-  if ((obj1 !== Object(obj1) || obj2 !== Object(obj2)) && obj1 !== obj2) {
-    return false;
-  }
-
-  const keys1 = Object.keys(obj1 as any);
-  const keys2 = Object.keys(obj2 as any);
-
-  if (keys1.length !== keys2.length) {
-    return false;
-  }
-
-  for (const key of keys1) {
-    if (!keys2.includes(key)) {
-      return false;
+    // Compare the id property
+    if (currentItem.id !== newItem.id) {
+      return true;
     }
 
-    // Recursively check for nested objects
-    if (!deepEqual((obj1 as any)[key], (obj2 as any)[key])) {
-      return false;
-    }
+    // Additional comparisons can be added here if needed
+    // For example, comparing timestamps or specific fields that
+    // are likely to change and are important for your application's logic
   }
 
-  return true;
+  // If all checks pass, the state does not need to be updated
+  return false;
 }
 
-// Updated shouldUpdateState function to use deep comparison
-export function shouldUpdateState<T>(currentValue: T, newValue: T): boolean {
-  return !deepEqual(currentValue, newValue);
-}
-
-export function usePaginatedFetch<T>(
+export function usePaginatedFetch<T extends Chat | Message>(
   fetchFunctionFactory: (
     config?: any
   ) => (page: number, perPage: number) => Promise<PaginatedResponse<T> | null>,
