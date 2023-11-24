@@ -2,6 +2,11 @@ import { useState, useCallback, useMemo } from "react";
 import { PaginatedResponse, Chat, Message } from "../types";
 
 export function shouldUpdateState<T extends Chat | Message>(currentValue: T[], newValue: T[]): boolean {
+  // Check if the current or new value is null or undefined
+  if (!currentValue || !newValue) {
+    return true;
+  }
+
   // Check if the length of arrays is different
   if (currentValue.length !== newValue.length) {
     return true;
