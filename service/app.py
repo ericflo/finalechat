@@ -386,14 +386,27 @@ def get_next_workitems():
     # if not g.user.is_staff:
     #    return jsonify({"error": "Unauthorized"}), 403
 
-    # Group all messages by conversation,
-    # list the ones whose latest message is from the user,
-    # and only do this with conversations that are in idle state
-    messages = (
-        Message.query.join(Chat)
+    # first finds the latest timestamp per chat where the chat status is "idle"
+    subquery = (
+        db.session.query(
+            Message.chat_id, db.func.max(Message.timestamp).label("max_timestamp")
+        )
+        .join(Chat)
         .filter(Chat.status == "idle")
         .group_by(Message.chat_id)
-        .having(Message.timestamp == db.func.max(Message.timestamp))
+        .subquery()
+    )
+
+    # then fetches the messages that match these chat IDs and timestamps.
+    messages = (
+        db.session.query(Message)
+        .join(
+            subquery,
+            db.and_(
+                Message.chat_id == subquery.c.chat_id,
+                Message.timestamp == subquery.c.max_timestamp,
+            ),
+        )
         .filter(Message.sender_type == "user")
         .order_by(Message.timestamp.desc())
         .all()
