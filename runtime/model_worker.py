@@ -35,13 +35,12 @@ def get_sampling_params(data):
     )
 
 
-def get_llm_kwargs(model, llm_params):
+def get_llm_kwargs(model, llm_params, dtype="auto"):
     default_llm_params = {
         "tokenizer_mode": "auto",
         "trust_remote_code": False,
         "tensor_parallel_size": 1,
-        "dtype": "auto",
-        # "dtype": "float16",
+        "dtype": dtype,
         "seed": 0,
         "gpu_memory_utilization": 0.9,
         "swap_space": 4,
@@ -91,9 +90,11 @@ def process_chat(chat, llm, messages):
         DEFAULT_CLIENT.update_chat(chat["id"], status="idle")
 
 
-def main(model: str):
+def main(model: str, dtype: str):
     print("Starting...")
-    llm = LLM(**get_llm_kwargs(model, None))  # TODO: Swap based on chat `llm_params`?
+    llm = LLM(
+        **get_llm_kwargs(model, None, dtype=dtype)
+    )  # TODO: How to handle `llm_params`?
     print("Model loaded.")
 
     round = 0
@@ -142,5 +143,11 @@ if __name__ == "__main__":
         help="Specify the model name or path",
         default="TheBloke/OpenHermes-2.5-Mistral-7B-16k-AWQ",
     )
+    parser.add_argument(
+        "--dtype",
+        help="Specify the data type",
+        default="auto",
+        choices=["auto", "float32", "float16", "bfloat16"],
+    )
     args = parser.parse_args()
-    main(args.model)
+    main(args.model, args.dtype)
