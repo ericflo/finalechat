@@ -28,7 +28,7 @@ const Register = ({ showing, token, setToken, setIsLogin }: RegisterProps) => {
       <div className="modal-dialog">
         <div className="modal-content">
           <div className="modal-header">
-            <h5 className="modal-title">Login</h5>
+            <h5 className="modal-title">Register</h5>
           </div>
           <div className="modal-body">
             <form onSubmit={handleSubmit}>
@@ -91,7 +91,7 @@ const Register = ({ showing, token, setToken, setIsLogin }: RegisterProps) => {
               className="btn btn-light"
               onClick={() => setIsLogin(true)}
             >
-              Login
+              Login Instead
             </button>
           </div>
         </div>

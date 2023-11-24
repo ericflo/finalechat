@@ -92,19 +92,8 @@ def main(dtype: str):
 
     while True:
         try:
-            chats = DEFAULT_CLIENT.get_chats().get("items", [])
-            for chat in chats:
-                model = chat["model"]
-                messages = DEFAULT_CLIENT.get_messages(chat["id"], order="asc").get(
-                    "items", []
-                )
-
-                if (
-                    messages
-                    and messages[-1]["sender_type"] == "user"
-                    and chat["status"] == "idle"
-                ):
-                    worker_manager.start_worker(model)
+            for workitem in DEFAULT_CLIENT.get_next_workitems():
+                worker_manager.start_worker(workitem["chat"]["model"])
         except (KeyboardInterrupt, SystemExit):
             print("Exiting...")
             break

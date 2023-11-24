@@ -77,7 +77,7 @@ const Login = ({ showing, token, setToken, setIsLogin }: LoginProps) => {
               className="btn btn-light"
               onClick={() => setIsLogin(false)}
             >
-              Register
+              Register Instead
             </button>
           </div>
         </div>

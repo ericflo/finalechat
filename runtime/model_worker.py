@@ -103,27 +103,8 @@ def main(model: str, dtype: str):
         print(f"Round {round}")
 
         try:
-            for chat in DEFAULT_CLIENT.get_chats().get("items", []):
-                messages = DEFAULT_CLIENT.get_messages(chat["id"], order="asc").get(
-                    "items", []
-                )
-                if (
-                    not messages
-                    or messages[-1]["sender_type"] != "user"
-                    or chat["status"] != "idle"
-                ):
-                    # if not messages:
-                    #     print(f'No messages found for chat {chat["id"]}.')
-                    # elif messages[-1]["sender_type"] != "user":
-                    #     print(f'Last message is not from user for chat {chat["id"]}.')
-                    # elif chat["status"] != "idle":
-                    #     print(f'Chat {chat["id"]} is not idle (is {chat["status"]}).')
-                    continue
-                if chat["model"] != model:
-                    # print(
-                    #     f'Chat {chat["id"]} has model {chat["model"]}, not {model}. Skipping.'
-                    # )
-                    continue
+            for workitem in DEFAULT_CLIENT.get_next_workitems(model=model):
+                chat, messages = workitem["chat"], workitem["messages"]
                 process_chat(chat, llm, messages)
         except (KeyboardInterrupt, SystemExit):
             print("Exiting...")

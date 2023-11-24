@@ -1,4 +1,5 @@
 import os
+import uuid
 import hashlib
 from datetime import datetime, timezone, timedelta
 import bcrypt
@@ -8,6 +9,8 @@ from flask import Flask, request, jsonify, abort, g
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.exc import IntegrityError
 
+SECRET_TOKEN = os.environ.get("FINALECHAT_SECRET_TOKEN", str(uuid.uuid1()))
+
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
     "SQLALCHEMY_DATABASE_URI", "sqlite:///chat.db"
@@ -16,7 +19,7 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["JWT_SECRET_KEY"] = os.getenv(
     "JWT_SECRET_KEY", "your-secret-key-zzkzkzkazkz"
 )
-app.config["JWT_EXP_DELTA_SECONDS"] = 3600  # 1 hour
+app.config["JWT_EXP_DELTA_SECONDS"] = 604800  # 1 week
 db = SQLAlchemy(app)
 
 
@@ -29,6 +32,10 @@ class User(db.Model):
     created_timestamp = db.Column(db.DateTime, default=datetime.now(timezone.utc))
     chats = db.relationship("Chat", backref="user", lazy=True)
     messages = db.relationship("Message", backref="user", lazy=True)
+
+    @property
+    def is_staff(self):
+        return self.id < 0
 
     def to_dict(self):
         return {
@@ -136,6 +143,10 @@ def validate_message_data(data, required_fields):
 def token_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        if request.headers.get("X-Secret-Token", "") == SECRET_TOKEN:
+            g.user = User(id=-1)
+            return f(*args, **kwargs)
+
         token = request.headers.get("Authorization")
         if not token:
             return jsonify({"message": "Token is missing!"}), 403
@@ -163,6 +174,12 @@ def make_auth_token():
         + timedelta(seconds=app.config["JWT_EXP_DELTA_SECONDS"]),
     }
     return jwt.encode(payload, app.config["JWT_SECRET_KEY"], algorithm="HS256")
+
+
+def user_scope(query):
+    if g.user.is_staff:
+        return query
+    return query.filter_by(user_id=g.user.id)
 
 
 # API Endpoints
@@ -209,21 +226,24 @@ def login_user():
 @app.route("/auth/user", methods=["GET"])
 @token_required
 def auth_user():
+    if g.user.is_staff:
+        return jsonify({"error": "Staff requests cannot get auth user"}), 403
     return jsonify(g.user.to_dict()), 200
 
 
 @app.route("/chats", methods=["GET"])
 @token_required
 def get_chats():
-    chats_query = order_query(
-        Chat.query.filter_by(user_id=g.user.id), Chat.created_timestamp, "desc"
-    )
+    chats_query = order_query(user_scope(Chat.query), Chat.created_timestamp, "desc")
     return jsonify(paginate_query(chats_query))
 
 
 @app.route("/chats", methods=["POST"])
 @token_required
 def create_chat():
+    if g.user.is_staff:
+        return jsonify({"error": "Staff requests cannot create chats"}), 403
+
     data = request.get_json()
     if not data or not data.get("model"):
         return jsonify({"error": "Missing chat model information"}), 400
@@ -243,7 +263,7 @@ def create_chat():
 @token_required
 def update_chat(chat_id):
     chat = Chat.query.get_or_404(chat_id)
-    if chat.user_id != g.user.id:
+    if not g.user.is_staff and chat.user_id != g.user.id:
         return jsonify({"error": "Unauthorized"}), 403
 
     data = request.get_json()
@@ -251,7 +271,9 @@ def update_chat(chat_id):
         abort(400, description="Request data is missing.")
 
     if "summary" in data:
-        chat.summary = data["summary"][:1024]
+        if len(data["summary"]) > 1024:
+            abort(400, description="Summary cannot be longer than 1024 characters.")
+        chat.summary = data["summary"]
     if "status" in data:
         chat.status = data["status"]
     if "llm_params" in data:
@@ -267,7 +289,7 @@ def update_chat(chat_id):
 @token_required
 def get_chat(chat_id):
     chat = Chat.query.get_or_404(chat_id)
-    if chat.user_id != g.user.id:
+    if not g.user.is_staff and chat.user_id != g.user.id:
         return jsonify({"error": "Unauthorized"}), 403
 
     return jsonify(chat.to_dict())
@@ -277,7 +299,7 @@ def get_chat(chat_id):
 @token_required
 def delete_chat(chat_id):
     chat = Chat.query.get_or_404(chat_id)
-    if chat.user_id != g.user.id:
+    if not g.user.is_staff and chat.user_id != g.user.id:
         return jsonify({"error": "Unauthorized"}), 403
 
     db.session.delete(chat)
@@ -289,7 +311,7 @@ def delete_chat(chat_id):
 @token_required
 def get_messages(chat_id):
     chat = Chat.query.get_or_404(chat_id)
-    if chat.user_id != g.user.id:
+    if not g.user.is_staff and chat.user_id != g.user.id:
         return jsonify({"error": "Unauthorized"}), 403
 
     messages_query = order_query(
@@ -302,14 +324,14 @@ def get_messages(chat_id):
 @token_required
 def create_message(chat_id):
     chat = Chat.query.get_or_404(chat_id)
-    if chat.user_id != g.user.id:
+    if not g.user.is_staff and chat.user_id != g.user.id:
         return jsonify({"error": "Unauthorized"}), 403
 
     data = request.get_json()
     validate_message_data(data, ["text", "sender_type"])
     message = Message(
         chat_id=chat_id,
-        user_id=g.user.id,
+        user_id=chat.user_id,  # TODO: Should this be something else on assistant messages?
         text=data["text"],
         sender_type=data["sender_type"],
     )
@@ -326,7 +348,7 @@ def create_message(chat_id):
 @token_required
 def get_message(message_id):
     message = Message.query.get_or_404(message_id)
-    if message.user_id != g.user.id:
+    if not g.user.is_staff and message.user_id != g.user.id:
         return jsonify({"error": "Unauthorized"}), 403
 
     return jsonify(message.to_dict())
@@ -336,7 +358,7 @@ def get_message(message_id):
 @token_required
 def update_message(message_id):
     message = Message.query.get_or_404(message_id)
-    if message.user_id != g.user.id:
+    if not g.user.is_staff and message.user_id != g.user.id:
         return jsonify({"error": "Unauthorized"}), 403
 
     data = request.get_json()
@@ -350,12 +372,41 @@ def update_message(message_id):
 @token_required
 def delete_message(message_id):
     message = Message.query.get_or_404(message_id)
-    if message.user_id != g.user.id:
+    if not g.user.is_staff and message.user_id != g.user.id:
         return jsonify({"error": "Unauthorized"}), 403
 
     db.session.delete(message)
     db.session.commit()
     return jsonify({"message": "Message deleted"}), 200
+
+
+@app.route("/workitems/next", methods=["GET"])
+# @token_required
+def get_next_workitems():
+    # if not g.user.is_staff:
+    #    return jsonify({"error": "Unauthorized"}), 403
+
+    # Group all messages by conversation,
+    # list the ones whose latest message is from the user,
+    # and only do this with conversations that are in idle state
+    messages = (
+        Message.query.join(Chat)
+        .filter(Chat.status == "idle")
+        .group_by(Message.chat_id)
+        .having(Message.timestamp == db.func.max(Message.timestamp))
+        .filter(Message.sender_type == "user")
+        .order_by(Message.timestamp.desc())
+        .all()
+    )
+
+    items = [
+        {
+            "chat": message.chat.to_dict(),
+            "messages": [m.to_dict() for m in message.chat.messages],
+        }
+        for message in messages
+    ]
+    return jsonify({"items": items}), 200
 
 
 # Error handling
