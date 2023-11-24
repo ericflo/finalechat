@@ -386,16 +386,19 @@ def get_next_workitems():
     # if not g.user.is_staff:
     #    return jsonify({"error": "Unauthorized"}), 403
 
+    model = request.args.get("model")
+
     # first finds the latest timestamp per chat where the chat status is "idle"
-    subquery = (
+    pre = (
         db.session.query(
             Message.chat_id, db.func.max(Message.timestamp).label("max_timestamp")
         )
         .join(Chat)
         .filter(Chat.status == "idle")
-        .group_by(Message.chat_id)
-        .subquery()
     )
+    if model:
+        pre = pre.filter(Chat.model == model)
+    subquery = pre.group_by(Message.chat_id).subquery()
 
     # then fetches the messages that match these chat IDs and timestamps.
     messages = (
