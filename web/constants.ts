@@ -3,7 +3,7 @@ export const MODEL_NAMES = [
   "TheBloke/OpenHermes-2.5-Mistral-7B-16k-AWQ",
   //"Xwin-LM/Xwin-LM-13B-V0.2",
   //"Xwin-LM/Xwin-LM-7B-V0.2",
-  "TheBloke/Xwin-LM-13B-v0.1-AWQ",
+  //"TheBloke/Xwin-LM-13B-v0.1-AWQ",
   "TheBloke/Xwin-LM-13B-v0.2-AWQ",
   //"TheBloke/Xwin-LM-70B-V0.1-AWQ",
   //"TheBloke/XwinCoder-34B-AWQ",
