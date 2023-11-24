@@ -73,7 +73,7 @@ export function useCreateChat() {
           },
         });
         const data: Chat = await handleResponse(response);
-        if (shouldUpdateState(chat, data)) {
+        if (shouldUpdateState([chat], [data])) {
           await setChat(data);
         }
         return data.id;
@@ -102,7 +102,7 @@ export function useGetChat() {
       try {
         const response = await fetch(`${API_BASE_URL}/chats/${chatId}`);
         const data: Chat = await handleResponse(response);
-        if (shouldUpdateState(chat, data)) {
+        if (shouldUpdateState([chat], [data])) {
           await setChat(data);
         }
       } catch (err: any) {
@@ -206,7 +206,7 @@ export function useCreateMessage() {
           }
         );
         const data: Message = await handleResponse(response);
-        if (shouldUpdateState(message, data)) {
+        if (shouldUpdateState([message], [data])) {
           await setMessage(data);
         }
         return data.id;
@@ -235,7 +235,7 @@ export function useGetMessage() {
       try {
         const response = await fetch(`${API_BASE_URL}/messages/${messageId}`);
         const data: Message = await handleResponse(response);
-        if (shouldUpdateState(message, data)) {
+        if (shouldUpdateState([message], [data])) {
           await setMessage(data);
         }
       } catch (err: any) {
@@ -269,7 +269,7 @@ export function useUpdateMessage() {
           body: JSON.stringify({ text }),
         });
         const data: Message = await handleResponse(response);
-        if (shouldUpdateState(updatedMessage, data)) {
+        if (shouldUpdateState([updatedMessage], [data])) {
           await setUpdatedMessage(data);
         }
       } catch (err: any) {
