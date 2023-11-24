@@ -136,7 +136,7 @@ def main(model: str, dtype: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="A command-line script with one argument --model"
+        description="Worker for evaluating responses to chats for a single model"
     )
     parser.add_argument(
         "--model",

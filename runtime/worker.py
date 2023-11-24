@@ -1,3 +1,4 @@
+import argparse
 import subprocess
 import datetime
 import time
@@ -6,8 +7,9 @@ from client import DEFAULT_CLIENT
 
 
 class WorkerManager:
-    def __init__(self, max_workers, min_worker_lifetime=300):
+    def __init__(self, max_workers, dtype, min_worker_lifetime=300):
         self.workers = {}  # Dictionary to store subprocesses
+        self.dtype = dtype
         self.max_workers = max_workers
         self.min_worker_lifetime = min_worker_lifetime
 
@@ -69,7 +71,14 @@ class WorkerManager:
 
         # Start a new worker if needed
         if worker_needed:
-            command = ["python", "model_worker.py", "--model", model]
+            command = [
+                "python",
+                "model_worker.py",
+                "--model",
+                model,
+                "--dtype",
+                self.dtype,
+            ]
             process = subprocess.Popen(command)
             self.workers[model] = {
                 "process": process,
@@ -78,8 +87,8 @@ class WorkerManager:
             print(f"Started a new worker for model '{model}'.")
 
 
-def main():
-    worker_manager = WorkerManager(max_workers=1)
+def main(dtype: str):
+    worker_manager = WorkerManager(max_workers=1, dtype=dtype)
 
     while True:
         try:
@@ -105,4 +114,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(
+        description="Manages workers for evaluating responses to chats"
+    )
+    parser.add_argument(
+        "--dtype",
+        help="Specify the data type",
+        default="auto",
+        choices=["auto", "float32", "float16", "bfloat16"],
+    )
+    args = parser.parse_args()
+    main(args.dtype)
