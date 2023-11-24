@@ -1,7 +1,10 @@
-import { useState, useCallback, useMemo } from "react";
-import { PaginatedResponse, Chat, Message } from "../types";
+import { useState, useCallback, useMemo, useEffect } from "react";
+import { PaginatedResponse, Chat, Message, User } from "../types";
 
-export function shouldUpdateState<T extends Chat | Message>(currentValue: T[], newValue: T[]): boolean {
+export function shouldUpdateState<T extends Chat | Message | User>(
+  currentValue: T[],
+  newValue: T[]
+): boolean {
   // Check if the length of arrays is different
   if (currentValue?.length !== newValue?.length) {
     return true;
@@ -26,7 +29,8 @@ export function shouldUpdateState<T extends Chat | Message>(currentValue: T[], n
   return false;
 }
 
-export function usePaginatedFetch<T extends Chat | Message>(
+export function usePaginatedFetch<T extends Chat | Message | User>(
+  token: string | null,
   fetchFunctionFactory: (
     config?: any
   ) => (page: number, perPage: number) => Promise<PaginatedResponse<T> | null>,
@@ -35,6 +39,14 @@ export function usePaginatedFetch<T extends Chat | Message>(
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) {
+      setData([]);
+      setLoading(false);
+      setError(null);
+    }
+  }, [token]);
 
   const fetchPaginatedData = useCallback(
     async (config?: {

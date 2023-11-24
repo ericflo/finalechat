@@ -25,9 +25,13 @@ const EmptyState = ({ modelName, onModelChange }: EmptyStateProps) => {
         back later!
       </p>
       {onModelChange ? (
-        <select className="form-select" onChange={handleModelChange}>
+        <select
+          className="form-select"
+          onChange={handleModelChange}
+          defaultValue={modelName}
+        >
           {MODEL_NAMES.map((name) => (
-            <option key={name} value={name} selected={name == modelName}>
+            <option key={name} value={name}>
               {name}
             </option>
           ))}

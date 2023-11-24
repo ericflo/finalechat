@@ -15,12 +15,16 @@ import { DEFAULT_MODEL_NAME } from "../../constants";
 const DEFAULT_POLL_INTERVAL = 1000;
 
 export interface ChatWindowProps {
+  token: string;
+  setToken: (token: string) => void;
   chatId: number;
   pollInterval?: number;
   onChatCreated: (chatId: number) => void;
 }
 
 const ChatWindow = ({
+  token,
+  setToken,
   chatId,
   pollInterval,
   onChatCreated,
@@ -30,22 +34,19 @@ const ChatWindow = ({
     messages,
     loading: messagesLoading,
     error: messagesError,
-  } = useGetMessages({ sort: true });
-  const { getChat, chat, loading: chatLoading } = useGetChat();
+  } = useGetMessages({ token, sort: true });
+  const { getChat, chat, loading: chatLoading } = useGetChat(token);
   const [modelName, setModelName] = useState<string>(DEFAULT_MODEL_NAME);
-  const { createMessage, error: messageError } = useCreateMessage();
-  const { createChat, error: chatError } = useCreateChat();
+  const { createMessage, error: messageError } = useCreateMessage(token);
+  const { createChat, error: chatError } = useCreateChat(token);
   const [isPolling, _setIsPolling] = useState(true);
 
   useEffect(() => {
-    console.log("modelName: " + modelName);
-  }, [modelName]);
-
-  useEffect(() => {
-    if (chatId > 0) {
+    if (token && chatId > 0) {
       getChat(chatId);
+      getMessages({ chatId });
     }
-  }, [chatId]);
+  }, [token, chatId]);
 
   // Set isPolling to false when the window is unfocused
   useEffect(() => {
@@ -57,12 +58,6 @@ const ChatWindow = ({
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
-
-  useEffect(() => {
-    if (chatId > 0) {
-      getMessages({ chatId });
-    }
-  }, [chatId, getMessages]);
 
   useEffect(() => {
     let intervalId;

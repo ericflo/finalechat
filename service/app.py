@@ -1,26 +1,60 @@
 import os
-from datetime import datetime
-from flask import Flask, request, jsonify, abort
+from datetime import datetime, timezone, timedelta
+import bcrypt
+import jwt
+from functools import wraps
+from flask import Flask, request, jsonify, abort, g
 from flask_sqlalchemy import SQLAlchemy
-
+from sqlalchemy.exc import IntegrityError
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
     "SQLALCHEMY_DATABASE_URI", "sqlite:///chat.db"
 )
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["JWT_SECRET_KEY"] = os.getenv(
+    "JWT_SECRET_KEY", "your-secret-key-zzkzkzkazkz"
+)
+app.config["JWT_EXP_DELTA_SECONDS"] = 3600  # 1 hour
 db = SQLAlchemy(app)
 
 
 # Models
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    username = db.Column(db.String(255), unique=True, nullable=False)
+    created_timestamp = db.Column(db.DateTime, default=datetime.now(timezone.utc))
+    chats = db.relationship("Chat", backref="user", lazy=True)
+    messages = db.relationship("Message", backref="user", lazy=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "email": self.email,
+            "username": self.username,
+            "created_timestamp": self.created_timestamp.isoformat(),
+        }
+
+    def set_password(self, password):
+        self.password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt())
+
+    def check_password(self, password):
+        return bcrypt.checkpw(password.encode("utf-8"), self.password_hash)
+
+
 class Chat(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     summary = db.Column(db.String(1024), nullable=False, default="")
     model = db.Column(db.String(1024), nullable=False)
     status = db.Column(db.String(50), nullable=False, default="idle")
     llm_params = db.Column(db.Text, nullable=False, default="{}")
     sampling_params = db.Column(db.Text, nullable=False, default="{}")
-    created_timestamp = db.Column(db.DateTime, default=datetime.now)
+    created_timestamp = db.Column(
+        db.DateTime, default=lambda: datetime.now(timezone.utc)
+    )
     messages = db.relationship(
         "Message", backref="chat", lazy=True, cascade="all, delete-orphan"
     )
@@ -28,6 +62,7 @@ class Chat(db.Model):
     def to_dict(self):
         return {
             "id": self.id,
+            "user_id": self.user_id,
             "summary": self.summary,
             "model": self.model,
             "status": self.status,
@@ -40,16 +75,18 @@ class Chat(db.Model):
 
 class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     chat_id = db.Column(
         db.Integer, db.ForeignKey("chat.id", ondelete="CASCADE"), nullable=False
     )
     text = db.Column(db.Text, nullable=False)
     sender_type = db.Column(db.String(50), nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.now)
+    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):
         return {
             "id": self.id,
+            "user_id": self.user_id,
             "chat_id": self.chat_id,
             "text": self.text,
             "sender_type": self.sender_type,
@@ -90,79 +127,189 @@ def validate_message_data(data, required_fields):
             abort(400, description=f"Missing '{field}' in request data.")
 
 
+def token_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"message": "Token is missing!"}), 403
+
+        try:
+            payload = jwt.decode(
+                token, app.config["JWT_SECRET_KEY"], algorithms=["HS256"]
+            )
+            current_user = User.query.get(payload["user_id"])
+        except jwt.ExpiredSignatureError:
+            return jsonify({"message": "Expired token"}), 403
+        except jwt.InvalidTokenError:
+            return jsonify({"message": "Invalid token"}), 403
+
+        g.user = current_user
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
+def make_auth_token():
+    payload = {
+        "user_id": g.user.id,
+        "exp": datetime.utcnow()
+        + timedelta(seconds=app.config["JWT_EXP_DELTA_SECONDS"]),
+    }
+    return jwt.encode(payload, app.config["JWT_SECRET_KEY"], algorithm="HS256")
+
+
 # API Endpoints
+@app.route("/register", methods=["POST"])
+def register_user():
+    data = request.get_json()
+    if (
+        not data
+        or not data.get("email")
+        or not data.get("password")
+        or not data.get("username")
+    ):
+        return jsonify({"error": "Missing registration information"}), 400
+
+    user = User(email=data["email"], username=data["username"])
+    user.set_password(data["password"])
+    try:
+        db.session.add(user)
+        db.session.commit()
+        g.user = user
+    except IntegrityError:
+        db.session.rollback()
+        return (
+            jsonify({"error": "User with that email or username already exists"}),
+            409,
+        )
+
+    return jsonify(dict(user.to_dict(), token=make_auth_token())), 201
+
+
+@app.route("/login", methods=["POST"])
+def login_user():
+    data = request.get_json()
+    if not data or not data.get("email") or not data.get("password"):
+        return jsonify({"error": "Missing login credentials"}), 400
+
+    user = User.query.filter_by(email=data["email"]).first()
+    if user and user.check_password(data["password"]):
+        g.user = user
+        return jsonify({"token": make_auth_token()}), 200
+    return jsonify({"error": "Invalid credentials"}), 401
+
+
+@app.route("/auth/user", methods=["GET"])
+@token_required
+def auth_user():
+    return jsonify(g.user.to_dict()), 200
+
+
 @app.route("/chats", methods=["GET"])
+@token_required
 def get_chats():
-    chats_query = order_query(Chat.query, Chat.created_timestamp, "desc")
+    chats_query = order_query(
+        Chat.query.filter_by(user_id=g.user.id), Chat.created_timestamp, "desc"
+    )
     return jsonify(paginate_query(chats_query))
 
 
 @app.route("/chats", methods=["POST"])
+@token_required
 def create_chat():
-    chat = Chat()
-    chat.model = request.args.get("model", "allenai/tulu-2-dpo-13b", type=str)
-    chat.sampling_params = request.args.get("sampling_params", "{}", type=str)
-    chat.llm_params = request.args.get("llm_params", "{}", type=str)
+    data = request.get_json()
+    if not data or not data.get("model"):
+        return jsonify({"error": "Missing chat model information"}), 400
+
+    chat = Chat(
+        user_id=g.user.id,
+        model=data["model"],
+        llm_params=data.get("llm_params", "{}"),
+        sampling_params=data.get("sampling_params", "{}"),
+    )
     db.session.add(chat)
     db.session.commit()
-    return jsonify({"id": chat.id}), 201
+    return jsonify(chat.to_dict()), 201
 
 
 @app.route("/chats/<int:chat_id>", methods=["PUT"])
+@token_required
 def update_chat(chat_id):
     chat = Chat.query.get_or_404(chat_id)
+    if chat.user_id != g.user.id:
+        return jsonify({"error": "Unauthorized"}), 403
+
     data = request.get_json()
     if not data:
         abort(400, description="Request data is missing.")
-    changed = False
+
     if "summary" in data:
-        chat.summary = data["summary"][:256]
-        changed = True
+        chat.summary = data["summary"][:1024]
     if "status" in data:
         chat.status = data["status"]
-        changed = True
-    # if "sampling_params" in data:
-    #     chat.sampling_params = data["sampling_params"]
-    #     changed = True
-    if changed:
-        db.session.commit()
+    if "llm_params" in data:
+        chat.llm_params = data["llm_params"]
+    if "sampling_params" in data:
+        chat.sampling_params = data["sampling_params"]
+
+    db.session.commit()
     return jsonify(chat.to_dict())
 
 
 @app.route("/chats/<int:chat_id>", methods=["GET"])
+@token_required
 def get_chat(chat_id):
     chat = Chat.query.get_or_404(chat_id)
+    if chat.user_id != g.user.id:
+        return jsonify({"error": "Unauthorized"}), 403
+
     return jsonify(chat.to_dict())
 
 
 @app.route("/chats/<int:chat_id>", methods=["DELETE"])
+@token_required
 def delete_chat(chat_id):
     chat = Chat.query.get_or_404(chat_id)
+    if chat.user_id != g.user.id:
+        return jsonify({"error": "Unauthorized"}), 403
+
     db.session.delete(chat)
     db.session.commit()
     return jsonify({"message": "Chat deleted"}), 200
 
 
 @app.route("/chats/<int:chat_id>/messages", methods=["GET"])
+@token_required
 def get_messages(chat_id):
-    Chat.query.get_or_404(chat_id)  # Ensure chat exists
-    messages_query = Message.query.filter_by(chat_id=chat_id)
-    messages_query = order_query(messages_query, Message.timestamp, "desc")
+    chat = Chat.query.get_or_404(chat_id)
+    if chat.user_id != g.user.id:
+        return jsonify({"error": "Unauthorized"}), 403
+
+    messages_query = order_query(
+        Message.query.filter_by(chat_id=chat_id), Message.timestamp, "desc"
+    )
     return jsonify(paginate_query(messages_query))
 
 
 @app.route("/chats/<int:chat_id>/messages", methods=["POST"])
+@token_required
 def create_message(chat_id):
-    chat = Chat.query.get_or_404(chat_id)  # Ensure chat exists
+    chat = Chat.query.get_or_404(chat_id)
+    if chat.user_id != g.user.id:
+        return jsonify({"error": "Unauthorized"}), 403
+
     data = request.get_json()
     validate_message_data(data, ["text", "sender_type"])
     message = Message(
-        chat_id=chat_id, text=data["text"], sender_type=data["sender_type"]
+        chat_id=chat_id,
+        user_id=g.user.id,
+        text=data["text"],
+        sender_type=data["sender_type"],
     )
 
-    # If this is the first message in the chat, set the summary to the message text
-    if not chat.messages:
-        chat.summary = data["text"][:256]
+    if not chat.summary:
+        chat.summary = data["text"][:1024]
 
     db.session.add(message)
     db.session.commit()
@@ -170,14 +317,22 @@ def create_message(chat_id):
 
 
 @app.route("/messages/<int:message_id>", methods=["GET"])
+@token_required
 def get_message(message_id):
     message = Message.query.get_or_404(message_id)
+    if message.user_id != g.user.id:
+        return jsonify({"error": "Unauthorized"}), 403
+
     return jsonify(message.to_dict())
 
 
 @app.route("/messages/<int:message_id>", methods=["PUT"])
+@token_required
 def update_message(message_id):
     message = Message.query.get_or_404(message_id)
+    if message.user_id != g.user.id:
+        return jsonify({"error": "Unauthorized"}), 403
+
     data = request.get_json()
     validate_message_data(data, ["text"])
     message.text = data["text"]
@@ -186,8 +341,12 @@ def update_message(message_id):
 
 
 @app.route("/messages/<int:message_id>", methods=["DELETE"])
+@token_required
 def delete_message(message_id):
     message = Message.query.get_or_404(message_id)
+    if message.user_id != g.user.id:
+        return jsonify({"error": "Unauthorized"}), 403
+
     db.session.delete(message)
     db.session.commit()
     return jsonify({"message": "Message deleted"}), 200

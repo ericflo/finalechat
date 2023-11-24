@@ -8,9 +8,15 @@ interface ChatListProps {
   chats: Chat[];
   isLoading: boolean;
   onChatSelected: (chatId: number) => void;
+  onChatDeleteRequest: (chatId: number) => void;
 }
 
-const ChatList = ({ chats, isLoading, onChatSelected }: ChatListProps) => {
+const ChatList = ({
+  chats,
+  isLoading,
+  onChatSelected,
+  onChatDeleteRequest,
+}: ChatListProps) => {
   return (
     <div className="flex-grow-1 overflow-auto m-2">
       <ul className="list-group">
@@ -19,6 +25,7 @@ const ChatList = ({ chats, isLoading, onChatSelected }: ChatListProps) => {
             key={chat.id}
             chat={chat}
             onSelect={() => onChatSelected(chat.id)}
+            onDelete={() => onChatDeleteRequest(chat.id)}
           />
         ))}
       </ul>
