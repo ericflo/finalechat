@@ -1,6 +1,7 @@
 import subprocess
 import datetime
 import time
+import traceback
 from client import DEFAULT_CLIENT
 
 
@@ -81,19 +82,25 @@ def main():
     worker_manager = WorkerManager(max_workers=1)
 
     while True:
-        chats = DEFAULT_CLIENT.get_chats().get("items", [])
-        for chat in chats:
-            model = chat["model"]
-            messages = DEFAULT_CLIENT.get_messages(chat["id"], order="asc").get(
-                "items", []
-            )
+        try:
+            chats = DEFAULT_CLIENT.get_chats().get("items", [])
+            for chat in chats:
+                model = chat["model"]
+                messages = DEFAULT_CLIENT.get_messages(chat["id"], order="asc").get(
+                    "items", []
+                )
 
-            if (
-                messages
-                and messages[-1]["sender_type"] == "user"
-                and chat["status"] == "idle"
-            ):
-                worker_manager.start_worker(model)
+                if (
+                    messages
+                    and messages[-1]["sender_type"] == "user"
+                    and chat["status"] == "idle"
+                ):
+                    worker_manager.start_worker(model)
+        except (KeyboardInterrupt, SystemExit):
+            print("Exiting...")
+            break
+        except Exception as e:
+            traceback.print_exception(e)
         time.sleep(1.0)  # Check for new chats and manage workers every second
 
 
