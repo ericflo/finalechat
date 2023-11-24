@@ -28,9 +28,10 @@ const ChatWindow = ({
   const {
     getMessages,
     messages,
+    loading: messagesLoading,
     error: messagesError,
   } = useGetMessages({ sort: true });
-  const { getChat, chat } = useGetChat();
+  const { getChat, chat, loading: chatLoading } = useGetChat();
   const [modelName, setModelName] = useState<string>(DEFAULT_MODEL_NAME);
   const { createMessage, error: messageError } = useCreateMessage();
   const { createChat, error: chatError } = useCreateChat();
@@ -99,7 +100,7 @@ const ChatWindow = ({
       )}
       {messageError && <div className="alert alert-danger">{messageError}</div>}
       <MessageList
-        chat={chat}
+        chat={chatLoading ? null : chat}
         messages={chatId > 0 ? messages : []}
         modelName={modelName}
         onModelChange={setModelName}

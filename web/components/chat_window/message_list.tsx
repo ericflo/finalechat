@@ -34,18 +34,20 @@ const MessageList = ({
           className="chat-history"
           style={{ maxWidth: "800px", width: "100%", padding: "0 0 50px 0" }}
         >
-          {chat?.model ? (
-            <h6
-              className="text-muted text-nowrap my-4"
-              style={{ opacity: 0.5 }}
-            >
-              Model: {chat.model}
-            </h6>
-          ) : null}
           {messages.length > 0 ? (
-            messages.map((message, index) => (
-              <ChatMessage key={index} message={message} />
-            ))
+            <>
+              {chat?.model ? (
+                <h6
+                  className="text-muted text-nowrap my-4"
+                  style={{ opacity: 0.5 }}
+                >
+                  Model: {chat.model}
+                </h6>
+              ) : null}
+              {messages.map((message, index) => (
+                <ChatMessage key={index} message={message} />
+              ))}
+            </>
           ) : (
             <EmptyState modelName={modelName} onModelChange={onModelChange} />
           )}
