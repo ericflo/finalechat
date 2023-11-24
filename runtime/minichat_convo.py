@@ -350,5 +350,7 @@ def get_prompt(
         return get_llama2_prompt(messages=messages, system_message=system_message)
     elif model_name.startswith("meta-llama/Llama-2"):
         return get_llama2_prompt(messages=messages, system_message=system_message)
+    elif "llama-2" in model_name.lower() and "chat" in model_name.lower():
+        return get_llama2_prompt(messages=messages, system_message=system_message)
     else:
         raise ValueError(f"Invalid model: {model_name}")

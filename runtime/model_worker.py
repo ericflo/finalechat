@@ -41,6 +41,7 @@ def get_llm_kwargs(model, llm_params):
         "trust_remote_code": False,
         "tensor_parallel_size": 1,
         "dtype": "auto",
+        # "dtype": "float16",
         "seed": 0,
         "gpu_memory_utilization": 0.9,
         "swap_space": 4,
