@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Message } from "../../types";
 import Markdown from "react-markdown";
 import { useDeleteMessage, useUpdateMessage } from "../../hooks/api";
@@ -21,6 +21,10 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
   const [voteType, setVoteType] = useState<"upvote" | "downvote">("upvote");
   const { deleteMessage } = useDeleteMessage(token);
   const { updateMessage } = useUpdateMessage(token);
+
+  useEffect(() => {
+    setEditedText(message.text);
+  }, [message.text]);
 
   const handleDelete = async () => {
     try {
