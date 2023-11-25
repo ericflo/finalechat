@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Message } from "../../types";
 import Markdown from "react-markdown";
 import { useDeleteMessage, useUpdateMessage } from "../../hooks/api";
+import { useAutoResizeTextarea } from "../../hooks/textareas";
 
 export interface ChatMessageProps {
   message: Message;
@@ -79,6 +80,9 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
     setFeedback("");
   };
 
+  const editedTextareaRef = useAutoResizeTextarea(editedText);
+  const feedbackTextareaRef = useAutoResizeTextarea(feedback);
+
   return (
     <div className="message py-2 my-1">
       <strong>{message.sender_type}</strong>
@@ -86,6 +90,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       {isEditing ? (
         <>
           <textarea
+            ref={editedTextareaRef}
             value={editedText}
             className="form-control"
             onChange={(e) => setEditedText(e.target.value)}
@@ -158,6 +163,7 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
       {showFeedbackBox && (
         <div className="mt-2">
           <textarea
+            ref={feedbackTextareaRef}
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
             placeholder="Enter your reason here"

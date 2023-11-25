@@ -2,6 +2,7 @@
 // Code Context: React TypeScript with bootstrap 5.3.2 and bootstrap-icons injected
 
 import React, { useState, useCallback, useEffect } from "react";
+import { useAutoResizeTextarea } from "../../hooks/textareas";
 
 export interface MessageInputProps {
   chatId: number;
@@ -46,10 +47,13 @@ const MessageInput: React.FC<MessageInputProps> = ({
     setNewMessage("");
   }, [chatId]);
 
+  const textareaRef = useAutoResizeTextarea(newMessage);
+
   return (
     <div className="mt-auto pt-1 pe-2 pb-2 ps-4">
       <div className="input-group">
         <textarea
+          ref={textareaRef}
           className="form-control"
           placeholder="Type a message..."
           value={newMessage}
