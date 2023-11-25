@@ -3,13 +3,15 @@ import subprocess
 import datetime
 import time
 import traceback
+from typing import Optional
 from client import DEFAULT_CLIENT
 
 
 class WorkerManager:
-    def __init__(self, max_workers, dtype, min_worker_lifetime=300):
+    def __init__(self, max_workers, dtype, max_model_len, min_worker_lifetime=300):
         self.workers = {}  # Dictionary to store subprocesses
         self.dtype = dtype
+        self.max_model_len = max_model_len
         self.max_workers = max_workers
         self.min_worker_lifetime = min_worker_lifetime
 
@@ -79,6 +81,8 @@ class WorkerManager:
                 "--dtype",
                 self.dtype,
             ]
+            if self.max_model_len:
+                command.extend(["--max_model_len", str(self.max_model_len)])
             process = subprocess.Popen(command)
             self.workers[model] = {
                 "process": process,
@@ -87,8 +91,10 @@ class WorkerManager:
             print(f"Started a new worker for model '{model}'.")
 
 
-def main(dtype: str):
-    worker_manager = WorkerManager(max_workers=1, dtype=dtype)
+def main(dtype: str, max_model_len: Optional[int]):
+    worker_manager = WorkerManager(
+        max_workers=1, dtype=dtype, max_model_len=max_model_len
+    )
 
     while True:
         try:
@@ -112,5 +118,12 @@ if __name__ == "__main__":
         default="auto",
         choices=["auto", "float32", "float16", "bfloat16"],
     )
+    parser.add_argument(
+        "--max_model_len",
+        help="Specify the maximum model length",
+        default=None,
+        type=Optional[int],
+        required=False,
+    )
     args = parser.parse_args()
-    main(args.dtype)
+    main(args.dtype, args.max_model_len)

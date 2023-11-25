@@ -3,6 +3,7 @@ import datetime
 import time
 import traceback
 import json
+from typing import Optional
 
 from vllm import LLM, SamplingParams
 
@@ -35,7 +36,7 @@ def get_sampling_params(data):
     )
 
 
-def get_llm_kwargs(model, llm_params, dtype="auto"):
+def get_llm_kwargs(model, llm_params, dtype="auto", max_model_len=None):
     default_llm_params = {
         "tokenizer_mode": "auto",
         "trust_remote_code": False,
@@ -44,9 +45,10 @@ def get_llm_kwargs(model, llm_params, dtype="auto"):
         "seed": 0,
         "gpu_memory_utilization": 0.9,
         "swap_space": 4,
-        "max_model_len": 4096,
     }
-    resp = {"model": model, "max_model_len": default_llm_params["max_model_len"]}
+    resp = {"model": model}
+    if max_model_len:
+        resp["max_model_len"] = max_model_len
     data = json.loads(llm_params) if llm_params else {}
     if "tokenizer" in data:
         resp["tokenizer"] = data["tokenizer"]
@@ -90,10 +92,10 @@ def process_chat(chat, llm, messages):
         DEFAULT_CLIENT.update_chat(chat["id"], status="idle")
 
 
-def main(model: str, dtype: str):
+def main(model: str, dtype: str, max_model_len: Optional[int]):
     print("Starting...")
     llm = LLM(
-        **get_llm_kwargs(model, None, dtype=dtype)
+        **get_llm_kwargs(model, None, dtype=dtype, max_model_len=max_model_len)
     )  # TODO: How to handle `llm_params`?
     print("Model loaded.")
 
@@ -130,5 +132,12 @@ if __name__ == "__main__":
         default="auto",
         choices=["auto", "float32", "float16", "bfloat16"],
     )
+    parser.add_argument(
+        "--max_model_len",
+        help="Specify the maximum model length",
+        default=None,
+        type=Optional[int],
+        required=False,
+    )
     args = parser.parse_args()
-    main(args.model, args.dtype)
+    main(args.model, args.dtype, args.max_model_len)
