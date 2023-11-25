@@ -6,9 +6,15 @@ import traceback
 from typing import Optional
 from client import DEFAULT_CLIENT
 
+MIN_WORKER_LIFETIME = (
+    60  # Minimum number of seconds a worker should run before being terminated
+)
+
 
 class WorkerManager:
-    def __init__(self, max_workers, dtype, max_model_len, min_worker_lifetime=300):
+    def __init__(
+        self, max_workers, dtype, max_model_len, min_worker_lifetime=MIN_WORKER_LIFETIME
+    ):
         self.workers = {}  # Dictionary to store subprocesses
         self.dtype = dtype
         self.max_model_len = max_model_len
@@ -122,7 +128,7 @@ if __name__ == "__main__":
         "--max_model_len",
         help="Specify the maximum model length",
         default=None,
-        type=Optional[int],
+        type=int,
         required=False,
     )
     args = parser.parse_args()

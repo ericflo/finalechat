@@ -136,7 +136,7 @@ if __name__ == "__main__":
         "--max_model_len",
         help="Specify the maximum model length",
         default=None,
-        type=Optional[int],
+        type=int,
         required=False,
     )
     args = parser.parse_args()
