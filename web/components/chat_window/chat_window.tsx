@@ -87,6 +87,14 @@ const ChatWindow = ({
     [chatId, modelName, createChat, createMessage, getMessages, onChatCreated]
   );
 
+  const handleMessageUpdate = useCallback(
+    (messageId: number) => {
+      console.log("message updated: " + messageId);
+      getMessages({ chatId });
+    },
+    [chatId]
+  );
+
   return (
     <div className="d-flex flex-column h-100">
       {chatError && <div className="alert alert-danger">{chatError}</div>}
@@ -95,10 +103,12 @@ const ChatWindow = ({
       )}
       {messageError && <div className="alert alert-danger">{messageError}</div>}
       <MessageList
+        token={token}
         chat={chatLoading ? null : chat}
         messages={chatId > 0 ? messages : []}
         modelName={modelName}
         onModelChange={setModelName}
+        onMessageUpdate={handleMessageUpdate}
       />
       <MessageInput chatId={chatId} onSendMessage={handleSendMessage} />
     </div>

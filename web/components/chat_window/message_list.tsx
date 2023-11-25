@@ -7,17 +7,21 @@ import EmptyState from "./empty_state";
 import { Chat, Message } from "../../types";
 
 export interface MessageListProps {
+  token: string | null;
   chat: Chat;
   messages: Message[];
   modelName: string;
   onModelChange: (modelName: string) => void;
+  onMessageUpdate: (messageId: number) => void;
 }
 
 const MessageList = ({
+  token,
   chat,
   messages,
   modelName,
   onModelChange,
+  onMessageUpdate,
 }: MessageListProps) => {
   const chatHistoryRef = useRef<HTMLDivElement>(null);
 
@@ -45,7 +49,12 @@ const MessageList = ({
                 </h6>
               ) : null}
               {messages.map((message, index) => (
-                <ChatMessage key={index} message={message} />
+                <ChatMessage
+                  key={index}
+                  message={message}
+                  token={token} // Pass the auth token
+                  onMessageUpdate={() => onMessageUpdate(message.id)} // Function to refresh the message list
+                />
               ))}
             </>
           ) : (
