@@ -142,14 +142,20 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                 </>
               )}
               <button
-                className="btn btn-link text-decoration-none btn-action"
+                className={
+                  "btn btn-link text-decoration-none " +
+                  (showFeedbackBox ? "" : "btn-action")
+                }
                 onClick={() => handleVoteClick("upvote")}
                 disabled={showFeedbackBox && voteType === "downvote"}
               >
                 <i className="bi bi-arrow-up-circle"></i>
               </button>
               <button
-                className="btn btn-link text-decoration-none btn-action"
+                className={
+                  "btn btn-link text-decoration-none " +
+                  (showFeedbackBox ? "" : "btn-action")
+                }
                 onClick={() => handleVoteClick("downvote")}
                 disabled={showFeedbackBox && voteType === "upvote"}
               >

@@ -1,15 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 export const useAutoResizeTextarea = (content) => {
   const textareaRef = useRef(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const textarea = textareaRef.current;
     if (textarea) {
       textarea.style.height = "auto"; // Reset height to recalculate
       textarea.style.height = `${textarea.scrollHeight}px`; // Set to scroll height
     }
-  }, [content]); // Depend on content to recalculate on change
+  }, [content, textareaRef.current]);
 
   return textareaRef;
 };
