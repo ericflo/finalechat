@@ -33,7 +33,7 @@ def get_sampling_params(data):
         stop_token_ids=data.get("stop_token_ids", None),
         ignore_eos=data.get("ignore_eos", False),
         # max_tokens=data.get("max_tokens", 1024),
-        max_tokens=data.get("max_tokens", 16),
+        max_tokens=data.get("max_tokens", 64),
         logprobs=data.get("logprobs", None),
         prompt_logprobs=data.get("prompt_logprobs", None),
         skip_special_tokens=data.get("skip_special_tokens", True),
@@ -81,27 +81,41 @@ def get_llm_kwargs(model, llm_params, dtype="auto", max_model_len=None):
     return resp
 
 
-async def process_chat(chat, llm, messages):
+async def process_chat(chat, llm: AsyncLLMEngine, messages):
     try:
         DEFAULT_CLIENT.update_chat(chat["id"], status="processing")
         sampling_params = get_sampling_params(json.loads(chat["sampling_params"]))
         prompt = get_prompt(model_name=chat["model"], messages=messages)
+        running_text = ""
         finished = False
-        txt = ""
         msg_id = None
+        update_awaitable = None
         while not finished:
             request_id = random_uuid()
             results_generator = llm.generate(prompt, sampling_params, request_id)
             async for result in results_generator:
                 for output in result.outputs:
-                    txt += output.text
-                    finished = finished or output.finished
-                if msg_id is None:
-                    DEFAULT_CLIENT.create_message(chat["id"], txt, "assistant")
+                    finished = finished or (
+                        output.finish_reason and output.finish_reason != "length"
+                    )
+                delta_text = "".join([output.text for output in result.outputs])
+                if msg_id:
+                    if update_awaitable is not None:
+                        update_awaitable.cancel()
+                    update_awaitable = asyncio.get_running_loop().run_in_executor(
+                        None,
+                        DEFAULT_CLIENT.update_message,
+                        msg_id,
+                        running_text + delta_text,
+                    )
                 else:
-                    DEFAULT_CLIENT.update_message(msg_id, txt)
-            prompt += txt
-            txt = ""
+                    msg_id = DEFAULT_CLIENT.create_message(
+                        chat["id"], running_text + delta_text, "assistant"
+                    )["id"]
+            if msg_id is not None:
+                DEFAULT_CLIENT.update_message(msg_id, running_text + delta_text)
+            running_text += delta_text
+            prompt += delta_text
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as e:
@@ -112,14 +126,10 @@ async def process_chat(chat, llm, messages):
 
 def main(model: str, dtype: str, max_model_len: Optional[int]):
     print("Starting...")
-    # llm = LLM(
-    #     **get_llm_kwargs(model, None, dtype=dtype, max_model_len=max_model_len)
-    # )  # TODO: How to handle `llm_params`?
     engine_args = AsyncEngineArgs(
         **get_llm_kwargs(model, None, dtype=dtype, max_model_len=max_model_len)
     )
     llm = AsyncLLMEngine.from_engine_args(engine_args)
-    # llm = AsyncLLMEngine(
     print("Model loaded.")
 
     round = 0

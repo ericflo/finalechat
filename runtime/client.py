@@ -30,7 +30,9 @@ class ChatAPIClient:
 
     def update_message(self, message_id, text):
         data = {"text": text}
-        response = requests.put(f"{self.base_url}/messages/{message_id}", json=data)
+        response = requests.put(
+            f"{self.base_url}/messages/{message_id}", json=data, headers=self.headers
+        )
         return response.json()
 
     def get_next_workitems(self, model=None):
