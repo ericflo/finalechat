@@ -1,11 +1,15 @@
 import argparse
+import asyncio
 import datetime
 import time
 import traceback
 import json
 from typing import Optional
 
-from vllm import LLM, SamplingParams
+from vllm.sampling_params import SamplingParams
+from vllm.engine.arg_utils import AsyncEngineArgs
+from vllm.engine.async_llm_engine import AsyncLLMEngine
+from vllm.utils import random_uuid
 
 from minichat_convo import get_prompt
 from client import DEFAULT_CLIENT
@@ -28,7 +32,8 @@ def get_sampling_params(data):
         stop=data.get("stop", None),
         stop_token_ids=data.get("stop_token_ids", None),
         ignore_eos=data.get("ignore_eos", False),
-        max_tokens=data.get("max_tokens", 1024),
+        # max_tokens=data.get("max_tokens", 1024),
+        max_tokens=data.get("max_tokens", 16),
         logprobs=data.get("logprobs", None),
         prompt_logprobs=data.get("prompt_logprobs", None),
         skip_special_tokens=data.get("skip_special_tokens", True),
@@ -76,14 +81,27 @@ def get_llm_kwargs(model, llm_params, dtype="auto", max_model_len=None):
     return resp
 
 
-def process_chat(chat, llm, messages):
+async def process_chat(chat, llm, messages):
     try:
         DEFAULT_CLIENT.update_chat(chat["id"], status="processing")
-        prompt = get_prompt(model_name=chat["model"], messages=messages)
         sampling_params = get_sampling_params(json.loads(chat["sampling_params"]))
-        response = llm.generate([prompt], sampling_params=sampling_params)[0]
-        output = "\n".join([o.text for o in response.outputs])
-        DEFAULT_CLIENT.create_message(chat["id"], output, "assistant")
+        prompt = get_prompt(model_name=chat["model"], messages=messages)
+        finished = False
+        txt = ""
+        msg_id = None
+        while not finished:
+            request_id = random_uuid()
+            results_generator = llm.generate(prompt, sampling_params, request_id)
+            async for result in results_generator:
+                for output in result.outputs:
+                    txt += output.text
+                    finished = finished or output.finished
+                if msg_id is None:
+                    DEFAULT_CLIENT.create_message(chat["id"], txt, "assistant")
+                else:
+                    DEFAULT_CLIENT.update_message(msg_id, txt)
+            prompt += txt
+            txt = ""
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as e:
@@ -94,9 +112,14 @@ def process_chat(chat, llm, messages):
 
 def main(model: str, dtype: str, max_model_len: Optional[int]):
     print("Starting...")
-    llm = LLM(
+    # llm = LLM(
+    #     **get_llm_kwargs(model, None, dtype=dtype, max_model_len=max_model_len)
+    # )  # TODO: How to handle `llm_params`?
+    engine_args = AsyncEngineArgs(
         **get_llm_kwargs(model, None, dtype=dtype, max_model_len=max_model_len)
-    )  # TODO: How to handle `llm_params`?
+    )
+    llm = AsyncLLMEngine.from_engine_args(engine_args)
+    # llm = AsyncLLMEngine(
     print("Model loaded.")
 
     round = 0
@@ -107,7 +130,7 @@ def main(model: str, dtype: str, max_model_len: Optional[int]):
         try:
             for workitem in DEFAULT_CLIENT.get_next_workitems(model=model):
                 chat, messages = workitem["chat"], workitem["messages"]
-                process_chat(chat, llm, messages)
+                asyncio.run(process_chat(chat, llm, messages))
         except (KeyboardInterrupt, SystemExit):
             print("Exiting...")
             break

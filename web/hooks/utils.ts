@@ -20,6 +20,11 @@ export function shouldUpdateState<T extends Chat | Message | User>(
       return true;
     }
 
+    // Compare the text property
+    if ((currentItem as Message)?.text !== (newItem as Message)?.text) {
+      return true;
+    }
+
     // Additional comparisons can be added here if needed
     // For example, comparing timestamps or specific fields that
     // are likely to change and are important for your application's logic
