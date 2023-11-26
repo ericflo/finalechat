@@ -112,10 +112,10 @@ async def process_chat(chat, llm: AsyncLLMEngine, messages):
                     msg_id = DEFAULT_CLIENT.create_message(
                         chat["id"], running_text + delta_text, "assistant"
                     )["id"]
-            if msg_id is not None:
-                DEFAULT_CLIENT.update_message(msg_id, running_text + delta_text)
             running_text += delta_text
             prompt += delta_text
+        if msg_id is not None:
+            DEFAULT_CLIENT.update_message(msg_id, running_text + delta_text)
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as e:
