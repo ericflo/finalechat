@@ -4,35 +4,68 @@ import traceback
 import json
 from typing import Optional
 
-from vllm import LLM, SamplingParams
-
 from minichat_convo import get_prompt
 from client import DEFAULT_CLIENT
 
 
-def get_sampling_params(data):
-    return SamplingParams(
-        n=data.get("n", 1),
-        best_of=data.get("best_of", 1),
-        presence_penalty=data.get("presence_penalty", 0.0),
-        frequency_penalty=data.get("frequency_penalty", 0.0),
-        repetition_penalty=data.get("repetition_penalty", 1.0),
-        temperature=data.get("temperature", 0.2),
-        top_p=data.get("top_p", 1.0),
-        top_k=data.get("top_k", -1),
-        min_p=data.get("min_p", 0.0),
-        use_beam_search=data.get("use_beam_search", False),
-        length_penalty=data.get("length_penalty", 1.0),
-        early_stopping=data.get("early_stopping", False),
-        stop=data.get("stop", None),
-        stop_token_ids=data.get("stop_token_ids", None),
-        ignore_eos=data.get("ignore_eos", False),
-        max_tokens=data.get("max_tokens", 1024),
-        logprobs=data.get("logprobs", None),
-        prompt_logprobs=data.get("prompt_logprobs", None),
-        skip_special_tokens=data.get("skip_special_tokens", True),
-        spaces_between_special_tokens=data.get("spaces_between_special_tokens", True),
-    )
+class SimpleSamplingParams:
+    n = 1
+    best_of = 1
+    presence_penalty = 0.0
+    frequency_penalty = 0.0
+    repetition_penalty = 1.0
+    temperature = 0.2
+    top_p = 1.0
+    top_k = -1
+    min_p = 0.0
+    use_beam_search = False
+    length_penalty = 1.0
+    early_stopping = False
+    stop = None
+    stop_token_ids = None
+    ignore_eos = False
+    max_tokens = 1024
+    logprobs = None
+    prompt_logprobs = None
+    skip_special_tokens = True
+    spaces_between_special_tokens = True
+
+    def __init__(self, **kwargs):
+        for k, v in kwargs.items():
+            setattr(self, k, v)
+
+    def __repr__(self):
+        return f"SimpleSamplingParams({', '.join([f'{k}={v}' for k, v in self.__dict__.items()])})"
+
+    def __str__(self):
+        return self.__repr__()
+
+    @staticmethod
+    def from_dict(data):
+        return SimpleSamplingParams(
+            n=data.get("n", 1),
+            best_of=data.get("best_of", 1),
+            presence_penalty=data.get("presence_penalty", 0.0),
+            frequency_penalty=data.get("frequency_penalty", 0.0),
+            repetition_penalty=data.get("repetition_penalty", 1.0),
+            temperature=data.get("temperature", 0.2),
+            top_p=data.get("top_p", 1.0),
+            top_k=data.get("top_k", -1),
+            min_p=data.get("min_p", 0.0),
+            use_beam_search=data.get("use_beam_search", False),
+            length_penalty=data.get("length_penalty", 1.0),
+            early_stopping=data.get("early_stopping", False),
+            stop=data.get("stop", None),
+            stop_token_ids=data.get("stop_token_ids", None),
+            ignore_eos=data.get("ignore_eos", False),
+            max_tokens=data.get("max_tokens", 1024),
+            logprobs=data.get("logprobs", None),
+            prompt_logprobs=data.get("prompt_logprobs", None),
+            skip_special_tokens=data.get("skip_special_tokens", True),
+            spaces_between_special_tokens=data.get(
+                "spaces_between_special_tokens", True
+            ),
+        )
 
 
 def get_llm_kwargs(model, llm_params, dtype="auto", max_model_len=None):
@@ -79,7 +112,9 @@ def process_chat(chat, llm, messages):
     try:
         DEFAULT_CLIENT.update_chat(chat["id"], status="processing")
         prompt = get_prompt(model_name=chat["model"], messages=messages)
-        sampling_params = get_sampling_params(json.loads(chat["sampling_params"]))
+        sampling_params = SimpleSamplingParams.from_dict(
+            json.loads(chat["sampling_params"])
+        )
         response = llm.generate([prompt], sampling_params=sampling_params)[0]
         output = "\n".join([o.text for o in response.outputs])
         DEFAULT_CLIENT.create_message(chat["id"], output, "assistant")
