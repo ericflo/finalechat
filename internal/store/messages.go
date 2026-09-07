@@ -121,6 +121,9 @@ func (s *Store) GetMessage(ctx context.Context, userID, id uuid.UUID) (*Message,
 type MessagePage struct {
 	// After returns messages created after this message id (ascending).
 	After *uuid.UUID
+	// AfterTime returns messages created after this instant (ascending); used
+	// by waits that have no message to anchor on.
+	AfterTime *time.Time
 	// Before returns messages created before this message id (ascending order,
 	// newest window first when combined with Limit).
 	Before *uuid.UUID
@@ -144,6 +147,11 @@ func (s *Store) ListMessages(ctx context.Context, userID, threadID uuid.UUID, p 
 	if p.After != nil {
 		args = append(args, *p.After)
 		where += " AND (m.created_at, m.id) > (SELECT c.created_at, c.id FROM messages c WHERE c.id = $4)"
+		order = "ORDER BY m.created_at ASC, m.id ASC"
+		reverse = false
+	} else if p.AfterTime != nil {
+		args = append(args, *p.AfterTime)
+		where += " AND m.created_at > $4"
 		order = "ORDER BY m.created_at ASC, m.id ASC"
 		reverse = false
 	} else if p.Before != nil {

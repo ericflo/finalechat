@@ -1,0 +1,131 @@
+# Finalechat delivery: test on every default-branch push, then publish one
+# immutable image that Flux promotes into Epsilon. Pull requests and other
+# branches are tested locally; only main runs inside the production cluster.
+
+steps:
+  - name: test-server
+    image: docker.io/library/golang:1.26-bookworm@sha256:9fdc884aacc3bec89b20ffc69f4bb369c78210e3e4f600387b5128b12c199f81
+    commands:
+      - export HOME=/tmp/finalechat-home GOCACHE=/tmp/finalechat-go-build GOMODCACHE=/tmp/finalechat-go-mod GOFLAGS=-buildvcs=false
+      - mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE"
+      # A throwaway PostgreSQL inside the step: the suite exercises real SQL,
+      # LISTEN/NOTIFY fan-out and long-polls rather than a fake store.
+      - apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends postgresql >/dev/null
+      - export PGBIN="$(ls -d /usr/lib/postgresql/*/bin | head -1)" PGDATA=/tmp/finalechat-pg
+      - "$PGBIN/initdb" -D "$PGDATA" -U finalechat --auth=trust >/dev/null
+      - "$PGBIN/pg_ctl" -D "$PGDATA" -o "-k /tmp -p 54329 -c listen_addresses=127.0.0.1" -l /tmp/finalechat-pg.log start >/dev/null
+      - "$PGBIN/createdb" -h 127.0.0.1 -p 54329 -U finalechat finalechat_test
+      - export FINALECHAT_TEST_DATABASE_URL="postgres://finalechat@127.0.0.1:54329/finalechat_test?sslmode=disable"
+      - test -z "$(gofmt -l cmd internal assets.go)" || { gofmt -l cmd internal assets.go; echo 'gofmt: files need formatting' >&2; exit 1; }
+      - go vet ./...
+      - go test -count=1 ./...
+    backend_options:
+      kubernetes:
+        resources:
+          requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 512Mi}
+          limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 2Gi}
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          fsGroupChangePolicy: OnRootMismatch
+          seccompProfile: {type: RuntimeDefault}
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+
+  - name: test-web
+    image: docker.io/library/node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+    commands:
+      - export HOME=/tmp/finalechat-home npm_config_cache=/tmp/finalechat-npm
+      - mkdir -p "$HOME"
+      - cd web
+      - npm ci --no-audit --no-fund
+      - npm run typecheck
+      - npm run build
+    backend_options:
+      kubernetes:
+        resources:
+          requests: {cpu: 250m, memory: 512Mi, ephemeral-storage: 512Mi}
+          limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 2Gi}
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          fsGroupChangePolicy: OnRootMismatch
+          seccompProfile: {type: RuntimeDefault}
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+
+  - name: test-cli
+    image: docker.io/library/python:3.13-slim@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a
+    commands:
+      - python3 -m py_compile cli/finalechat
+      - python3 cli/finalechat --help >/dev/null
+      - sh -n cli/install.sh
+      - python3 -c "import json; json.load(open('docs/openapi.json'))"
+    backend_options:
+      kubernetes:
+        resources:
+          requests: {cpu: 50m, memory: 64Mi}
+          limits: {cpu: 500m, memory: 256Mi}
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          fsGroupChangePolicy: OnRootMismatch
+          seccompProfile: {type: RuntimeDefault}
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+
+  - name: publish-immutable-image
+    image: docker.io/moby/buildkit:v0.30.0-rootless@sha256:d76eb1caecac5733ef7553c1e90a1b21f1bb218cd1142d3553de0747b4a14ba9
+    depends_on: [test-server, test-web, test-cli]
+    when:
+      - evaluate: 'CI_PIPELINE_EVENT == "push" && CI_COMMIT_BRANCH == CI_REPO_DEFAULT_BRANCH'
+    commands:
+      - |-
+        set -eu
+        buildkit_addr=tcp://buildkit.ci-build.svc.cluster.local:1234
+        attempt=0
+        until buildctl --addr "$${buildkit_addr}" debug workers >/dev/null 2>&1; do
+          attempt=$$((attempt + 1))
+          [ "$${attempt}" -lt 30 ] || { echo "BuildKit did not become ready" >&2; exit 1; }
+          sleep 2
+        done
+        build_time="$$(date -u -d "@$${CI_PIPELINE_CREATED}" +%Y%m%d%H%M%S)"
+        short_sha="$$(printf '%s' "$${CI_COMMIT_SHA}" | cut -c1-12)"
+        image_tag="main-$${build_time}-$${short_sha}"
+        registry=registry.clouderic.svc.cluster.local:5000
+        cache_ref="$${registry}/finalechat-build-cache:main"
+        buildctl --addr "$${buildkit_addr}" build \
+          --frontend dockerfile.v0 --local context=. --local dockerfile=. \
+          --opt filename=Dockerfile --opt platform=linux/amd64 \
+          --opt "build-arg:VERSION=$${image_tag}" \
+          --opt "label:org.opencontainers.image.source=$${CI_REPO_URL}" \
+          --opt "label:org.opencontainers.image.revision=$${CI_COMMIT_SHA}" \
+          --opt "label:org.opencontainers.image.created=$$(date -u -d "@$${CI_PIPELINE_CREATED}" +%Y-%m-%dT%H:%M:%SZ)" \
+          --opt attest:provenance=mode=max \
+          --import-cache "type=registry,ref=$${cache_ref},registry.insecure=true" \
+          --export-cache "type=registry,ref=$${cache_ref},mode=max,registry.insecure=true" \
+          --output "type=image,name=$${registry}/finalechat:$${image_tag},push=true,registry.insecure=true"
+        printf 'Published finalechat at immutable tag %s\n' "$${image_tag}"
+    backend_options:
+      kubernetes:
+        resources:
+          requests: {cpu: 100m, memory: 128Mi}
+          limits: {cpu: "1", memory: 1Gi}
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+          fsGroupChangePolicy: OnRootMismatch
+          seccompProfile: {type: RuntimeDefault}
+          allowPrivilegeEscalation: false
+          capabilities: {drop: [ALL]}
+
+when:
+  - evaluate: 'CI_PIPELINE_EVENT == "push" && CI_COMMIT_BRANCH == CI_REPO_DEFAULT_BRANCH'

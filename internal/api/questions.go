@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -232,12 +233,21 @@ func (s *Server) handleListQuestions(w http.ResponseWriter, r *http.Request) {
 	}
 	var threadID *uuid.UUID
 	if v := qs.Get("thread_id"); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			writeError(w, errValidation("thread_id must be a thread id."))
-			return
+		if strings.HasPrefix(v, "ext:") {
+			t, err := s.store.GetThreadByExternalID(r.Context(), p.user.ID, strings.TrimPrefix(v, "ext:"))
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			threadID = &t.ID
+		} else {
+			id, err := uuid.Parse(v)
+			if err != nil {
+				writeError(w, errValidation("thread_id must be a thread id or ext:<external_id>."))
+				return
+			}
+			threadID = &id
 		}
-		threadID = &id
 	}
 	limit := 0
 	if v := qs.Get("limit"); v != "" {
@@ -372,6 +382,10 @@ func (s *Server) handleCancelQuestion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q, err := s.store.CancelQuestion(r.Context(), p.user.ID, id)
+	if errors.Is(err, store.ErrInvalidState) {
+		writeError(w, &apiError{Status: http.StatusConflict, Code: "already_resolved", Message: "This question has already been resolved."})
+		return
+	}
 	if err != nil {
 		writeError(w, err)
 		return

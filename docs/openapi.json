@@ -1,1 +1,3730 @@
-{}
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Finalechat API",
+    "version": "1.0.0",
+    "summary": "The app where agents message the user.",
+    "description": "Threads of messages and questions between agent sessions and one user, with long-polling, server-sent events and Web Push. Human-readable reference: https://www.finalechat.com/api/ . Agent quick start: https://www.finalechat.com/AGENTS.md .",
+    "contact": {
+      "url": "https://www.finalechat.com"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://www.finalechat.com/api/v1"
+    },
+    {
+      "url": "https://api.finalechat.com/api/v1"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Auth",
+      "description": "App sign-in flow. Agents use bearer tokens instead."
+    },
+    {
+      "name": "Me",
+      "description": "Identity, counts and settings."
+    },
+    {
+      "name": "Tokens",
+      "description": "API tokens for agents; managed from the app."
+    },
+    {
+      "name": "Threads",
+      "description": "One thread per agent session."
+    },
+    {
+      "name": "Messages",
+      "description": "Markdown or text messages in a thread."
+    },
+    {
+      "name": "Questions",
+      "description": "Multiple-choice and free-form questions the user answers on their phone."
+    },
+    {
+      "name": "Events",
+      "description": "Real-time stream."
+    },
+    {
+      "name": "Push",
+      "description": "Web Push device registration for the app."
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    },
+    {
+      "sessionCookie": []
+    }
+  ],
+  "paths": {
+    "/auth/status": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Registration mode and current session",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Create an account (app only, same-origin, rate limited)",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Account created; session cookie set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user": {
+                      "$ref": "#/components/schemas/User"
+                    }
+                  },
+                  "required": [
+                    "user"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Sign in (app only, same-origin, rate limited)",
+        "security": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in; session cookie set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user": {
+                      "$ref": "#/components/schemas/User"
+                    }
+                  },
+                  "required": [
+                    "user"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "Sign out",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Session cleared.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "tags": [
+          "Me"
+        ],
+        "summary": "Current user, counts and settings",
+        "responses": {
+          "200": {
+            "description": "Identity.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Me"
+        ],
+        "summary": "Change display name or password (session only)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProfilePatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "user": {
+                      "$ref": "#/components/schemas/User"
+                    }
+                  },
+                  "required": [
+                    "user"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "tags": [
+          "Me"
+        ],
+        "summary": "Read settings",
+        "responses": {
+          "200": {
+            "description": "Settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "settings": {
+                      "$ref": "#/components/schemas/Settings"
+                    }
+                  },
+                  "required": [
+                    "settings"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Me"
+        ],
+        "summary": "Update settings",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Full settings after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "settings": {
+                      "$ref": "#/components/schemas/Settings"
+                    }
+                  },
+                  "required": [
+                    "settings"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/counts": {
+      "get": {
+        "tags": [
+          "Me"
+        ],
+        "summary": "Badge counts",
+        "responses": {
+          "200": {
+            "description": "Counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "counts": {
+                      "$ref": "#/components/schemas/Counts"
+                    }
+                  },
+                  "required": [
+                    "counts"
+                  ]
+                },
+                "example": {
+                  "counts": {
+                    "pending_questions": 1,
+                    "unread_threads": 3
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "tags": [
+          "Events"
+        ],
+        "summary": "Server-sent events stream",
+        "description": "text/event-stream of `ready`, `thread.created`, `thread.updated`, `thread.deleted`, `message.created`, `question.created`, `question.answered`, `question.cancelled`, `question.expired`, `settings.updated` and `reconnect` events. Each data payload carries the full current objects (`thread`, `message`, `question`, `settings`) plus `counts` and `at`. A `: ping` comment is sent every 20 seconds.",
+        "responses": {
+          "200": {
+            "description": "Event stream.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "event: ready\ndata: {\"at\":\"2026-09-07T05:39:05.945123Z\",\"counts\":{\"pending_questions\":0,\"unread_threads\":3}}\n\nevent: message.created\ndata: {\"at\":\"…\",\"thread\":{…},\"message\":{…},\"counts\":{…}}\n\n"
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tokens": {
+      "get": {
+        "tags": [
+          "Tokens"
+        ],
+        "summary": "List active API tokens",
+        "responses": {
+          "200": {
+            "description": "Tokens, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tokens": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/APIToken"
+                      }
+                    }
+                  },
+                  "required": [
+                    "tokens"
+                  ]
+                },
+                "example": {
+                  "tokens": [
+                    {
+                      "id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1",
+                      "name": "laptop",
+                      "prefix": "fc_TlaRtPqY",
+                      "created_at": "2026-09-07T05:32:42.464521Z",
+                      "last_used_at": "2026-09-07T05:38:23.601635Z"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Tokens"
+        ],
+        "summary": "Create an API token (session only)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 120,
+                    "default": "Agent token"
+                  }
+                }
+              },
+              "example": {
+                "name": "laptop"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The token record and, once only, its secret.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "token": {
+                      "$ref": "#/components/schemas/APIToken"
+                    },
+                    "secret": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "token",
+                    "secret"
+                  ]
+                },
+                "example": {
+                  "secret": "fc_TlaRtPqYwguWNmAtY9FXJLTEJQdiuQp7GYIvMWun",
+                  "token": {
+                    "id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1",
+                    "name": "laptop",
+                    "prefix": "fc_TlaRtPqY",
+                    "created_at": "2026-09-07T05:32:42.464521Z",
+                    "last_used_at": null
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tokens/{id}": {
+      "delete": {
+        "tags": [
+          "Tokens"
+        ],
+        "summary": "Revoke an API token (session only)",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Token id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads": {
+      "get": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "List threads by latest activity",
+        "parameters": [
+          {
+            "name": "archived",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "List archived threads instead of active ones."
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Case-insensitive substring match on title, agent and preview."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "`next_cursor` from the previous page."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of threads.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "threads": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Thread"
+                      }
+                    },
+                    "next_cursor": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "threads"
+                  ]
+                },
+                "example": {
+                  "threads": [
+                    {
+                      "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                      "external_id": "claude-code:7f3a9c2e",
+                      "title": "finalechat",
+                      "agent": "Claude Code",
+                      "meta": {
+                        "cwd": "/home/eric/finalechat"
+                      },
+                      "created_at": "2026-09-07T05:38:55.019126Z",
+                      "updated_at": "2026-09-07T05:38:55.043799Z",
+                      "last_activity_at": "2026-09-07T05:38:55.043799Z",
+                      "last_read_at": "2026-09-07T05:38:55.019126Z",
+                      "archived_at": null,
+                      "muted": false,
+                      "preview": "Staging looks good. Promote to production?",
+                      "preview_sender": "question",
+                      "unread_count": 1,
+                      "pending_questions": 1
+                    }
+                  ],
+                  "next_cursor": "MTc4ODc1OTUzNTA0Mzc5OXwwMWEwN2E2MC02ZGFiLTc4MGEtYmY0ZC0yMGVmMTVjMGQ3ZDc"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Create a thread, or fetch it by external_id",
+        "description": "Idempotent when `external_id` is set: an existing thread is returned with 200 and `created: false`; blank `title`/`agent` are filled in and `meta` is merged.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "thread",
+                    "created"
+                  ]
+                },
+                "example": {
+                  "created": true,
+                  "thread": {
+                    "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "external_id": "claude-code:7f3a9c2e",
+                    "title": "finalechat",
+                    "agent": "Claude Code",
+                    "meta": {
+                      "cwd": "/home/eric/finalechat"
+                    },
+                    "created_at": "2026-09-07T05:38:55.019126Z",
+                    "updated_at": "2026-09-07T05:38:55.043799Z",
+                    "last_activity_at": "2026-09-07T05:38:55.043799Z",
+                    "last_read_at": "2026-09-07T05:38:55.019126Z",
+                    "archived_at": null,
+                    "muted": false,
+                    "preview": "Staging looks good. Promote to production?",
+                    "preview_sender": "question",
+                    "unread_count": 1,
+                    "pending_questions": 1
+                  }
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Already existed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "thread",
+                    "created"
+                  ]
+                },
+                "example": {
+                  "created": false,
+                  "thread": {
+                    "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "external_id": "claude-code:7f3a9c2e",
+                    "title": "finalechat",
+                    "agent": "Claude Code",
+                    "meta": {
+                      "cwd": "/home/eric/finalechat"
+                    },
+                    "created_at": "2026-09-07T05:38:55.019126Z",
+                    "updated_at": "2026-09-07T05:38:55.043799Z",
+                    "last_activity_at": "2026-09-07T05:38:55.043799Z",
+                    "last_read_at": "2026-09-07T05:38:55.019126Z",
+                    "archived_at": null,
+                    "muted": false,
+                    "preview": "Staging looks good. Promote to production?",
+                    "preview_sender": "question",
+                    "unread_count": 1,
+                    "pending_questions": 1
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{ref}": {
+      "get": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Get a thread",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The thread.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    }
+                  },
+                  "required": [
+                    "thread"
+                  ]
+                },
+                "example": {
+                  "thread": {
+                    "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "external_id": "claude-code:7f3a9c2e",
+                    "title": "finalechat",
+                    "agent": "Claude Code",
+                    "meta": {
+                      "cwd": "/home/eric/finalechat"
+                    },
+                    "created_at": "2026-09-07T05:38:55.019126Z",
+                    "updated_at": "2026-09-07T05:38:55.043799Z",
+                    "last_activity_at": "2026-09-07T05:38:55.043799Z",
+                    "last_read_at": "2026-09-07T05:38:55.019126Z",
+                    "archived_at": null,
+                    "muted": false,
+                    "preview": "Staging looks good. Promote to production?",
+                    "preview_sender": "question",
+                    "unread_count": 1,
+                    "pending_questions": 1
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Update title, agent, archived, muted or meta",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThreadPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The thread.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    }
+                  },
+                  "required": [
+                    "thread"
+                  ]
+                },
+                "example": {
+                  "thread": {
+                    "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "external_id": "claude-code:7f3a9c2e",
+                    "title": "finalechat",
+                    "agent": "Claude Code",
+                    "meta": {
+                      "cwd": "/home/eric/finalechat"
+                    },
+                    "created_at": "2026-09-07T05:38:55.019126Z",
+                    "updated_at": "2026-09-07T05:38:55.043799Z",
+                    "last_activity_at": "2026-09-07T05:38:55.043799Z",
+                    "last_read_at": "2026-09-07T05:38:55.019126Z",
+                    "archived_at": null,
+                    "muted": false,
+                    "preview": "Staging looks good. Promote to production?",
+                    "preview_sender": "question",
+                    "unread_count": 1,
+                    "pending_questions": 1
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Delete a thread and everything in it",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{ref}/read": {
+      "post": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Mark the thread read",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The thread.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    }
+                  },
+                  "required": [
+                    "thread"
+                  ]
+                },
+                "example": {
+                  "thread": {
+                    "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "external_id": "claude-code:7f3a9c2e",
+                    "title": "finalechat",
+                    "agent": "Claude Code",
+                    "meta": {
+                      "cwd": "/home/eric/finalechat"
+                    },
+                    "created_at": "2026-09-07T05:38:55.019126Z",
+                    "updated_at": "2026-09-07T05:38:55.043799Z",
+                    "last_activity_at": "2026-09-07T05:38:55.043799Z",
+                    "last_read_at": "2026-09-07T05:38:55.019126Z",
+                    "archived_at": null,
+                    "muted": false,
+                    "preview": "Staging looks good. Promote to production?",
+                    "preview_sender": "question",
+                    "unread_count": 1,
+                    "pending_questions": 1
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{ref}/messages": {
+      "get": {
+        "tags": [
+          "Messages"
+        ],
+        "summary": "List messages, or wait for new ones",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Return messages newer than this id (ascending). Required with wait."
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Return messages older than this id (ascending)."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "sender",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "user",
+                "system"
+              ]
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 600
+            },
+            "description": "Seconds to hold the request open for a message newer than `after`. Clamped to 600."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Messages in ascending order. `has_more` reports older messages (or newer ones beyond limit when using after). `timed_out` is true when a wait elapsed with nothing new.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "messages": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Message"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    },
+                    "thread_id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "description": "UUID."
+                    },
+                    "timed_out": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "messages",
+                    "has_more",
+                    "thread_id"
+                  ]
+                },
+                "example": {
+                  "has_more": false,
+                  "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                  "messages": [
+                    {
+                      "id": "01a07a60-6db9-784b-bd24-7ba3d7d3dfa0",
+                      "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                      "sender": "agent",
+                      "body": "Deployed **v1.2.0** to staging.\n\n- 42 tests passed\n- bundle 118 KB",
+                      "format": "markdown",
+                      "importance": "important",
+                      "meta": {},
+                      "created_at": "2026-09-07T05:38:55.033453Z"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Messages"
+        ],
+        "summary": "Post a message (creates a missing ext: thread)",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "$ref": "#/components/schemas/Message"
+                    },
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    }
+                  },
+                  "required": [
+                    "message",
+                    "thread"
+                  ]
+                },
+                "example": {
+                  "message": {
+                    "id": "01a07a60-6db9-784b-bd24-7ba3d7d3dfa0",
+                    "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "sender": "agent",
+                    "body": "Deployed **v1.2.0** to staging.\n\n- 42 tests passed\n- bundle 118 KB",
+                    "format": "markdown",
+                    "importance": "important",
+                    "meta": {},
+                    "created_at": "2026-09-07T05:38:55.033453Z"
+                  },
+                  "thread": {
+                    "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "external_id": "claude-code:7f3a9c2e",
+                    "title": "finalechat",
+                    "agent": "Claude Code",
+                    "meta": {
+                      "cwd": "/home/eric/finalechat"
+                    },
+                    "created_at": "2026-09-07T05:38:55.019126Z",
+                    "updated_at": "2026-09-07T05:38:55.043799Z",
+                    "last_activity_at": "2026-09-07T05:38:55.043799Z",
+                    "last_read_at": "2026-09-07T05:38:55.019126Z",
+                    "archived_at": null,
+                    "muted": false,
+                    "preview": "Staging looks good. Promote to production?",
+                    "preview_sender": "question",
+                    "unread_count": 1,
+                    "pending_questions": 1
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{ref}/questions": {
+      "get": {
+        "tags": [
+          "Questions"
+        ],
+        "summary": "Questions in a thread, oldest first",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Up to 500 questions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "questions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Question"
+                      }
+                    }
+                  },
+                  "required": [
+                    "questions"
+                  ]
+                },
+                "example": {
+                  "questions": [
+                    {
+                      "id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4",
+                      "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                      "prompt": "Staging looks good. Promote to production?",
+                      "options": [
+                        {
+                          "label": "Ship it",
+                          "description": "Promote the same image"
+                        },
+                        {
+                          "label": "Hold",
+                          "description": "Wait for me to look"
+                        }
+                      ],
+                      "allow_freeform": true,
+                      "multi_select": false,
+                      "status": "pending",
+                      "answer": null,
+                      "meta": {},
+                      "created_at": "2026-09-07T05:38:55.043799Z",
+                      "answered_at": null,
+                      "expires_at": "2026-09-07T06:38:55.043382Z"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Questions"
+        ],
+        "summary": "Ask a question (creates a missing ext: thread); optionally wait for the answer",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 600
+            },
+            "description": "Seconds to hold the request open for the answer; also accepted as the `wait` body field. Clamped to 600."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuestionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created. Status is 201 whether or not the wait produced an answer; check `question.status`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "$ref": "#/components/schemas/Question"
+                    },
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    }
+                  },
+                  "required": [
+                    "question",
+                    "thread"
+                  ]
+                },
+                "example": {
+                  "question": {
+                    "id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4",
+                    "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "prompt": "Staging looks good. Promote to production?",
+                    "options": [
+                      {
+                        "label": "Ship it",
+                        "description": "Promote the same image"
+                      },
+                      {
+                        "label": "Hold",
+                        "description": "Wait for me to look"
+                      }
+                    ],
+                    "allow_freeform": true,
+                    "multi_select": false,
+                    "status": "answered",
+                    "answer": {
+                      "selected": [
+                        "Ship it"
+                      ],
+                      "text": ""
+                    },
+                    "meta": {},
+                    "created_at": "2026-09-07T05:38:55.043799Z",
+                    "answered_at": "2026-09-07T05:41:12.100442Z",
+                    "expires_at": "2026-09-07T06:38:55.043382Z"
+                  },
+                  "thread": {
+                    "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "external_id": "claude-code:7f3a9c2e",
+                    "title": "finalechat",
+                    "agent": "Claude Code",
+                    "meta": {
+                      "cwd": "/home/eric/finalechat"
+                    },
+                    "created_at": "2026-09-07T05:38:55.019126Z",
+                    "updated_at": "2026-09-07T05:38:55.043799Z",
+                    "last_activity_at": "2026-09-07T05:38:55.043799Z",
+                    "last_read_at": "2026-09-07T05:38:55.019126Z",
+                    "archived_at": null,
+                    "muted": false,
+                    "preview": "Staging looks good. Promote to production?",
+                    "preview_sender": "question",
+                    "unread_count": 1,
+                    "pending_questions": 1
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/messages/{id}": {
+      "get": {
+        "tags": [
+          "Messages"
+        ],
+        "summary": "Get a message",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Message id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "$ref": "#/components/schemas/Message"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                },
+                "example": {
+                  "message": {
+                    "id": "01a07a60-6db9-784b-bd24-7ba3d7d3dfa0",
+                    "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "sender": "agent",
+                    "body": "Deployed **v1.2.0** to staging.\n\n- 42 tests passed\n- bundle 118 KB",
+                    "format": "markdown",
+                    "importance": "important",
+                    "meta": {},
+                    "created_at": "2026-09-07T05:38:55.033453Z"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/questions": {
+      "get": {
+        "tags": [
+          "Questions"
+        ],
+        "summary": "Questions across threads, newest first",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "answered",
+                "cancelled",
+                "expired"
+              ]
+            }
+          },
+          {
+            "name": "thread_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Thread UUID (not an ext: reference)."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Questions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "questions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Question"
+                      }
+                    }
+                  },
+                  "required": [
+                    "questions"
+                  ]
+                },
+                "example": {
+                  "questions": [
+                    {
+                      "id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4",
+                      "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                      "prompt": "Staging looks good. Promote to production?",
+                      "options": [
+                        {
+                          "label": "Ship it",
+                          "description": "Promote the same image"
+                        },
+                        {
+                          "label": "Hold",
+                          "description": "Wait for me to look"
+                        }
+                      ],
+                      "allow_freeform": true,
+                      "multi_select": false,
+                      "status": "pending",
+                      "answer": null,
+                      "meta": {},
+                      "created_at": "2026-09-07T05:38:55.043799Z",
+                      "answered_at": null,
+                      "expires_at": "2026-09-07T06:38:55.043382Z"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/questions/{id}": {
+      "get": {
+        "tags": [
+          "Questions"
+        ],
+        "summary": "Get a question; optionally wait while it is pending",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Question id."
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 600
+            },
+            "description": "Seconds to hold the request open while the question is pending. Clamped to 600."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The question in its current state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "$ref": "#/components/schemas/Question"
+                    }
+                  },
+                  "required": [
+                    "question"
+                  ]
+                },
+                "example": {
+                  "question": {
+                    "id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4",
+                    "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "prompt": "Staging looks good. Promote to production?",
+                    "options": [
+                      {
+                        "label": "Ship it",
+                        "description": "Promote the same image"
+                      },
+                      {
+                        "label": "Hold",
+                        "description": "Wait for me to look"
+                      }
+                    ],
+                    "allow_freeform": true,
+                    "multi_select": false,
+                    "status": "answered",
+                    "answer": {
+                      "selected": [
+                        "Ship it"
+                      ],
+                      "text": ""
+                    },
+                    "meta": {},
+                    "created_at": "2026-09-07T05:38:55.043799Z",
+                    "answered_at": "2026-09-07T05:41:12.100442Z",
+                    "expires_at": "2026-09-07T06:38:55.043382Z"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/questions/{id}/answer": {
+      "post": {
+        "tags": [
+          "Questions"
+        ],
+        "summary": "Answer a pending question",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Question id."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Answered. Also appends a user message recording the choice and marks the thread read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "$ref": "#/components/schemas/Question"
+                    },
+                    "message": {
+                      "$ref": "#/components/schemas/Message"
+                    },
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    }
+                  },
+                  "required": [
+                    "question",
+                    "message",
+                    "thread"
+                  ]
+                },
+                "example": {
+                  "question": {
+                    "id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4",
+                    "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "prompt": "Staging looks good. Promote to production?",
+                    "options": [
+                      {
+                        "label": "Ship it",
+                        "description": "Promote the same image"
+                      },
+                      {
+                        "label": "Hold",
+                        "description": "Wait for me to look"
+                      }
+                    ],
+                    "allow_freeform": true,
+                    "multi_select": false,
+                    "status": "answered",
+                    "answer": {
+                      "selected": [
+                        "Ship it"
+                      ],
+                      "text": ""
+                    },
+                    "meta": {},
+                    "created_at": "2026-09-07T05:38:55.043799Z",
+                    "answered_at": "2026-09-07T05:41:12.100442Z",
+                    "expires_at": "2026-09-07T06:38:55.043382Z"
+                  },
+                  "message": {
+                    "id": "01a07a60-a438-78f0-9a26-138cf1ecfa9d",
+                    "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "sender": "user",
+                    "body": "Ship it",
+                    "format": "text",
+                    "importance": "normal",
+                    "meta": {
+                      "kind": "answer",
+                      "question_id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4"
+                    },
+                    "created_at": "2026-09-07T05:41:12.104547Z"
+                  },
+                  "thread": {
+                    "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "external_id": "claude-code:7f3a9c2e",
+                    "title": "finalechat",
+                    "agent": "Claude Code",
+                    "meta": {
+                      "cwd": "/home/eric/finalechat"
+                    },
+                    "created_at": "2026-09-07T05:38:55.019126Z",
+                    "updated_at": "2026-09-07T05:38:55.043799Z",
+                    "last_activity_at": "2026-09-07T05:38:55.043799Z",
+                    "last_read_at": "2026-09-07T05:38:55.019126Z",
+                    "archived_at": null,
+                    "muted": false,
+                    "preview": "Staging looks good. Promote to production?",
+                    "preview_sender": "question",
+                    "unread_count": 1,
+                    "pending_questions": 1
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Question already answered, cancelled or expired (`already_resolved`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/questions/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Questions"
+        ],
+        "summary": "Withdraw a pending question",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Question id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancelled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "$ref": "#/components/schemas/Question"
+                    }
+                  },
+                  "required": [
+                    "question"
+                  ]
+                },
+                "example": {
+                  "question": {
+                    "id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4",
+                    "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "prompt": "Staging looks good. Promote to production?",
+                    "options": [
+                      {
+                        "label": "Ship it",
+                        "description": "Promote the same image"
+                      },
+                      {
+                        "label": "Hold",
+                        "description": "Wait for me to look"
+                      }
+                    ],
+                    "allow_freeform": true,
+                    "multi_select": false,
+                    "status": "cancelled",
+                    "answer": null,
+                    "meta": {},
+                    "created_at": "2026-09-07T05:38:55.043799Z",
+                    "answered_at": "2026-09-07T05:39:05.920678Z",
+                    "expires_at": "2026-09-07T06:38:55.043382Z"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Question was not pending (`invalid_state`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/push/vapid": {
+      "get": {
+        "tags": [
+          "Push"
+        ],
+        "summary": "VAPID public key for PushManager.subscribe",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "public_key": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "public_key"
+                  ]
+                },
+                "example": {
+                  "enabled": true,
+                  "public_key": "BMPSFmGze6P0EpseCRcLWAQWA3r06u0Yi-ZBIw6gCzH4eQXQWsdD9D3EMSJ5BIL5zulphA2jh1TUDtZMvlNfEK4"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/push/subscriptions": {
+      "get": {
+        "tags": [
+          "Push"
+        ],
+        "summary": "List this account's push subscriptions",
+        "responses": {
+          "200": {
+            "description": "Subscriptions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscriptions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PushSubscription"
+                      }
+                    }
+                  },
+                  "required": [
+                    "subscriptions"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Push"
+        ],
+        "summary": "Register (or refresh) a browser push subscription",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/PushSubscriptionRequest"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "subscription": {
+                        "$ref": "#/components/schemas/PushSubscriptionRequest"
+                      }
+                    },
+                    "required": [
+                      "subscription"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscription": {
+                      "$ref": "#/components/schemas/PushSubscription"
+                    }
+                  },
+                  "required": [
+                    "subscription"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Feature unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Push"
+        ],
+        "summary": "Remove a push subscription by endpoint",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "endpoint": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "endpoint"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/push/test": {
+      "post": {
+        "tags": [
+          "Push"
+        ],
+        "summary": "Send a test notification to every subscribed device",
+        "responses": {
+          "202": {
+            "description": "Queued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "devices": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "devices"
+                  ]
+                },
+                "example": {
+                  "ok": true,
+                  "devices": 1
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No subscribed devices (`no_subscriptions`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Feature unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "fc_ token",
+        "description": "API token created in the app under Settings → Agents. Usually supplied as the FINALECHAT_TOKEN environment variable."
+      },
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "fc_session",
+        "description": "Browser session set by POST /auth/login. State-changing requests must be same-origin."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "bad_request",
+                  "unauthorized",
+                  "invalid_token",
+                  "invalid_credentials",
+                  "forbidden",
+                  "csrf",
+                  "signup_closed",
+                  "invalid_invite",
+                  "not_found",
+                  "conflict",
+                  "invalid_state",
+                  "already_resolved",
+                  "email_taken",
+                  "no_subscriptions",
+                  "too_large",
+                  "validation_failed",
+                  "rate_limited",
+                  "push_disabled",
+                  "internal_error",
+                  "method_not_allowed"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "example": {
+          "error": {
+            "code": "validation_failed",
+            "message": "prompt is required."
+          }
+        }
+      },
+      "Meta": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Free-form JSON object stored verbatim; at most 16 KiB."
+      },
+      "Settings": {
+        "type": "object",
+        "required": [
+          "notify_all_messages",
+          "remote_mode"
+        ],
+        "properties": {
+          "notify_all_messages": {
+            "type": "boolean",
+            "description": "Push for every agent message, not only important ones and questions."
+          },
+          "remote_mode": {
+            "type": "boolean",
+            "description": "The user is away from the terminal; integrations should block for phone replies and answers."
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "settings",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID."
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/Settings"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          }
+        },
+        "example": {
+          "id": "01a07a5a-be46-723c-80f8-61155463dbdc",
+          "email": "eric@example.com",
+          "display_name": "Eric",
+          "settings": {
+            "notify_all_messages": false,
+            "remote_mode": false
+          },
+          "created_at": "2026-09-07T05:32:42.438822Z"
+        }
+      },
+      "APIToken": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "prefix",
+          "created_at",
+          "last_used_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID."
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string",
+            "description": "First 11 characters of the secret, safe to display."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          },
+          "revoked_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Present only on revoked tokens."
+          }
+        },
+        "example": {
+          "id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1",
+          "name": "laptop",
+          "prefix": "fc_TlaRtPqY",
+          "created_at": "2026-09-07T05:32:42.464521Z",
+          "last_used_at": "2026-09-07T05:38:23.601635Z"
+        }
+      },
+      "Counts": {
+        "type": "object",
+        "required": [
+          "pending_questions",
+          "unread_threads"
+        ],
+        "properties": {
+          "pending_questions": {
+            "type": "integer"
+          },
+          "unread_threads": {
+            "type": "integer",
+            "description": "Active threads with at least one unread non-user message."
+          }
+        },
+        "example": {
+          "pending_questions": 1,
+          "unread_threads": 3
+        }
+      },
+      "Thread": {
+        "type": "object",
+        "required": [
+          "id",
+          "external_id",
+          "title",
+          "agent",
+          "meta",
+          "created_at",
+          "updated_at",
+          "last_activity_at",
+          "last_read_at",
+          "archived_at",
+          "muted",
+          "preview",
+          "preview_sender",
+          "unread_count",
+          "pending_questions"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID."
+          },
+          "external_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Caller-chosen id; usable as ext:<external_id> in paths."
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "agent": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Bumped by every message and question."
+          },
+          "last_read_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          },
+          "archived_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          },
+          "muted": {
+            "type": "boolean",
+            "description": "Muted threads never push."
+          },
+          "preview": {
+            "type": "string",
+            "description": "Plain-text excerpt of the latest message or question."
+          },
+          "preview_sender": {
+            "type": "string",
+            "enum": [
+              "",
+              "agent",
+              "user",
+              "system",
+              "question"
+            ]
+          },
+          "unread_count": {
+            "type": "integer",
+            "description": "Non-user messages since last_read_at."
+          },
+          "pending_questions": {
+            "type": "integer"
+          }
+        },
+        "example": {
+          "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+          "external_id": "claude-code:7f3a9c2e",
+          "title": "finalechat",
+          "agent": "Claude Code",
+          "meta": {
+            "cwd": "/home/eric/finalechat"
+          },
+          "created_at": "2026-09-07T05:38:55.019126Z",
+          "updated_at": "2026-09-07T05:38:55.043799Z",
+          "last_activity_at": "2026-09-07T05:38:55.043799Z",
+          "last_read_at": "2026-09-07T05:38:55.019126Z",
+          "archived_at": null,
+          "muted": false,
+          "preview": "Staging looks good. Promote to production?",
+          "preview_sender": "question",
+          "unread_count": 1,
+          "pending_questions": 1
+        }
+      },
+      "Message": {
+        "type": "object",
+        "required": [
+          "id",
+          "thread_id",
+          "sender",
+          "body",
+          "format",
+          "importance",
+          "meta",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID."
+          },
+          "thread_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID."
+          },
+          "sender": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "user",
+              "system"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "markdown",
+              "text"
+            ]
+          },
+          "importance": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "important"
+            ]
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          }
+        },
+        "example": {
+          "id": "01a07a60-6db9-784b-bd24-7ba3d7d3dfa0",
+          "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+          "sender": "agent",
+          "body": "Deployed **v1.2.0** to staging.\n\n- 42 tests passed\n- bundle 118 KB",
+          "format": "markdown",
+          "importance": "important",
+          "meta": {},
+          "created_at": "2026-09-07T05:38:55.033453Z"
+        }
+      },
+      "QuestionOption": {
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
+      },
+      "Answer": {
+        "type": "object",
+        "required": [
+          "selected"
+        ],
+        "properties": {
+          "selected": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Chosen option labels in the order chosen."
+          },
+          "text": {
+            "type": "string",
+            "description": "Free-form reply; absent when empty."
+          }
+        }
+      },
+      "Question": {
+        "type": "object",
+        "required": [
+          "id",
+          "thread_id",
+          "prompt",
+          "options",
+          "allow_freeform",
+          "multi_select",
+          "status",
+          "answer",
+          "meta",
+          "created_at",
+          "answered_at",
+          "expires_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID."
+          },
+          "thread_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID."
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuestionOption"
+            }
+          },
+          "allow_freeform": {
+            "type": "boolean"
+          },
+          "multi_select": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "answered",
+              "cancelled",
+              "expired"
+            ]
+          },
+          "answer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Answer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          },
+          "answered_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Set when the question leaves pending, including cancel and expiry."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          }
+        },
+        "example": {
+          "id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4",
+          "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+          "prompt": "Staging looks good. Promote to production?",
+          "options": [
+            {
+              "label": "Ship it",
+              "description": "Promote the same image"
+            },
+            {
+              "label": "Hold",
+              "description": "Wait for me to look"
+            }
+          ],
+          "allow_freeform": true,
+          "multi_select": false,
+          "status": "pending",
+          "answer": null,
+          "meta": {},
+          "created_at": "2026-09-07T05:38:55.043799Z",
+          "answered_at": null,
+          "expires_at": "2026-09-07T06:38:55.043382Z"
+        }
+      },
+      "PushSubscription": {
+        "type": "object",
+        "required": [
+          "id",
+          "endpoint",
+          "user_agent",
+          "created_at",
+          "last_success_at",
+          "failure_count"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID."
+          },
+          "endpoint": {
+            "type": "string",
+            "format": "uri"
+          },
+          "user_agent": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          },
+          "failure_count": {
+            "type": "integer"
+          }
+        }
+      },
+      "ThreadCreateRequest": {
+        "type": "object",
+        "properties": {
+          "external_id": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "Idempotency key chosen by the caller."
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "agent": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "example": {
+          "external_id": "claude-code:7f3a9c2e",
+          "title": "finalechat",
+          "agent": "Claude Code",
+          "meta": {
+            "cwd": "/home/eric/finalechat"
+          }
+        }
+      },
+      "ThreadPatchRequest": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "agent": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "example": {
+          "title": "finalechat: release 1.2",
+          "archived": true
+        }
+      },
+      "MessageCreateRequest": {
+        "type": "object",
+        "required": [
+          "body"
+        ],
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "Required, non-blank, valid UTF-8, at most 256 KiB."
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "markdown",
+              "text"
+            ],
+            "default": "markdown"
+          },
+          "importance": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "important"
+            ],
+            "default": "normal"
+          },
+          "sender": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "user",
+              "system"
+            ],
+            "description": "Defaults to agent for tokens and user for sessions."
+          },
+          "notify": {
+            "type": "boolean",
+            "description": "Force or suppress the push notification for this message."
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "title": {
+            "type": "string",
+            "description": "Applied only when this request creates the ext: thread."
+          },
+          "agent": {
+            "type": "string",
+            "description": "Applied only when this request creates the ext: thread."
+          }
+        },
+        "example": {
+          "title": "finalechat",
+          "agent": "Claude Code",
+          "body": "Deployed **v1.2.0** to staging.\n\n- 42 tests passed\n- bundle 118 KB",
+          "importance": "important"
+        }
+      },
+      "QuestionCreateRequest": {
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "Required; at most 8000 bytes."
+          },
+          "options": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "$ref": "#/components/schemas/QuestionOption"
+            }
+          },
+          "allow_freeform": {
+            "type": "boolean",
+            "default": true,
+            "description": "Forced true when there are no options."
+          },
+          "multi_select": {
+            "type": "boolean",
+            "default": false
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 604800,
+            "description": "The question expires after this many seconds."
+          },
+          "wait": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 600,
+            "description": "Block up to this many seconds for the answer; same as the wait query parameter."
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "title": {
+            "type": "string",
+            "description": "Applied only when this request creates the ext: thread."
+          },
+          "agent": {
+            "type": "string",
+            "description": "Applied only when this request creates the ext: thread."
+          }
+        },
+        "example": {
+          "prompt": "Staging looks good. Promote to production?",
+          "options": [
+            {
+              "label": "Ship it",
+              "description": "Promote the same image"
+            },
+            {
+              "label": "Hold",
+              "description": "Wait for me to look"
+            }
+          ],
+          "timeout_seconds": 3600
+        }
+      },
+      "AnswerRequest": {
+        "type": "object",
+        "properties": {
+          "selected": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Option labels; at most one unless multi_select."
+          },
+          "text": {
+            "type": "string",
+            "description": "Free-form reply, at most 32 KiB; only when allow_freeform."
+          }
+        },
+        "example": {
+          "selected": [
+            "Ship it"
+          ],
+          "text": ""
+        }
+      },
+      "SettingsPatchRequest": {
+        "type": "object",
+        "properties": {
+          "notify_all_messages": {
+            "type": "boolean"
+          },
+          "remote_mode": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProfilePatchRequest": {
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 1024
+          }
+        }
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 1024
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "invite_code": {
+            "type": "string"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthStatus": {
+        "type": "object",
+        "required": [
+          "authenticated",
+          "signup",
+          "push_enabled",
+          "version"
+        ],
+        "properties": {
+          "authenticated": {
+            "type": "boolean"
+          },
+          "signup": {
+            "type": "string",
+            "enum": [
+              "open",
+              "invite",
+              "closed"
+            ]
+          },
+          "push_enabled": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        },
+        "example": {
+          "authenticated": false,
+          "push_enabled": true,
+          "signup": "closed",
+          "version": "dev"
+        }
+      },
+      "Me": {
+        "type": "object",
+        "required": [
+          "auth",
+          "base_url",
+          "counts",
+          "push_enabled",
+          "user",
+          "version"
+        ],
+        "properties": {
+          "auth": {
+            "type": "string",
+            "enum": [
+              "token",
+              "session"
+            ]
+          },
+          "base_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "push_enabled": {
+            "type": "boolean"
+          },
+          "token": {
+            "$ref": "#/components/schemas/APIToken"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "example": {
+          "auth": "token",
+          "base_url": "https://www.finalechat.com",
+          "counts": {
+            "pending_questions": 1,
+            "unread_threads": 3
+          },
+          "push_enabled": true,
+          "token": {
+            "id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1",
+            "name": "laptop",
+            "prefix": "fc_TlaRtPqY",
+            "created_at": "2026-09-07T05:32:42.464521Z",
+            "last_used_at": "2026-09-07T05:38:23.601635Z"
+          },
+          "user": {
+            "id": "01a07a5a-be46-723c-80f8-61155463dbdc",
+            "email": "eric@example.com",
+            "display_name": "Eric",
+            "settings": {
+              "notify_all_messages": false,
+              "remote_mode": false
+            },
+            "created_at": "2026-09-07T05:32:42.438822Z"
+          },
+          "version": "dev"
+        }
+      },
+      "PushSubscriptionRequest": {
+        "type": "object",
+        "required": [
+          "endpoint",
+          "keys"
+        ],
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "format": "uri"
+          },
+          "keys": {
+            "type": "object",
+            "required": [
+              "p256dh",
+              "auth"
+            ],
+            "properties": {
+              "p256dh": {
+                "type": "string"
+              },
+              "auth": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "description": "A browser PushSubscription. May also be sent wrapped as {\"subscription\": {...}}."
+      }
+    }
+  }
+}

@@ -1,1 +1,1619 @@
 #!/usr/bin/env python3
+"""finalechat — message the human from your agent, and get answers back.
+
+Single-file command-line client for Finalechat (https://www.finalechat.com).
+Python 3.9+, standard library only. It is also the Claude Code hook handler
+(`finalechat hook claude-code`) and an MCP server (`finalechat mcp`).
+
+    finalechat login                      # paste an API token from Settings → Agents
+    finalechat say "Deployed v2 to staging"
+    finalechat ask "Ship to prod?" -o Yes -o No
+    finalechat wait                       # block until the human replies
+    finalechat install claude-code        # mirror Claude Code sessions to your phone
+"""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import hashlib
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+VERSION = "0.1.0"
+DEFAULT_BASE_URL = "https://www.finalechat.com"
+USER_AGENT = f"finalechat-cli/{VERSION}"
+
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")).expanduser() / "finalechat"
+CONFIG_PATH = CONFIG_DIR / "config.json"
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", "~/.cache")).expanduser() / "finalechat"
+HOOK_LOG = CACHE_DIR / "hooks.log"
+CLAUDE_CACHE = CACHE_DIR / "claude-code"
+BY_CWD_DIR = CLAUDE_CACHE / "by-cwd"
+SESSIONS_DIR = CLAUDE_CACHE / "sessions"
+
+HOOK_MARKER = "finalechat hook claude-code"
+BY_CWD_MAX_AGE = 24 * 3600
+
+# Exit codes shared by every waiting command.
+EXIT_OK = 0
+EXIT_USAGE = 1
+EXIT_API = 2
+EXIT_TIMEOUT = 3
+EXIT_RESOLVED = 4  # question cancelled or expired
+
+# The API caps one long-poll at 600 seconds; we chain them.
+POLL_CHUNK = 600
+
+
+# --------------------------------------------------------------------------- #
+# Errors
+# --------------------------------------------------------------------------- #
+
+
+class CLIError(Exception):
+    """A user-facing failure with an exit code."""
+
+    exit_code = EXIT_USAGE
+
+    def __init__(self, message: str, exit_code: int | None = None):
+        super().__init__(message)
+        if exit_code is not None:
+            self.exit_code = exit_code
+
+
+class APIError(CLIError):
+    """The server answered with an error envelope."""
+
+    exit_code = EXIT_API
+
+    def __init__(self, status: int, code: str, message: str):
+        super().__init__(message)
+        self.status = status
+        self.code = code
+
+
+class NotSignedIn(CLIError):
+    def __init__(self):
+        super().__init__("Not signed in. Run `finalechat login` or set FINALECHAT_TOKEN.")
+
+
+# --------------------------------------------------------------------------- #
+# Config
+# --------------------------------------------------------------------------- #
+
+
+def load_config() -> dict:
+    try:
+        with CONFIG_PATH.open() as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_config(data: dict) -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(CONFIG_DIR, 0o700)
+    except OSError:
+        pass
+    tmp = CONFIG_PATH.with_suffix(".json.tmp")
+    with tmp.open("w") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.chmod(tmp, 0o600)
+    tmp.replace(CONFIG_PATH)
+
+
+def resolve_base_url(explicit: str | None = None) -> str:
+    url = explicit or os.environ.get("FINALECHAT_URL") or load_config().get("base_url") or DEFAULT_BASE_URL
+    return str(url).rstrip("/")
+
+
+def resolve_token(explicit: str | None = None) -> str | None:
+    token = explicit or os.environ.get("FINALECHAT_TOKEN") or load_config().get("token")
+    token = (token or "").strip()
+    return token or None
+
+
+# --------------------------------------------------------------------------- #
+# HTTP client
+# --------------------------------------------------------------------------- #
+
+
+class Client:
+    def __init__(self, base_url: str, token: str | None):
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+
+    # -- transport ---------------------------------------------------------
+
+    def request(self, method: str, path: str, body: dict | None = None, params: dict | None = None,
+                timeout: float = 15.0) -> dict:
+        if not self.token:
+            raise NotSignedIn()
+        url = self.base_url + path
+        if params:
+            clean = {k: v for k, v in params.items() if v is not None and v != ""}
+            if clean:
+                url += "?" + urllib.parse.urlencode(clean)
+        data = None
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        }
+        if body is not None:
+            data = json.dumps(body).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read()
+        except urllib.error.HTTPError as err:
+            raw = err.read()
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+                info = payload.get("error") or {}
+                raise APIError(err.code, str(info.get("code") or "http_error"),
+                               str(info.get("message") or f"HTTP {err.code}")) from None
+            except ValueError:
+                raise APIError(err.code, "http_error", f"HTTP {err.code} from {url}") from None
+        except urllib.error.URLError as err:
+            raise CLIError(f"Could not reach {self.base_url}: {err.reason}", EXIT_API) from None
+        except socket.timeout:
+            raise CLIError(f"Timed out talking to {self.base_url}", EXIT_API) from None
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except ValueError:
+            raise CLIError(f"Unexpected non-JSON response from {url}", EXIT_API) from None
+
+    # -- helpers -----------------------------------------------------------
+
+    @staticmethod
+    def ref_path(ref: str) -> str:
+        return urllib.parse.quote(ref, safe="")
+
+    def me(self, timeout: float = 15.0) -> dict:
+        return self.request("GET", "/api/v1/me", timeout=timeout)
+
+    def remote_mode(self) -> bool:
+        try:
+            me = self.me(timeout=10)
+            return bool(((me.get("user") or {}).get("settings") or {}).get("remote_mode"))
+        except CLIError:
+            return False
+
+    def update_settings(self, **fields) -> dict:
+        return self.request("PATCH", "/api/v1/settings", body=fields).get("settings", {})
+
+    def create_thread(self, external_id: str | None = None, title: str = "", agent: str = "",
+                      meta: dict | None = None) -> dict:
+        body: dict = {}
+        if external_id:
+            body["external_id"] = external_id
+        if title:
+            body["title"] = title
+        if agent:
+            body["agent"] = agent
+        if meta:
+            body["meta"] = meta
+        return self.request("POST", "/api/v1/threads", body=body)
+
+    def get_thread(self, ref: str) -> dict:
+        return self.request("GET", f"/api/v1/threads/{self.ref_path(ref)}").get("thread", {})
+
+    def list_threads(self, archived: bool = False, limit: int = 50, query: str | None = None) -> list:
+        params = {"limit": limit, "q": query}
+        if archived:
+            params["archived"] = "true"
+        return self.request("GET", "/api/v1/threads", params=params).get("threads", [])
+
+    def post_message(self, ref: str, body: str, *, sender: str | None = None, important: bool = False,
+                     notify: bool | None = None, fmt: str = "markdown", meta: dict | None = None,
+                     title: str = "", agent: str = "") -> dict:
+        payload: dict = {"body": body, "format": fmt, "importance": "important" if important else "normal"}
+        if sender:
+            payload["sender"] = sender
+        if notify is not None:
+            payload["notify"] = notify
+        if meta:
+            payload["meta"] = meta
+        if title:
+            payload["title"] = title
+        if agent:
+            payload["agent"] = agent
+        return self.request("POST", f"/api/v1/threads/{self.ref_path(ref)}/messages", body=payload)
+
+    def list_messages(self, ref: str, *, after: str | None = None, before: str | None = None,
+                      limit: int | None = None, wait: int | None = None, sender: str | None = None) -> dict:
+        params = {"after": after, "before": before, "limit": limit, "sender": sender}
+        timeout = 15.0
+        if wait:
+            params["wait"] = wait
+            timeout = wait + 30
+        return self.request("GET", f"/api/v1/threads/{self.ref_path(ref)}/messages", params=params, timeout=timeout)
+
+    def ask(self, ref: str, prompt: str, options: list, *, multi: bool = False, freeform: bool = True,
+            timeout_seconds: int | None = None, meta: dict | None = None, title: str = "", agent: str = "") -> dict:
+        payload: dict = {"prompt": prompt, "options": options, "allow_freeform": freeform, "multi_select": multi}
+        if timeout_seconds:
+            payload["timeout_seconds"] = timeout_seconds
+        if meta:
+            payload["meta"] = meta
+        if title:
+            payload["title"] = title
+        if agent:
+            payload["agent"] = agent
+        return self.request("POST", f"/api/v1/threads/{self.ref_path(ref)}/questions", body=payload)
+
+    def get_question(self, qid: str, wait: int | None = None) -> dict:
+        params = {"wait": wait} if wait else None
+        timeout = (wait + 30) if wait else 15.0
+        return self.request("GET", f"/api/v1/questions/{qid}", params=params, timeout=timeout).get("question", {})
+
+    def cancel_question(self, qid: str) -> dict:
+        return self.request("POST", f"/api/v1/questions/{qid}/cancel", body={}).get("question", {})
+
+
+# --------------------------------------------------------------------------- #
+# Waiting primitives
+# --------------------------------------------------------------------------- #
+
+
+def wait_for_answer(client: Client, qid: str, total: int, keep_going=None) -> dict:
+    """Poll a question until it leaves the pending state or `total` seconds pass.
+
+    `keep_going` is an optional callable checked between polls; returning False
+    stops early (used by hooks when remote mode is switched off).
+    """
+    deadline = time.monotonic() + max(0, total)
+    question = client.get_question(qid)
+    while question.get("status") == "pending":
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            break
+        if keep_going is not None and not keep_going():
+            break
+        question = client.get_question(qid, wait=min(POLL_CHUNK, max(1, remaining)))
+    return question
+
+
+def latest_message_id(client: Client, ref: str) -> str | None:
+    msgs = client.list_messages(ref, limit=1).get("messages") or []
+    return msgs[-1]["id"] if msgs else None
+
+
+def wait_for_reply(client: Client, ref: str, after: str | None, total: int, keep_going=None) -> dict | None:
+    """Block until the next user message after `after` arrives, or time out."""
+    deadline = time.monotonic() + max(0, total)
+    while True:
+        remaining = int(deadline - time.monotonic())
+        if remaining <= 0:
+            return None
+        if keep_going is not None and not keep_going():
+            return None
+        # Shorter chunks while a hook is waiting so a remote-mode switch is noticed quickly.
+        chunk = 30 if keep_going is not None else 60
+        # Without an anchor the server waits for anything created from now on.
+        resp = client.list_messages(ref, after=after, sender="user", wait=min(chunk, remaining))
+        msgs = resp.get("messages") or []
+        if msgs:
+            return msgs[0]
+
+
+def format_answer(question: dict) -> str:
+    answer = question.get("answer") or {}
+    lines = []
+    selected = answer.get("selected") or []
+    if selected:
+        lines.append(", ".join(selected))
+    text = (answer.get("text") or "").strip()
+    if text:
+        lines.append(text)
+    return "\n".join(lines)
+
+
+def answer_summary(question: dict) -> str:
+    """One-line rendering used in hook and MCP replies."""
+    answer = question.get("answer") or {}
+    selected = answer.get("selected") or []
+    text = (answer.get("text") or "").strip()
+    parts = []
+    if selected:
+        parts.append(", ".join(selected))
+    if text:
+        parts.append(text)
+    return " — ".join(parts) if parts else "(no answer)"
+
+
+# --------------------------------------------------------------------------- #
+# Thread resolution
+# --------------------------------------------------------------------------- #
+
+
+def hostname() -> str:
+    try:
+        return socket.gethostname().split(".")[0] or "host"
+    except OSError:
+        return "host"
+
+
+def cwd_key(path: str) -> str:
+    return hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()
+
+
+def read_by_cwd_pointer(path: str | None = None) -> dict | None:
+    """The thread the current Claude Code session in this directory is using."""
+    target = BY_CWD_DIR / f"{cwd_key(path or os.getcwd())}.json"
+    try:
+        with target.open() as fh:
+            data = json.load(fh)
+        updated = float(data.get("updated_at", 0))
+        if time.time() - updated > BY_CWD_MAX_AGE:
+            return None
+        if not data.get("external_id"):
+            return None
+        return data
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def clear_by_cwd_pointer(cwd: str, session_id: str) -> None:
+    """Drop the pointer when the session that owns it ends."""
+    target = BY_CWD_DIR / f"{cwd_key(cwd)}.json"
+    try:
+        with target.open() as fh:
+            data = json.load(fh)
+        if data.get("session_id") == session_id:
+            target.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def write_by_cwd_pointer(cwd: str, external_id: str, session_id: str) -> None:
+    BY_CWD_DIR.mkdir(parents=True, exist_ok=True)
+    target = BY_CWD_DIR / f"{cwd_key(cwd)}.json"
+    payload = {"external_id": external_id, "session_id": session_id, "cwd": os.path.abspath(cwd),
+               "updated_at": time.time()}
+    tmp = target.with_suffix(".tmp")
+    with tmp.open("w") as fh:
+        json.dump(payload, fh)
+    tmp.replace(target)
+
+
+class ThreadTarget:
+    """A thread reference plus the naming to use if it has to be created."""
+
+    def __init__(self, ref: str, title: str = "", agent: str = ""):
+        self.ref = ref
+        self.title = title
+        self.agent = agent
+
+    def __str__(self) -> str:
+        return self.ref
+
+
+def default_agent(fallback: str = "Terminal") -> str:
+    return os.environ.get("FINALECHAT_AGENT") or fallback
+
+
+def resolve_target(explicit: str | None = None, title: str | None = None, agent: str | None = None,
+                   fallback_agent: str = "Terminal", fallback_prefix: str = "cli") -> ThreadTarget:
+    cwd = os.getcwd()
+    if explicit:
+        return ThreadTarget(explicit, title or "", agent or "")
+    env = os.environ.get("FINALECHAT_THREAD")
+    if env:
+        return ThreadTarget(env, title or "", agent or "")
+    pointer = read_by_cwd_pointer(cwd)
+    if pointer:
+        return ThreadTarget("ext:" + pointer["external_id"], title or "", agent or "")
+    ext = f"ext:{fallback_prefix}:{hostname()}:{os.path.abspath(cwd)}"
+    return ThreadTarget(ext, title or os.path.basename(os.path.abspath(cwd)) or "Terminal",
+                        agent or default_agent(fallback_agent))
+
+
+# --------------------------------------------------------------------------- #
+# Output helpers
+# --------------------------------------------------------------------------- #
+
+
+def print_json(obj) -> None:
+    json.dump(obj, sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
+
+
+def parse_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        # Python's fromisoformat handles at most six fractional digits.
+        if "." in value:
+            head, tail = value.split(".", 1)
+            frac = ""
+            rest = ""
+            for i, ch in enumerate(tail):
+                if ch.isdigit():
+                    frac += ch
+                else:
+                    rest = tail[i:]
+                    break
+            value = f"{head}.{frac[:6].ljust(6, '0')}{rest}"
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def relative_time(value: str | None) -> str:
+    when = parse_time(value)
+    if when is None:
+        return ""
+    now = datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    seconds = int((now - when).total_seconds())
+    if seconds < 0:
+        seconds = 0
+    if seconds < 60:
+        return "just now"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    if days < 30:
+        return f"{days}d ago"
+    return when.astimezone().strftime("%Y-%m-%d")
+
+
+def local_clock(value: str | None) -> str:
+    when = parse_time(value)
+    if when is None:
+        return "--:--"
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return when.astimezone().strftime("%H:%M")
+
+
+def truncate(text: str, width: int) -> str:
+    text = " ".join(text.split())
+    if len(text) <= width:
+        return text
+    return text[: max(0, width - 1)].rstrip() + "…"
+
+
+def read_stdin_text() -> str:
+    data = sys.stdin.read()
+    return data.rstrip("\n")
+
+
+# --------------------------------------------------------------------------- #
+# Commands
+# --------------------------------------------------------------------------- #
+
+
+def client_from_args(args) -> Client:
+    return Client(resolve_base_url(getattr(args, "url", None)), resolve_token(getattr(args, "token", None)))
+
+
+def cmd_login(args) -> int:
+    base_url = resolve_base_url(args.url)
+    token = args.token_arg or os.environ.get("FINALECHAT_TOKEN")
+    if not token:
+        if not sys.stdin.isatty():
+            token = read_stdin_text().strip()
+        else:
+            print(f"Create a token in Settings → Agents at {base_url}/settings", file=sys.stderr)
+            token = getpass.getpass("API token (fc_…): ").strip()
+    if not token:
+        raise CLIError("No token given.")
+    if not token.startswith("fc_"):
+        raise CLIError("That does not look like a Finalechat token; they start with fc_.")
+    client = Client(base_url, token)
+    me = client.me()
+    config = load_config()
+    config.update({"token": token, "base_url": base_url})
+    save_config(config)
+    email = (me.get("user") or {}).get("email", "?")
+    print(f"Signed in as {email} at {base_url}")
+    return EXIT_OK
+
+
+def cmd_logout(args) -> int:
+    try:
+        CONFIG_PATH.unlink()
+        print("Signed out; token removed from", CONFIG_PATH)
+    except FileNotFoundError:
+        print("Not signed in.")
+    return EXIT_OK
+
+
+def cmd_whoami(args) -> int:
+    client = client_from_args(args)
+    me = client.me()
+    if args.json:
+        print_json(me)
+        return EXIT_OK
+    user = me.get("user") or {}
+    counts = me.get("counts") or {}
+    settings = user.get("settings") or {}
+    print(f"{user.get('email', '?')}  ({user.get('display_name') or 'no display name'})")
+    print(f"server      {client.base_url}  v{me.get('version', '?')}")
+    token = me.get("token") or {}
+    if token:
+        print(f"token       {token.get('name', '?')} ({token.get('prefix', '')}…)")
+    print(f"remote mode {'on' if settings.get('remote_mode') else 'off'}")
+    print(f"inbox       {counts.get('pending_questions', 0)} pending question(s), "
+          f"{counts.get('unread_threads', 0)} unread thread(s)")
+    return EXIT_OK
+
+
+def cmd_threads(args) -> int:
+    client = client_from_args(args)
+    threads = client.list_threads(archived=args.archived, limit=args.limit)
+    if args.json:
+        print_json({"threads": threads})
+        return EXIT_OK
+    if not threads:
+        print("No archived threads." if args.archived else "No threads yet.")
+        return EXIT_OK
+    width = shutil.get_terminal_size((100, 20)).columns
+    for t in threads:
+        flags = ("?" if t.get("pending_questions") else " ") + ("•" if t.get("unread_count") else " ")
+        title = t.get("title") or "(untitled)"
+        agent = t.get("agent") or ""
+        when = relative_time(t.get("last_activity_at"))
+        head = f"{flags} {title}"
+        if agent:
+            head += f"  [{agent}]"
+        head += f"  {when}"
+        print(head)
+        preview = t.get("preview") or ""
+        if preview:
+            print("     " + truncate(preview, max(20, width - 6)))
+        print(f"     id {t.get('id')}" + (f"  ext {t.get('external_id')}" if t.get("external_id") else ""))
+    return EXIT_OK
+
+
+def cmd_read(args) -> int:
+    client = client_from_args(args)
+    target = resolve_target(args.ref or args.thread)
+    resp = client.list_messages(target.ref, limit=args.limit)
+    messages = resp.get("messages") or []
+    if args.json:
+        print_json(resp)
+        return EXIT_OK
+    if not messages:
+        print("(no messages)")
+        return EXIT_OK
+    for m in messages:
+        stamp = local_clock(m.get("created_at"))
+        sender = m.get("sender", "?")
+        body = (m.get("body") or "").rstrip()
+        lines = body.split("\n") or [""]
+        prefix = f"{stamp} {sender:>6} › "
+        print(prefix + lines[0])
+        pad = " " * len(prefix)
+        for line in lines[1:]:
+            print(pad + line)
+    return EXIT_OK
+
+
+def cmd_say(args) -> int:
+    client = client_from_args(args)
+    if args.message and args.message != ["-"]:
+        body = " ".join(args.message)
+    else:
+        body = read_stdin_text()
+    if not body.strip():
+        raise CLIError("Nothing to send. Pass the message as arguments or on stdin.")
+    target = resolve_target(args.thread, args.title, args.agent)
+    notify = None
+    if args.notify is True:
+        notify = True
+    elif args.notify is False:
+        notify = False
+    resp = client.post_message(target.ref, body, important=args.important, notify=notify,
+                               fmt="text" if args.text else "markdown", title=target.title, agent=target.agent)
+    if args.json:
+        print_json(resp)
+        return EXIT_OK
+    thread = resp.get("thread") or {}
+    message = resp.get("message") or {}
+    print(f"sent · thread {thread.get('id')} · message {message.get('id')}")
+    return EXIT_OK
+
+
+def parse_options(raw: list[str] | None) -> list[dict]:
+    options = []
+    for item in raw or []:
+        if "::" in item:
+            label, description = item.split("::", 1)
+        else:
+            label, description = item, ""
+        label = label.strip()
+        if not label:
+            raise CLIError("Option labels cannot be empty.")
+        option = {"label": label}
+        if description.strip():
+            option["description"] = description.strip()
+        options.append(option)
+    return options
+
+
+def finish_question(question: dict, as_json: bool) -> int:
+    status = question.get("status")
+    if as_json:
+        print_json(question)
+    if status == "answered":
+        if not as_json:
+            print(format_answer(question))
+        return EXIT_OK
+    if status == "pending":
+        print(f"No answer yet. Question {question.get('id')} is still pending; "
+              f"resume with `finalechat wait-answer {question.get('id')}`", file=sys.stderr)
+        return EXIT_TIMEOUT
+    print(f"Question {question.get('id')} was {status}.", file=sys.stderr)
+    return EXIT_RESOLVED
+
+
+def cmd_ask(args) -> int:
+    client = client_from_args(args)
+    prompt = args.prompt
+    if prompt == "-":
+        prompt = read_stdin_text()
+    if not prompt.strip():
+        raise CLIError("The prompt is empty.")
+    options = parse_options(args.option)
+    if not options and args.no_freeform:
+        raise CLIError("A question without options must allow free-form answers.")
+    target = resolve_target(args.thread, args.title, args.agent)
+    resp = client.ask(target.ref, prompt, options, multi=args.multi, freeform=not args.no_freeform,
+                      timeout_seconds=args.timeout, title=target.title, agent=target.agent)
+    question = resp.get("question") or {}
+    if not question.get("id"):
+        raise CLIError("The server did not return a question.", EXIT_API)
+    if args.wait > 0:
+        print(f"asked · question {question['id']} · waiting up to {args.wait}s", file=sys.stderr)
+        question = wait_for_answer(client, question["id"], args.wait)
+    return finish_question(question, args.json)
+
+
+def cmd_wait_answer(args) -> int:
+    client = client_from_args(args)
+    question = wait_for_answer(client, args.question_id, args.wait)
+    return finish_question(question, args.json)
+
+
+def cmd_wait(args) -> int:
+    client = client_from_args(args)
+    target = resolve_target(args.thread)
+    after = args.after
+    if after is None:
+        after = latest_message_id(client, target.ref)
+    message = wait_for_reply(client, target.ref, after, args.timeout)
+    if message is None:
+        print("No reply within the timeout.", file=sys.stderr)
+        return EXIT_TIMEOUT
+    if args.json:
+        print_json(message)
+    else:
+        print(message.get("body", ""))
+    return EXIT_OK
+
+
+def cmd_remote(args) -> int:
+    client = client_from_args(args)
+    action = args.action or "status"
+    if action == "status":
+        state = client.remote_mode()
+    else:
+        settings = client.update_settings(remote_mode=(action == "on"))
+        state = bool(settings.get("remote_mode"))
+    print(f"remote mode {'on' if state else 'off'}")
+    if action == "status" and not state:
+        print("  Claude Code hooks post to your phone but do not wait for replies.", file=sys.stderr)
+    elif state:
+        print("  Claude Code sessions will block for replies and answers from the app.", file=sys.stderr)
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# Claude Code installation
+# --------------------------------------------------------------------------- #
+
+
+def cli_path() -> str:
+    """Absolute path of this executable, for hook commands."""
+    invoked = os.path.realpath(os.path.abspath(sys.argv[0]))
+    if os.path.isfile(invoked) and os.access(invoked, os.X_OK):
+        return invoked
+    candidate = shutil.which("finalechat")
+    if candidate:
+        return os.path.realpath(candidate)
+    return invoked
+
+
+def hook_spec(command: str) -> dict:
+    """The hook entries Finalechat installs, keyed by Claude Code event."""
+
+    def entry(timeout: int, matcher: str | None = None) -> dict:
+        item = {"hooks": [{"type": "command", "command": command, "timeout": timeout}]}
+        if matcher is not None:
+            item["matcher"] = matcher
+        return item
+
+    return {
+        "SessionStart": entry(30),
+        "UserPromptSubmit": entry(30),
+        "Stop": entry(1800),
+        "Notification": entry(30),
+        "PreToolUse": entry(1800, matcher="AskUserQuestion"),
+        "SessionEnd": entry(30),
+    }
+
+
+def is_our_entry(entry: dict) -> bool:
+    for hook in entry.get("hooks") or []:
+        if isinstance(hook, dict) and HOOK_MARKER in str(hook.get("command", "")):
+            return True
+    return False
+
+
+def load_settings(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    with path.open() as fh:
+        text = fh.read()
+    if not text.strip():
+        return {}
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise CLIError(f"{path} does not contain a JSON object.")
+    return data
+
+
+def write_settings(path: Path, data: dict) -> Path | None:
+    backup = None
+    if path.exists():
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = path.with_name(f"{path.name}.finalechat-backup-{stamp}")
+        shutil.copy2(path, backup)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    tmp.replace(path)
+    return backup
+
+
+def cmd_install(args) -> int:
+    if args.target != "claude-code":
+        raise CLIError("Only `claude-code` is supported right now.")
+    settings_path = Path(args.settings).expanduser()
+    command = f"{cli_path()} hook claude-code"
+    data = load_settings(settings_path)
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+    for event, entry in hook_spec(command).items():
+        existing = hooks.get(event)
+        if not isinstance(existing, list):
+            existing = []
+        kept = [e for e in existing if not (isinstance(e, dict) and is_our_entry(e))]
+        kept.append(entry)
+        hooks[event] = kept
+    data["hooks"] = hooks
+    backup = write_settings(settings_path, data)
+    print(f"Installed Finalechat hooks into {settings_path}")
+    if backup:
+        print(f"  previous settings backed up to {backup.name}")
+    print("  events: SessionStart, UserPromptSubmit, Stop, Notification, PreToolUse(AskUserQuestion), SessionEnd")
+    if not args.no_mcp:
+        install_mcp(command.replace(" hook claude-code", ""))
+    print()
+    print("Every Claude Code session now posts to your phone. Turn on remote mode")
+    print("(`finalechat remote on`, or the switch in the app) before you walk away so")
+    print("sessions wait for your replies and answers instead of the terminal.")
+    print("Restart running Claude Code sessions to pick up the hooks.")
+    return EXIT_OK
+
+
+def install_mcp(cli: str) -> None:
+    claude = shutil.which("claude")
+    if not claude:
+        print("  MCP: `claude` not found on PATH; register manually with")
+        print(f"       claude mcp add --scope user finalechat -- {cli} mcp")
+        return
+    try:
+        check = subprocess.run([claude, "mcp", "get", "finalechat"], capture_output=True, text=True, timeout=30)
+        if check.returncode == 0:
+            subprocess.run([claude, "mcp", "remove", "--scope", "user", "finalechat"],
+                           capture_output=True, text=True, timeout=30)
+        result = subprocess.run([claude, "mcp", "add", "--scope", "user", "finalechat", "--", cli, "mcp"],
+                                capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            print("  MCP: registered the `finalechat` server (user scope)")
+        else:
+            print("  MCP: registration failed; register manually with")
+            print(f"       claude mcp add --scope user finalechat -- {cli} mcp")
+            if result.stderr.strip():
+                print("       " + result.stderr.strip().splitlines()[-1])
+    except (OSError, subprocess.SubprocessError) as err:
+        print(f"  MCP: could not run claude ({err}); register manually with")
+        print(f"       claude mcp add --scope user finalechat -- {cli} mcp")
+
+
+def cmd_uninstall(args) -> int:
+    if args.target != "claude-code":
+        raise CLIError("Only `claude-code` is supported right now.")
+    settings_path = Path(args.settings).expanduser()
+    data = load_settings(settings_path)
+    hooks = data.get("hooks")
+    removed = 0
+    if isinstance(hooks, dict):
+        for event in list(hooks.keys()):
+            entries = hooks.get(event)
+            if not isinstance(entries, list):
+                continue
+            kept = [e for e in entries if not (isinstance(e, dict) and is_our_entry(e))]
+            removed += len(entries) - len(kept)
+            if kept:
+                hooks[event] = kept
+            else:
+                del hooks[event]
+        if not hooks:
+            data.pop("hooks", None)
+    if removed:
+        write_settings(settings_path, data)
+    print(f"Removed {removed} Finalechat hook entr{'y' if removed == 1 else 'ies'} from {settings_path}")
+    if not args.no_mcp:
+        claude = shutil.which("claude")
+        if claude:
+            subprocess.run([claude, "mcp", "remove", "--scope", "user", "finalechat"],
+                           capture_output=True, text=True, timeout=30)
+            print("  MCP: removed the `finalechat` server if it was registered")
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# Claude Code hook handler
+# --------------------------------------------------------------------------- #
+
+
+def hook_log(message: str) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with HOOK_LOG.open("a") as fh:
+            fh.write(f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
+    except OSError:
+        pass
+
+
+def session_state_path(session_id: str) -> Path:
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in session_id) or "unknown"
+    return SESSIONS_DIR / f"{safe}.json"
+
+
+def load_session_state(session_id: str) -> dict:
+    try:
+        with session_state_path(session_id).open() as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_session_state(session_id: str, state: dict) -> None:
+    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    path = session_state_path(session_id)
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w") as fh:
+        json.dump(state, fh)
+    tmp.replace(path)
+
+
+def last_assistant_text(transcript_path: str) -> tuple[str | None, str]:
+    """Return (uuid, text) of the last assistant entry that contains text."""
+    found_uuid, found_text = None, ""
+    try:
+        with open(transcript_path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(entry, dict) or entry.get("type") != "assistant":
+                    continue
+                if entry.get("isSidechain"):
+                    continue
+                message = entry.get("message") or {}
+                content = message.get("content")
+                texts = []
+                if isinstance(content, str):
+                    texts.append(content)
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text = block.get("text")
+                            if isinstance(text, str) and text.strip():
+                                texts.append(text)
+                if texts:
+                    found_uuid = entry.get("uuid") or found_uuid
+                    found_text = "\n\n".join(t.strip() for t in texts)
+    except OSError as err:
+        hook_log(f"transcript unreadable: {err}")
+    return found_uuid, found_text
+
+
+def env_seconds(name: str, default: int) -> int:
+    try:
+        return max(0, int(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
+def hook_claude_code() -> int:
+    try:
+        raw = sys.stdin.read()
+        payload = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        hook_log("hook input was not JSON")
+        return EXIT_OK
+    if not isinstance(payload, dict):
+        return EXIT_OK
+    event = str(payload.get("hook_event_name") or "")
+    token = resolve_token()
+    if not token:
+        return EXIT_OK
+    client = Client(resolve_base_url(), token)
+    session_id = str(payload.get("session_id") or "unknown")
+    cwd = str(payload.get("cwd") or os.getcwd())
+    external_id = f"claude-code:{session_id}"
+    ref = "ext:" + external_id
+    title = os.path.basename(os.path.abspath(cwd)) or "Claude Code"
+    agent = "Claude Code"
+    try:
+        if event == "SessionEnd":
+            clear_by_cwd_pointer(cwd, session_id)
+        else:
+            write_by_cwd_pointer(cwd, external_id, session_id)
+    except OSError as err:
+        hook_log(f"pointer write failed: {err}")
+
+    if event == "SessionStart":
+        meta = {"cwd": cwd, "hostname": hostname(), "source": payload.get("source") or ""}
+        client.create_thread(external_id, title=title, agent=agent, meta=meta)
+        return EXIT_OK
+
+    if event == "UserPromptSubmit":
+        prompt = str(payload.get("prompt") or "").strip()
+        if not prompt or prompt.startswith("/"):
+            return EXIT_OK
+        client.post_message(ref, prompt, sender="user", meta={"via": "claude-code"}, title=title, agent=agent)
+        return EXIT_OK
+
+    if event == "Stop":
+        return hook_stop(client, payload, session_id, ref, title, agent)
+
+    if event == "Notification":
+        kind = str(payload.get("notification_type") or "")
+        if kind == "auth_success":
+            return EXIT_OK
+        message = str(payload.get("message") or payload.get("title") or "Claude Code is waiting for you.").strip()
+        body = f"**Claude Code needs you** — {message}"
+        meta = {"kind": "notification", "notification_type": kind}
+        client.post_message(ref, body, important=True, notify=True, meta=meta, title=title, agent=agent)
+        return EXIT_OK
+
+    if event == "PreToolUse":
+        if payload.get("tool_name") != "AskUserQuestion":
+            return EXIT_OK
+        return hook_ask_user_question(client, payload, ref, title, agent)
+
+    if event == "SessionEnd":
+        reason = str(payload.get("reason") or "").strip()
+        body = "Session ended" + (f" ({reason})" if reason else "")
+        client.post_message(ref, body, sender="system", fmt="text", meta={"kind": "session_end"},
+                            title=title, agent=agent)
+        return EXIT_OK
+
+    return EXIT_OK
+
+
+def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: str, agent: str) -> int:
+    transcript = str(payload.get("transcript_path") or "")
+    if not transcript:
+        return EXIT_OK
+    uuid, text = last_assistant_text(transcript)
+    if not text:
+        return EXIT_OK
+    state = load_session_state(session_id)
+    if uuid and state.get("last_posted_uuid") == uuid:
+        return EXIT_OK
+    resp = client.post_message(ref, text, meta={"via": "claude-code", "transcript_uuid": uuid or ""},
+                               title=title, agent=agent)
+    message = resp.get("message") or {}
+    thread = resp.get("thread") or {}
+    state.update({"last_posted_uuid": uuid, "thread_id": thread.get("id"), "last_message_id": message.get("id")})
+    save_session_state(session_id, state)
+
+    if not client.remote_mode():
+        return EXIT_OK
+    total = env_seconds("FINALECHAT_REPLY_WAIT", 1500)
+    if total <= 0:
+        return EXIT_OK
+    reply = wait_for_reply(client, ref, message.get("id"), total, keep_going=client.remote_mode)
+    if reply is None:
+        return EXIT_OK
+    body = str(reply.get("body") or "").strip()
+    if not body:
+        return EXIT_OK
+    state["last_reply_id"] = reply.get("id")
+    save_session_state(session_id, state)
+    output = {"decision": "block", "reason": f"The user replied from their phone via Finalechat: {body}"}
+    sys.stdout.write(json.dumps(output) + "\n")
+    sys.stdout.flush()
+    return EXIT_OK
+
+
+def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, agent: str) -> int:
+    tool_input = payload.get("tool_input") or {}
+    questions = tool_input.get("questions") if isinstance(tool_input, dict) else None
+    if not isinstance(questions, list) or not questions:
+        return EXIT_OK
+    items = []
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        text = str(q.get("question") or "").strip()
+        if not text:
+            continue
+        header = str(q.get("header") or "").strip()
+        options = []
+        for opt in q.get("options") or []:
+            if not isinstance(opt, dict):
+                continue
+            label = str(opt.get("label") or "").strip()
+            if not label:
+                continue
+            option = {"label": label}
+            desc = str(opt.get("description") or "").strip()
+            if desc:
+                option["description"] = desc
+            options.append(option)
+        items.append({"header": header, "question": text, "options": options,
+                      "multi": bool(q.get("multiSelect"))})
+    if not items:
+        return EXIT_OK
+
+    if not client.remote_mode():
+        for item in items:
+            lines = [f"**Claude Code is asking in the terminal:** {item['question']}"]
+            for opt in item["options"]:
+                line = f"- {opt['label']}"
+                if opt.get("description"):
+                    line += f" — {opt['description']}"
+                lines.append(line)
+            client.post_message(ref, "\n".join(lines), important=True, notify=True,
+                                meta={"kind": "terminal_question", "header": item["header"]},
+                                title=title, agent=agent)
+        return EXIT_OK
+
+    total = env_seconds("FINALECHAT_ASK_WAIT", 1500)
+    created = []
+    for item in items:
+        prompt = f"{item['header']}: {item['question']}" if item["header"] else item["question"]
+        resp = client.ask(ref, prompt, item["options"], multi=item["multi"], freeform=True,
+                          timeout_seconds=total if total > 0 else None,
+                          meta={"kind": "ask_user_question", "header": item["header"]},
+                          title=title, agent=agent)
+        question = resp.get("question") or {}
+        if question.get("id"):
+            created.append((item, question))
+    if not created:
+        return EXIT_OK
+
+    deadline = time.monotonic() + total
+    answers = []
+    all_answered = True
+    for item, question in created:
+        remaining = int(deadline - time.monotonic())
+        latest = wait_for_answer(client, question["id"], max(0, remaining), keep_going=client.remote_mode)
+        if latest.get("status") != "answered":
+            all_answered = False
+            break
+        answers.append((item, latest))
+
+    if not all_answered:
+        for _, question in created:
+            try:
+                client.cancel_question(question["id"])
+            except CLIError:
+                pass
+        return EXIT_OK
+
+    parts = []
+    for item, question in answers:
+        label = item["header"] or item["question"]
+        parts.append(f"{label}: {answer_summary(question)}")
+    reason = ("The user answered from their phone via Finalechat instead of the terminal. Answers: "
+              + "; ".join(parts) + ". Use these answers and do not ask again.")
+    output = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                     "permissionDecisionReason": reason}}
+    sys.stdout.write(json.dumps(output) + "\n")
+    sys.stdout.flush()
+    return EXIT_OK
+
+
+def cmd_hook(args) -> int:
+    if args.target != "claude-code":
+        return EXIT_OK
+    try:
+        return hook_claude_code()
+    except SystemExit:
+        return EXIT_OK
+    except BaseException:  # noqa: BLE001 - a hook must never break the session
+        hook_log("hook failed:\n" + traceback.format_exc())
+        return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# MCP server
+# --------------------------------------------------------------------------- #
+
+SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
+
+MCP_INSTRUCTIONS = (
+    "Finalechat delivers messages to the human's phone and lets you ask them "
+    "questions while they are away from the terminal. Use finalechat_send for "
+    "progress and results worth reading on a phone, finalechat_ask when you need "
+    "a decision (it blocks until they answer), and finalechat_wait_for_reply to "
+    "wait for their next message."
+)
+
+
+def mcp_tools() -> list[dict]:
+    thread_prop = {
+        "type": "string",
+        "description": "Thread id (UUID) or `ext:<external id>`. Omit to use the current session's thread.",
+    }
+    return [
+        {
+            "name": "finalechat_send",
+            "description": (
+                "Send a message to the human's phone via Finalechat. Use it for anything you would "
+                "say to the user in the terminal that they should also see on the go: status, "
+                "results, findings, blockers. Markdown is rendered. Set important=true only for "
+                "things worth a push notification (a completed deploy, a found bug, needing a decision)."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string", "description": "Markdown message body."},
+                    "important": {"type": "boolean", "description": "Push a notification to the phone.",
+                                  "default": False},
+                    "thread": thread_prop,
+                    "title": {"type": "string", "description": "Title to give the thread if it is created."},
+                },
+                "required": ["message"],
+            },
+        },
+        {
+            "name": "finalechat_ask",
+            "description": (
+                "Ask the human a question on their phone and wait for the answer. Prefer this over "
+                "stopping when you need a decision and the user may not be at the terminal. Offer "
+                "2–5 short options when the choice is discrete; free-form text is always allowed "
+                "unless allow_freeform is false. Blocks up to timeout_seconds (default 1800)."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "prompt": {"type": "string", "description": "The question to ask."},
+                    "options": {
+                        "type": "array",
+                        "description": "Choices to offer.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string"},
+                                "description": {"type": "string"},
+                            },
+                            "required": ["label"],
+                        },
+                    },
+                    "multi_select": {"type": "boolean", "default": False,
+                                     "description": "Allow choosing more than one option."},
+                    "allow_freeform": {"type": "boolean", "default": True,
+                                       "description": "Allow a typed answer instead of an option."},
+                    "timeout_seconds": {"type": "integer", "default": 1800, "minimum": 1, "maximum": 604800,
+                                        "description": "How long to wait for an answer."},
+                    "thread": thread_prop,
+                },
+                "required": ["prompt"],
+            },
+        },
+        {
+            "name": "finalechat_wait_for_reply",
+            "description": (
+                "Wait for the human's next message in the thread (sent from their phone). Use it after "
+                "reporting something when you want to pause until they respond."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "thread": thread_prop,
+                    "timeout_seconds": {"type": "integer", "default": 1800, "minimum": 1, "maximum": 604800},
+                },
+            },
+        },
+        {
+            "name": "finalechat_read",
+            "description": "Read the most recent messages in a Finalechat thread.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "thread": thread_prop,
+                    "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 200},
+                },
+            },
+        },
+    ]
+
+
+def mcp_target(arguments: dict) -> ThreadTarget:
+    explicit = arguments.get("thread")
+    title = arguments.get("title")
+    return resolve_target(explicit if isinstance(explicit, str) and explicit else None,
+                          title if isinstance(title, str) else None, None,
+                          fallback_agent="MCP agent", fallback_prefix="mcp")
+
+
+def mcp_call(client: Client, name: str, arguments: dict) -> str:
+    if name == "finalechat_send":
+        message = str(arguments.get("message") or "").strip()
+        if not message:
+            raise CLIError("message is required")
+        target = mcp_target(arguments)
+        resp = client.post_message(target.ref, message, important=bool(arguments.get("important")),
+                                   title=target.title, agent=target.agent)
+        thread = resp.get("thread") or {}
+        return f"Sent to thread {thread.get('id')} ({thread.get('title') or 'untitled'})"
+
+    if name == "finalechat_ask":
+        prompt = str(arguments.get("prompt") or "").strip()
+        if not prompt:
+            raise CLIError("prompt is required")
+        options = []
+        for opt in arguments.get("options") or []:
+            if isinstance(opt, dict) and str(opt.get("label") or "").strip():
+                option = {"label": str(opt["label"]).strip()}
+                if str(opt.get("description") or "").strip():
+                    option["description"] = str(opt["description"]).strip()
+                options.append(option)
+            elif isinstance(opt, str) and opt.strip():
+                options.append({"label": opt.strip()})
+        freeform = arguments.get("allow_freeform", True)
+        freeform = True if freeform is None else bool(freeform)
+        if not options:
+            freeform = True
+        timeout = int(arguments.get("timeout_seconds") or 1800)
+        target = mcp_target(arguments)
+        resp = client.ask(target.ref, prompt, options, multi=bool(arguments.get("multi_select")),
+                          freeform=freeform, timeout_seconds=timeout, title=target.title, agent=target.agent)
+        question = resp.get("question") or {}
+        question = wait_for_answer(client, question["id"], timeout)
+        status = question.get("status")
+        if status == "answered":
+            answer = question.get("answer") or {}
+            selected = ", ".join(answer.get("selected") or [])
+            text = (answer.get("text") or "").strip()
+            if selected and text:
+                return f"Answer: {selected} / {text}"
+            return f"Answer: {selected or text}"
+        if status == "pending":
+            return f"No answer within {timeout} seconds; question {question.get('id')} still pending."
+        return f"The question was {status} before it was answered."
+
+    if name == "finalechat_wait_for_reply":
+        timeout = int(arguments.get("timeout_seconds") or 1800)
+        target = mcp_target(arguments)
+        after = latest_message_id(client, target.ref)
+        reply = wait_for_reply(client, target.ref, after, timeout)
+        if reply is None:
+            return f"No reply within {timeout} seconds."
+        return f"Reply from the user: {reply.get('body', '')}"
+
+    if name == "finalechat_read":
+        limit = int(arguments.get("limit") or 20)
+        target = mcp_target(arguments)
+        msgs = client.list_messages(target.ref, limit=max(1, min(200, limit))).get("messages") or []
+        if not msgs:
+            return "(no messages yet)"
+        lines = []
+        for m in msgs:
+            stamp = (m.get("created_at") or "")[:19].replace("T", " ")
+            lines.append(f"[{stamp}] {m.get('sender')}: {m.get('body', '')}")
+        return "\n".join(lines)
+
+    raise CLIError(f"Unknown tool: {name}")
+
+
+def mcp_serve() -> int:
+    stdin = sys.stdin.buffer
+    stdout = sys.stdout.buffer
+    client = Client(resolve_base_url(), resolve_token())
+
+    def send(obj: dict) -> None:
+        stdout.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+        stdout.flush()
+
+    def reply(req_id, result) -> None:
+        send({"jsonrpc": "2.0", "id": req_id, "result": result})
+
+    def fail(req_id, code: int, message: str) -> None:
+        send({"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}})
+
+    while True:
+        line = stdin.readline()
+        if not line:
+            return EXIT_OK
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line.decode("utf-8"))
+        except ValueError:
+            send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}})
+            continue
+        if not isinstance(msg, dict):
+            continue
+        method = msg.get("method")
+        req_id = msg.get("id")
+        params = msg.get("params") or {}
+        is_notification = "id" not in msg
+        if method is None:
+            continue  # a response to something we never sent
+        try:
+            if method == "initialize":
+                requested = str(params.get("protocolVersion") or "")
+                version = requested if requested in SUPPORTED_PROTOCOLS else SUPPORTED_PROTOCOLS[0]
+                reply(req_id, {
+                    "protocolVersion": version,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "finalechat", "version": VERSION},
+                    "instructions": MCP_INSTRUCTIONS,
+                })
+            elif method == "notifications/initialized" or method.startswith("notifications/"):
+                continue
+            elif method == "ping":
+                reply(req_id, {})
+            elif method == "tools/list":
+                reply(req_id, {"tools": mcp_tools()})
+            elif method == "tools/call":
+                name = str(params.get("name") or "")
+                arguments = params.get("arguments") or {}
+                if not isinstance(arguments, dict):
+                    arguments = {}
+                try:
+                    text = mcp_call(client, name, arguments)
+                    reply(req_id, {"content": [{"type": "text", "text": text}], "isError": False})
+                except CLIError as err:
+                    reply(req_id, {"content": [{"type": "text", "text": f"Finalechat error: {err}"}],
+                                   "isError": True})
+            else:
+                if not is_notification:
+                    fail(req_id, -32601, f"Method not found: {method}")
+        except Exception as err:  # noqa: BLE001
+            print(f"finalechat mcp: {err}", file=sys.stderr)
+            if not is_notification:
+                fail(req_id, -32603, str(err))
+
+
+def cmd_mcp(args) -> int:
+    return mcp_serve()
+
+
+# --------------------------------------------------------------------------- #
+# Argument parsing
+# --------------------------------------------------------------------------- #
+
+
+class Formatter(argparse.RawDescriptionHelpFormatter):
+    def __init__(self, prog):
+        super().__init__(prog, max_help_position=28, width=min(100, shutil.get_terminal_size((100, 20)).columns))
+
+
+def add_thread_args(parser: argparse.ArgumentParser, naming: bool = True) -> None:
+    parser.add_argument("-t", "--thread", metavar="REF",
+                        help="thread id or ext:<external id> (default: $FINALECHAT_THREAD, "
+                             "the current Claude Code session, or one thread per directory)")
+    if naming:
+        parser.add_argument("--title", help="title for the thread if it has to be created")
+        parser.add_argument("--agent", help="agent name for the thread if it has to be created "
+                                            "(default: $FINALECHAT_AGENT or Terminal)")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="finalechat",
+        formatter_class=Formatter,
+        description=(
+            "Message the human from your agent, and get answers back.\n\n"
+            "Finalechat delivers what an agent says to the user's phone as a threaded\n"
+            "chat, and lets the agent ask questions the user answers with a tap."
+        ),
+        epilog=(
+            "examples:\n"
+            "  finalechat login                       sign in with a token from Settings → Agents\n"
+            "  finalechat say \"Tests are green\"        post a message to this directory's thread\n"
+            "  finalechat say --important \"Found it!\"  post and push a notification\n"
+            "  finalechat ask \"Deploy?\" -o Yes -o No   ask, block until answered, print the answer\n"
+            "  finalechat wait                        block until the human replies\n"
+            "  finalechat install claude-code         mirror Claude Code sessions to your phone\n"
+            "  finalechat remote on                   make sessions wait for phone replies\n\n"
+            "environment:\n"
+            "  FINALECHAT_TOKEN   API token (overrides the saved login)\n"
+            "  FINALECHAT_URL     server origin (default https://www.finalechat.com)\n"
+            "  FINALECHAT_THREAD  default thread ref for this shell\n"
+            "  FINALECHAT_AGENT   agent name used when a thread is created\n\n"
+            "exit codes: 0 ok · 1 usage · 2 API/network error · 3 timed out · 4 question cancelled/expired\n"
+            "docs: https://www.finalechat.com/api/"
+        ),
+    )
+    parser.add_argument("--version", action="version", version=f"finalechat {VERSION}")
+    parser.add_argument("--url", metavar="URL", help="server origin (default: $FINALECHAT_URL or saved login)")
+    parser.add_argument("--token", metavar="TOKEN", help="API token (default: $FINALECHAT_TOKEN or saved login)")
+    sub = parser.add_subparsers(dest="command", metavar="<command>")
+    sub.required = True
+
+    p = sub.add_parser("login", help="save an API token", formatter_class=Formatter,
+                       description="Verify an API token and save it to ~/.config/finalechat/config.json.")
+    p.add_argument("token_arg", nargs="?", metavar="TOKEN", help="token from Settings → Agents (prompted if omitted)")
+    p.set_defaults(func=cmd_login)
+
+    p = sub.add_parser("logout", help="forget the saved token", formatter_class=Formatter)
+    p.set_defaults(func=cmd_logout)
+
+    p = sub.add_parser("whoami", help="show the signed-in account", formatter_class=Formatter)
+    p.add_argument("--json", action="store_true", help="print the raw /me response")
+    p.set_defaults(func=cmd_whoami)
+
+    p = sub.add_parser("threads", help="list threads", formatter_class=Formatter)
+    p.add_argument("--archived", action="store_true", help="list archived threads instead")
+    p.add_argument("--limit", type=int, default=50, metavar="N", help="max threads (default 50)")
+    p.add_argument("--json", action="store_true", help="print JSON")
+    p.set_defaults(func=cmd_threads)
+
+    p = sub.add_parser("read", help="print a thread's messages", formatter_class=Formatter)
+    p.add_argument("ref", nargs="?", metavar="REF", help="thread id or ext:<external id>")
+    add_thread_args(p, naming=False)
+    p.add_argument("--limit", type=int, default=50, metavar="N", help="most recent N messages (default 50)")
+    p.add_argument("--json", action="store_true", help="print JSON")
+    p.set_defaults(func=cmd_read)
+
+    p = sub.add_parser("say", help="send a message", formatter_class=Formatter,
+                       description="Send a message to the human. Markdown by default. Reads stdin when no "
+                                   "message is given (or when MESSAGE is -).")
+    p.add_argument("message", nargs="*", metavar="MESSAGE", help="message text (joined with spaces)")
+    add_thread_args(p)
+    p.add_argument("--important", action="store_true", help="mark important and push a notification")
+    notify = p.add_mutually_exclusive_group()
+    notify.add_argument("--notify", dest="notify", action="store_true", default=None,
+                        help="push a notification even if not important")
+    notify.add_argument("--no-notify", dest="notify", action="store_false",
+                        help="never push, even if important")
+    p.add_argument("--text", action="store_true", help="send as plain text instead of markdown")
+    p.add_argument("--json", action="store_true", help="print the created message as JSON")
+    p.set_defaults(func=cmd_say)
+
+    p = sub.add_parser("ask", help="ask a question and wait for the answer", formatter_class=Formatter,
+                       description="Ask the human a question (multiple choice, free-form, or both) and block "
+                                   "until they answer. Prints the chosen labels on the first line and any "
+                                   "typed text after that.",
+                       epilog="example:\n  finalechat ask \"Which env?\" -o \"staging::Safe\" -o prod --wait 900")
+    p.add_argument("prompt", metavar="PROMPT", help="the question (or - to read from stdin)")
+    p.add_argument("-o", "--option", action="append", metavar="LABEL[::DESCRIPTION]",
+                   help="an option to offer (repeatable)")
+    p.add_argument("--multi", action="store_true", help="allow choosing several options")
+    p.add_argument("--no-freeform", action="store_true", help="options only, no typed answer")
+    p.add_argument("--timeout", type=int, metavar="SECS",
+                   help="expire the question server-side after SECS")
+    p.add_argument("--wait", type=int, default=1800, metavar="SECS",
+                   help="how long to block for an answer (default 1800; 0 = return immediately)")
+    add_thread_args(p)
+    p.add_argument("--json", action="store_true", help="print the question as JSON")
+    p.set_defaults(func=cmd_ask)
+
+    p = sub.add_parser("wait-answer", help="resume waiting for a question's answer", formatter_class=Formatter)
+    p.add_argument("question_id", metavar="QUESTION_ID")
+    p.add_argument("--wait", type=int, default=1800, metavar="SECS", help="how long to block (default 1800)")
+    p.add_argument("--json", action="store_true", help="print the question as JSON")
+    p.set_defaults(func=cmd_wait_answer)
+
+    p = sub.add_parser("wait", help="wait for the human's next message", formatter_class=Formatter,
+                       description="Block until the human sends a new message in the thread, then print it.")
+    add_thread_args(p, naming=False)
+    p.add_argument("--after", metavar="MESSAGE_ID", help="only messages after this id (default: the latest)")
+    p.add_argument("--timeout", type=int, default=1800, metavar="SECS", help="how long to block (default 1800)")
+    p.add_argument("--json", action="store_true", help="print the message as JSON")
+    p.set_defaults(func=cmd_wait)
+
+    p = sub.add_parser("remote", help="toggle remote mode (sessions wait for phone replies)",
+                       formatter_class=Formatter,
+                       description="When remote mode is on, Claude Code hooks block waiting for your replies "
+                                   "and answers from the app instead of falling through to the terminal.")
+    p.add_argument("action", nargs="?", choices=["on", "off", "status"], help="default: status")
+    p.set_defaults(func=cmd_remote)
+
+    p = sub.add_parser("install", help="integrate with an agent harness (claude-code)", formatter_class=Formatter,
+                       description="Install Finalechat hooks (and the MCP server) into Claude Code so every "
+                                   "session is mirrored to your phone.")
+    p.add_argument("target", choices=["claude-code"])
+    p.add_argument("--no-mcp", action="store_true", help="skip registering the MCP server")
+    p.add_argument("--settings", default="~/.claude/settings.json", metavar="PATH",
+                   help="Claude Code settings file (default ~/.claude/settings.json)")
+    p.set_defaults(func=cmd_install)
+
+    p = sub.add_parser("uninstall", help="remove the integration", formatter_class=Formatter)
+    p.add_argument("target", choices=["claude-code"])
+    p.add_argument("--no-mcp", action="store_true", help="leave the MCP server registered")
+    p.add_argument("--settings", default="~/.claude/settings.json", metavar="PATH")
+    p.set_defaults(func=cmd_uninstall)
+
+    p = sub.add_parser("hook", help="handle a harness hook event (reads JSON on stdin)", formatter_class=Formatter)
+    p.add_argument("target", choices=["claude-code"])
+    p.set_defaults(func=cmd_hook)
+
+    p = sub.add_parser("mcp", help="run the MCP server over stdio", formatter_class=Formatter,
+                       description="Model Context Protocol server exposing finalechat_send, finalechat_ask, "
+                                   "finalechat_wait_for_reply and finalechat_read.")
+    p.set_defaults(func=cmd_mcp)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return int(args.func(args) or 0)
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
+    except BrokenPipeError:
+        return EXIT_OK
+    except APIError as err:
+        print(f"finalechat: {err} [{err.code}]", file=sys.stderr)
+        return err.exit_code
+    except CLIError as err:
+        print(f"finalechat: {err}", file=sys.stderr)
+        return err.exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

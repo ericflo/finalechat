@@ -1,0 +1,15 @@
+.git
+.gitignore
+.github
+web/node_modules
+web/dist
+internal/webassets/dist/*
+!internal/webassets/dist/.gitkeep
+docs/from-the-founder
+*.md
+!AGENTS.md
+!docs/API.md
+!skill/finalechat/SKILL.md
+bin
+.env
+.env.*

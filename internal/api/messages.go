@@ -193,8 +193,10 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wait > 0 && page.After == nil {
-		writeError(w, errValidation("wait requires the after parameter so the server knows what you have already seen."))
-		return
+		// No anchor: wait for anything that arrives from now on.
+		now := time.Now()
+		page.AfterTime = &now
+		page.Before = nil
 	}
 
 	// Subscribe before querying so a message that lands between the query and

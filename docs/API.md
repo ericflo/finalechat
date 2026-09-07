@@ -1,1 +1,728 @@
-# Finalechat API (placeholder)
+# Finalechat API reference
+
+This is the complete reference for the Finalechat HTTP API. If you are an
+agent that only needs to post messages and ask questions, start with the
+shorter guide at <https://www.finalechat.com/AGENTS.md>. A machine-readable
+OpenAPI 3.1 document is at <https://www.finalechat.com/api/openapi.json>.
+
+## Base URL
+
+```
+https://www.finalechat.com/api/v1
+https://api.finalechat.com/api/v1
+```
+
+Both hosts serve the same API. Examples below use the first.
+
+## Authentication
+
+**API tokens** are for agents and scripts. The user creates them in the app
+under Settings → Agents. A token starts with `fc_` and is shown once. Send it
+as a bearer token:
+
+```
+Authorization: Bearer fc_TlaRtPqYwguWNmAtY9FXJLTEJQdiuQp7GYIvMWun
+```
+
+A token acts as the user who created it: it sees the user's threads, posts
+as the `agent` sender by default, and can answer questions (useful for
+testing). Tokens cannot create or revoke tokens or change the account.
+
+**Sessions** are for the app. `POST /auth/login` sets an `fc_session`
+cookie (HttpOnly, SameSite=Lax, 90 days sliding). Cookie-authenticated
+requests that change state must be same-origin: the server checks
+`Sec-Fetch-Site` when present and otherwise requires `Origin` to match the
+request host; failures return `403 csrf`.
+
+Unauthenticated requests to any `/api/v1/*` route other than the auth
+endpoints and `GET /push/vapid` receive `401 unauthorized`.
+
+## Conventions
+
+- Requests and responses are JSON (`Content-Type: application/json`).
+  Responses are `no-store` and compressed when the client accepts gzip.
+- Every id is a UUID. Ids are time-ordered, so sorting by id is sorting by
+  creation.
+- Every timestamp is UTC in RFC 3339 form, e.g. `2026-09-07T05:38:55.043799Z`.
+- Objects are returned inside a named key (`{"thread": {...}}`,
+  `{"messages": [...]}`) so responses can grow without breaking clients.
+- Unknown fields in requests are ignored. Unknown routes under `/api/v1/`
+  return `404 not_found`.
+- `meta` fields are free-form JSON objects (at most 16 KiB) that the API
+  stores and returns verbatim. `PATCH` and idempotent create merge `meta`
+  keys rather than replacing the object.
+
+### Errors
+
+```json
+{"error": {"code": "validation_failed", "message": "prompt is required."}}
+```
+
+| Status | Code | When |
+| --- | --- | --- |
+| 400 | `bad_request` | Missing or malformed JSON body, empty `ext:` id |
+| 401 | `unauthorized` | No credentials, or a non-bearer `Authorization` header |
+| 401 | `invalid_token` | Token malformed, unknown or revoked |
+| 401 | `invalid_credentials` | Wrong email or password |
+| 403 | `forbidden` | Operation not allowed for this credential type |
+| 403 | `csrf` | Cookie mutation that is not same-origin |
+| 403 | `signup_closed` | Registration is closed |
+| 403 | `invalid_invite` | Registration needs a valid invite code |
+| 404 | `not_found` | Unknown route, malformed id, or an object you do not own |
+| 409 | `conflict` | Unique constraint (rare; concurrent `external_id` creates resolve to the winner) |
+| 409 | `already_resolved` | Answering or cancelling a question that is no longer pending |
+| 409 | `email_taken` | Registration with an existing email |
+| 409 | `no_subscriptions` | Test push with no subscribed device |
+| 413 | `too_large` | Request body over 1 MiB |
+| 422 | `validation_failed` | A field failed validation; `message` says which |
+| 429 | `rate_limited` | Too many login or register attempts (20 per minute per IP) |
+| 503 | `push_disabled` | Push is not configured on this server |
+| 500 | `internal_error` | Server fault |
+
+### Limits
+
+| Field | Limit |
+| --- | --- |
+| Request body | 1 MiB |
+| Message `body` | 256 KiB, valid UTF-8, not blank |
+| Question `prompt` | 8000 bytes, valid UTF-8 |
+| Question `options` | 20; `label` 200 characters, unique; `description` 1000 characters |
+| Answer `text` | 32 KiB |
+| Thread `title` / `agent` / `external_id` | 300 / 120 / 300 characters |
+| `meta` | 16 KiB JSON object |
+| `wait` | 0 to 600 seconds (larger values are clamped to 600) |
+| `timeout_seconds` | 1 to 604800 (7 days) |
+| `limit` | threads 1 to 200 (default 50); messages and questions 1 to 500 (default 100) |
+
+### Thread references
+
+Wherever a path contains `{ref}` you may pass either the thread's UUID or
+`ext:` followed by the thread's `external_id`, for example
+`/threads/ext:claude-code:7f3a9c2e/messages`. `POST …/messages` and
+`POST …/questions` create a missing `ext:` thread on demand; all other routes
+return `404 not_found` for an unknown reference.
+
+### Pagination
+
+Threads use an opaque keyset cursor: the response includes `next_cursor`
+when more threads exist; pass it back as `cursor`. Messages use message ids:
+`after=<id>` returns newer messages in ascending order, `before=<id>` returns
+older ones, and with neither the newest `limit` messages are returned in
+ascending order with `has_more` set when older messages exist.
+
+### Long-polling
+
+Three routes accept `wait=<seconds>`. The server holds the request open
+until something happens or the wait elapses, then responds normally:
+
+- `GET /threads/{ref}/messages?after=<id>&wait=N` returns as soon as a
+  message newer than `after` exists. Without `after`, a wait watches for
+  anything created after the request started.
+- `POST /threads/{ref}/questions?wait=N` (or `"wait": N` in the body)
+  returns when the question is answered, cancelled or expired.
+- `GET /questions/{id}?wait=N` likewise.
+
+`wait` is clamped to 600 seconds. Loop when you need to wait longer. A
+timed-out message wait returns `"messages": []` and `"timed_out": true`; a
+timed-out question wait returns the question with `"status": "pending"`.
+
+## Objects
+
+### Thread
+
+```json
+{
+  "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+  "external_id": "claude-code:7f3a9c2e",
+  "title": "finalechat",
+  "agent": "Claude Code",
+  "meta": {"cwd": "/home/eric/finalechat"},
+  "created_at": "2026-09-07T05:38:55.019126Z",
+  "updated_at": "2026-09-07T05:38:55.043799Z",
+  "last_activity_at": "2026-09-07T05:38:55.043799Z",
+  "last_read_at": "2026-09-07T05:38:55.019126Z",
+  "archived_at": null,
+  "muted": false,
+  "preview": "Staging looks good. Promote to production?",
+  "preview_sender": "question",
+  "unread_count": 1,
+  "pending_questions": 1
+}
+```
+
+`preview` is a plain-text excerpt of the latest message or question;
+`preview_sender` is `agent`, `user`, `system` or `question`. `unread_count`
+counts non-user messages since `last_read_at`. A muted thread never sends
+push notifications.
+
+### Message
+
+```json
+{
+  "id": "01a07a60-6db9-784b-bd24-7ba3d7d3dfa0",
+  "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+  "sender": "agent",
+  "body": "Deployed **v1.2.0** to staging.\n\n- 42 tests passed\n- bundle 118 KB",
+  "format": "markdown",
+  "importance": "important",
+  "meta": {},
+  "created_at": "2026-09-07T05:38:55.033453Z"
+}
+```
+
+`sender` is `agent`, `user` or `system`; `format` is `markdown` or `text`;
+`importance` is `normal` or `important`.
+
+### Question
+
+```json
+{
+  "id": "01a07a60-a414-72cf-8b9a-308e193887f7",
+  "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+  "prompt": "Which branch?",
+  "options": [{"label": "main"}, {"label": "release"}],
+  "allow_freeform": true,
+  "multi_select": false,
+  "status": "answered",
+  "answer": {"selected": ["release"], "text": "cut from tag v1.2.0"},
+  "meta": {},
+  "created_at": "2026-09-07T05:39:08.948128Z",
+  "answered_at": "2026-09-07T05:39:08.981308Z",
+  "expires_at": null
+}
+```
+
+`status` is `pending`, `answered`, `cancelled` or `expired`. `answer` is
+`null` until answered; `selected` lists chosen option labels in the order
+chosen and `text` is the free-form reply (absent when empty). `answered_at`
+is set whenever the question leaves `pending`, including on cancel or expiry.
+
+### User and Settings
+
+```json
+{
+  "id": "01a07a5a-be46-723c-80f8-61155463dbdc",
+  "email": "eric@example.com",
+  "display_name": "Eric",
+  "settings": {"notify_all_messages": false, "remote_mode": false},
+  "created_at": "2026-09-07T05:32:42.438822Z"
+}
+```
+
+### APIToken
+
+```json
+{
+  "id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1",
+  "name": "laptop",
+  "prefix": "fc_TlaRtPqY",
+  "created_at": "2026-09-07T05:32:42.464521Z",
+  "last_used_at": "2026-09-07T05:38:23.601635Z"
+}
+```
+
+### Counts
+
+```json
+{"pending_questions": 1, "unread_threads": 3}
+```
+
+`unread_threads` counts active threads with at least one unread non-user
+message. The app uses `pending_questions + unread_threads` as its badge.
+
+## Notification policy
+
+Push notifications go to every device the user has subscribed in the app.
+They are never sent for a muted thread or when push is not configured.
+
+- **Questions** always notify.
+- **Messages** notify when `importance` is `important`, or when the user has
+  turned on `notify_all_messages`. A `notify` field on the request, if
+  present, overrides that rule in either direction. Messages with
+  `sender: "user"` never notify.
+- Normal messages still update the app in real time through the event
+  stream and the badge counts.
+
+## Auth
+
+These routes serve the app's sign-in flow. Agents use tokens and can skip
+this section.
+
+### GET /auth/status
+
+Reports how registration is gated and who, if anyone, is signed in. No
+authentication required.
+
+```json
+{"authenticated": false, "push_enabled": true, "signup": "closed", "version": "dev"}
+```
+
+`signup` is `open` (no account exists yet: the first registration creates
+the owner), `invite` (an invite code is required), or `closed`. When
+authenticated, the response also includes `user`.
+
+### POST /auth/register
+
+Same-origin only; rate limited. Creates an account and starts a session.
+
+```json
+{"email": "eric@example.com", "password": "at least 10 chars", "display_name": "Eric", "invite_code": ""}
+```
+
+Returns `201 {"user": {...}}` and sets the session cookie. Errors:
+`signup_closed`, `invalid_invite`, `email_taken`, `validation_failed`.
+
+### POST /auth/login
+
+Same-origin only; rate limited. `{"email": "...", "password": "..."}`
+returns `200 {"user": {...}}` and sets the cookie, or `401
+invalid_credentials`.
+
+### POST /auth/logout
+
+Deletes the current session and clears the cookie. Returns `{"ok": true}`.
+
+## Me and settings
+
+### GET /me
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/me -H "Authorization: Bearer $FINALECHAT_TOKEN"
+```
+
+```json
+{
+  "auth": "token",
+  "base_url": "https://www.finalechat.com",
+  "counts": {"pending_questions": 0, "unread_threads": 2},
+  "push_enabled": true,
+  "token": {"id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1", "name": "laptop", "prefix": "fc_TlaRtPqY",
+            "created_at": "2026-09-07T05:32:42.464521Z", "last_used_at": "2026-09-07T05:38:23.601635Z"},
+  "user": {"id": "01a07a5a-be46-723c-80f8-61155463dbdc", "email": "eric@example.com", "display_name": "Eric",
+           "settings": {"notify_all_messages": false, "remote_mode": false},
+           "created_at": "2026-09-07T05:32:42.438822Z"},
+  "version": "dev"
+}
+```
+
+`auth` is `token` or `session`; `token` is present only for token auth.
+
+### PATCH /me
+
+Session only (`403 forbidden` for tokens). Changes the display name and/or
+password.
+
+```json
+{"display_name": "Eric", "current_password": "old", "new_password": "new password"}
+```
+
+Changing the password deletes every other session. Returns `{"user": {...}}`.
+
+### GET /settings
+
+```json
+{"settings": {"notify_all_messages": false, "remote_mode": false}}
+```
+
+### PATCH /settings
+
+Any subset of the settings fields. Returns the full settings object and
+emits a `settings.updated` event.
+
+```bash
+curl -sS -X PATCH https://www.finalechat.com/api/v1/settings \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"remote_mode": true}'
+```
+
+- `notify_all_messages`: push for every agent message, not only important ones.
+- `remote_mode`: the user is away from the terminal; integrations should
+  block waiting for phone replies and answers instead of falling through to
+  the terminal.
+
+### GET /counts
+
+```json
+{"counts": {"pending_questions": 1, "unread_threads": 3}}
+```
+
+## Tokens
+
+All three routes require a session; tokens receive `403 forbidden` on create
+and revoke.
+
+### GET /tokens
+
+```json
+{"tokens": [{"id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1", "name": "laptop", "prefix": "fc_TlaRtPqY",
+             "created_at": "2026-09-07T05:32:42.464521Z", "last_used_at": "2026-09-07T05:38:23.601635Z"}]}
+```
+
+Revoked tokens are not listed.
+
+### POST /tokens
+
+`{"name": "laptop"}` (name optional, defaults to "Agent token"). Returns
+`201` with the token record and, once only, the secret:
+
+```json
+{"secret": "fc_TlaRtPqYwguWNmAtY9FXJLTEJQdiuQp7GYIvMWun",
+ "token": {"id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1", "name": "laptop", "prefix": "fc_TlaRtPqY",
+           "created_at": "2026-09-07T05:32:42.464521Z", "last_used_at": null}}
+```
+
+### DELETE /tokens/{id}
+
+Revokes the token immediately. Returns `{"ok": true}` or `404`.
+
+## Threads
+
+### POST /threads
+
+Creates a thread, or returns the existing one when `external_id` matches a
+thread you already have. All fields are optional.
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/threads \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"external_id": "claude-code:7f3a9c2e", "title": "finalechat", "agent": "Claude Code",
+       "meta": {"cwd": "/home/eric/finalechat"}}'
+```
+
+```json
+{"created": true, "thread": {"id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7", "external_id": "claude-code:7f3a9c2e",
+  "title": "finalechat", "agent": "Claude Code", "meta": {"cwd": "/home/eric/finalechat"},
+  "created_at": "2026-09-07T05:38:55.019126Z", "updated_at": "2026-09-07T05:38:55.019126Z",
+  "last_activity_at": "2026-09-07T05:38:55.019126Z", "last_read_at": "2026-09-07T05:38:55.019126Z",
+  "archived_at": null, "muted": false, "preview": "", "preview_sender": "",
+  "unread_count": 0, "pending_questions": 0}}
+```
+
+Status is `201` with `"created": true` for a new thread and `200` with
+`"created": false` for an existing one. On the existing thread, a blank
+`title` or `agent` is filled from the request and `meta` is merged; a
+non-blank title is left alone (use `PATCH` to rename).
+
+### GET /threads
+
+| Parameter | Meaning |
+| --- | --- |
+| `archived` | `true`/`1` lists archived threads instead of active ones |
+| `q` | Case-insensitive substring match on title, agent and preview |
+| `limit` | 1 to 200, default 50 |
+| `cursor` | `next_cursor` from a previous page |
+
+Threads are ordered by `last_activity_at`, newest first.
+
+```json
+{"threads": [{"id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7", "...": "..."}],
+ "next_cursor": "MTc4ODc1OTUzNTA0Mzc5OXwwMWEwN2E2MC02ZGFiLTc4MGEtYmY0ZC0yMGVmMTVjMGQ3ZDc"}
+```
+
+`next_cursor` is absent on the last page.
+
+### GET /threads/{ref}
+
+```json
+{"thread": {"...": "..."}}
+```
+
+### PATCH /threads/{ref}
+
+Any subset of `title`, `agent`, `archived` (boolean), `muted` (boolean),
+`meta` (merged). Emits `thread.updated`.
+
+```bash
+curl -sS -X PATCH https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"title": "finalechat: release 1.2", "archived": true}'
+```
+
+Returns `{"thread": {...}}`.
+
+### DELETE /threads/{ref}
+
+Deletes the thread with all its messages and questions. Returns `{"ok": true}`
+and emits `thread.deleted`.
+
+### POST /threads/{ref}/read
+
+Marks everything in the thread as read (`last_read_at` becomes now). Returns
+`{"thread": {...}}` and emits `thread.updated`. The app calls this; agents
+rarely need it.
+
+## Messages
+
+### POST /threads/{ref}/messages
+
+Creates a missing `ext:` thread on demand.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `body` | string | Required. Markdown by default. |
+| `format` | string | `markdown` (default) or `text` |
+| `importance` | string | `normal` (default) or `important` |
+| `sender` | string | `agent` (default for tokens), `user` (default for sessions) or `system` |
+| `notify` | boolean | Force (`true`) or suppress (`false`) the push for this message |
+| `meta` | object | Stored verbatim |
+| `title`, `agent` | string | Applied only when this request creates the `ext:` thread |
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/messages \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"title": "finalechat", "agent": "Claude Code",
+       "body": "Deployed **v1.2.0** to staging.\n\n- 42 tests passed\n- bundle 118 KB",
+       "importance": "important"}'
+```
+
+```json
+{"message": {"id": "01a07a60-6db9-784b-bd24-7ba3d7d3dfa0", "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+             "sender": "agent", "body": "Deployed **v1.2.0** to staging.\n\n- 42 tests passed\n- bundle 118 KB",
+             "format": "markdown", "importance": "important", "meta": {},
+             "created_at": "2026-09-07T05:38:55.033453Z"},
+ "thread": {"id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7", "preview": "Deployed v1.2.0 to staging. - 42 tests passed - bundle 118 KB",
+            "preview_sender": "agent", "unread_count": 1, "...": "..."}}
+```
+
+Status `201`. Posting bumps the thread's `last_activity_at` and `preview`
+and un-archives it. A message with `sender: "user"` also advances the
+thread's `last_read_at`. Emits `message.created`.
+
+### GET /threads/{ref}/messages
+
+| Parameter | Meaning |
+| --- | --- |
+| `after` | Message id; return newer messages, ascending |
+| `before` | Message id; return older messages, ascending |
+| `limit` | 1 to 500, default 100 |
+| `sender` | Filter: `agent`, `user` or `system` |
+| `wait` | Seconds to hold the request open for a new message; without `after` it waits for anything created from now on |
+
+```bash
+curl -sS "https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/messages?limit=3" \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN"
+```
+
+```json
+{"has_more": false, "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+ "messages": [{"id": "01a07a60-6db9-784b-bd24-7ba3d7d3dfa0", "sender": "agent", "...": "..."}]}
+```
+
+Without a cursor, the newest `limit` messages are returned in ascending
+order and `has_more` says whether older ones exist. With `after`, `has_more`
+says whether even newer ones exist beyond `limit`. When `wait` elapses with
+nothing new the response is `{"messages": [], "has_more": false,
+"thread_id": "...", "timed_out": true}`.
+
+Waiting for the user's reply after your last message:
+
+```bash
+curl -sS "https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/messages?after=01a07a60-6db9-784b-bd24-7ba3d7d3dfa0&sender=user&wait=600" \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN"
+```
+
+### GET /messages/{id}
+
+```json
+{"message": {"id": "01a07a60-a438-78f0-9a26-138cf1ecfa9d", "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+             "sender": "user", "body": "release — cut from tag v1.2.0", "format": "text", "importance": "normal",
+             "meta": {"kind": "answer", "question_id": "01a07a60-a414-72cf-8b9a-308e193887f7"},
+             "created_at": "2026-09-07T05:39:08.984547Z"}}
+```
+
+The message above is the transcript entry the server writes when a question
+is answered: `meta.kind` is `answer` and `meta.question_id` links it.
+
+## Questions
+
+### POST /threads/{ref}/questions
+
+Creates a missing `ext:` thread on demand. Always sends a push notification
+unless the thread is muted.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `prompt` | string | Required |
+| `options` | array | Up to 20 `{"label": "...", "description": "..."}`; labels must be unique |
+| `allow_freeform` | boolean | Default `true`; forced `true` when there are no options |
+| `multi_select` | boolean | Default `false` |
+| `timeout_seconds` | integer | 1 to 604800; the question expires after this |
+| `wait` | integer | Block up to this many seconds for the answer (also accepted as `?wait=`) |
+| `meta` | object | Stored verbatim |
+| `title`, `agent` | string | Applied only when this request creates the `ext:` thread |
+
+```bash
+curl -sS "https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/questions?wait=600" \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"prompt": "Staging looks good. Promote to production?",
+       "options": [{"label": "Ship it", "description": "Promote the same image"},
+                   {"label": "Hold", "description": "Wait for me to look"}],
+       "timeout_seconds": 3600}'
+```
+
+```json
+{"question": {"id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4", "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+              "prompt": "Staging looks good. Promote to production?",
+              "options": [{"label": "Ship it", "description": "Promote the same image"},
+                          {"label": "Hold", "description": "Wait for me to look"}],
+              "allow_freeform": true, "multi_select": false, "status": "pending", "answer": null, "meta": {},
+              "created_at": "2026-09-07T05:38:55.043799Z", "answered_at": null,
+              "expires_at": "2026-09-07T06:38:55.043382Z"},
+ "thread": {"id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7", "preview": "Staging looks good. Promote to production?",
+            "preview_sender": "question", "pending_questions": 1, "...": "..."}}
+```
+
+Status is `201` whether or not the wait produced an answer; check
+`question.status`. Emits `question.created`.
+
+### GET /questions/{id}
+
+`wait` (seconds) blocks while the question is pending.
+
+```bash
+curl -sS "https://www.finalechat.com/api/v1/questions/01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4?wait=600" \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN"
+```
+
+```json
+{"question": {"id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4", "status": "answered",
+              "answer": {"selected": ["Ship it"]}, "answered_at": "2026-09-07T05:41:12.100442Z", "...": "..."}}
+```
+
+### GET /questions
+
+| Parameter | Meaning |
+| --- | --- |
+| `status` | `pending`, `answered`, `cancelled` or `expired` |
+| `thread_id` | Thread UUID or `ext:<external_id>` |
+| `limit` | 1 to 500, default 100 |
+
+Newest first.
+
+```json
+{"questions": [{"id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4", "status": "pending", "...": "..."}]}
+```
+
+### GET /threads/{ref}/questions
+
+Every question in the thread, oldest first (up to 500), so a client can
+interleave them with messages.
+
+### POST /questions/{id}/answer
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `selected` | array of strings | Option labels; at most one unless `multi_select` |
+| `text` | string | Free-form reply; only when `allow_freeform` |
+
+At least one of the two is required. Labels must match the offered options
+exactly.
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/questions/01a07a60-a414-72cf-8b9a-308e193887f7/answer \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"selected": ["release"], "text": "cut from tag v1.2.0"}'
+```
+
+```json
+{"question": {"id": "01a07a60-a414-72cf-8b9a-308e193887f7", "status": "answered",
+              "answer": {"selected": ["release"], "text": "cut from tag v1.2.0"},
+              "answered_at": "2026-09-07T05:39:08.981308Z", "...": "..."},
+ "message": {"id": "01a07a60-a438-78f0-9a26-138cf1ecfa9d", "sender": "user",
+             "body": "release — cut from tag v1.2.0", "format": "text",
+             "meta": {"kind": "answer", "question_id": "01a07a60-a414-72cf-8b9a-308e193887f7"}, "...": "..."},
+ "thread": {"...": "..."}}
+```
+
+Answering also appends a `user` message to the thread recording the choice
+and marks the thread read. A question that is no longer pending returns
+`409 already_resolved` with the current status in the message. Emits
+`question.answered` and `message.created`.
+
+### POST /questions/{id}/cancel
+
+Withdraws a pending question (for example, the agent found the answer
+elsewhere). Returns `{"question": {...}}` with `status: "cancelled"`, or `409
+already_resolved` if it was not pending. Emits `question.cancelled`.
+
+### Expiry
+
+A background task marks pending questions whose `expires_at` has passed as
+`expired` (within about 30 seconds) and emits `question.expired`.
+
+## Events
+
+### GET /events
+
+A server-sent events stream (`text/event-stream`) of everything that
+changes for the user. Works with tokens and sessions. Each event carries
+the full current objects so a client can apply it without another request.
+
+```bash
+curl -sN https://www.finalechat.com/api/v1/events -H "Authorization: Bearer $FINALECHAT_TOKEN"
+```
+
+```
+event: ready
+data: {"at":"2026-09-07T05:39:05.945123Z","counts":{"pending_questions":0,"unread_threads":3}}
+
+event: message.created
+data: {"at":"…","thread":{…},"message":{…},"counts":{…}}
+```
+
+| Event | Data |
+| --- | --- |
+| `ready` | `{at, counts}` once on connect |
+| `thread.created`, `thread.updated` | `{at, thread, counts}` |
+| `thread.deleted` | `{at, thread_id, counts}` |
+| `message.created` | `{at, thread, message, counts}` |
+| `question.created`, `question.answered`, `question.cancelled`, `question.expired` | `{at, thread, question, counts}` |
+| `settings.updated` | `{at, settings}` |
+| `reconnect` | `{}` when the server is shutting down; reconnect immediately |
+
+A comment line (`: ping`) is sent every 20 seconds to keep the connection
+alive. There is no replay: after reconnecting, refetch the state you care
+about. A subscriber that falls too far behind is dropped and should
+reconnect.
+
+## Push
+
+These routes let the app register a device for Web Push. Agents do not need
+them.
+
+### GET /push/vapid
+
+No authentication. `{"enabled": true, "public_key": "BMPS…"}`; the key is
+the `applicationServerKey` for `PushManager.subscribe`.
+
+### POST /push/subscriptions
+
+Body is a browser `PushSubscription` JSON, either directly or under a
+`subscription` key: `{"endpoint": "https://…", "keys": {"p256dh": "…",
+"auth": "…"}}`. Returns `201 {"subscription": {...}}`. Re-subscribing the
+same endpoint updates it. `503 push_disabled` when push is not configured.
+
+### GET /push/subscriptions
+
+```json
+{"subscriptions": [{"id": "…", "endpoint": "https://…", "user_agent": "…",
+                    "created_at": "…", "last_success_at": "…", "failure_count": 0}]}
+```
+
+### DELETE /push/subscriptions
+
+`{"endpoint": "https://…"}` removes that device. Returns `{"ok": true}`.
+
+### POST /push/test
+
+Sends a test notification to every subscribed device. Returns `202 {"ok":
+true, "devices": 1}`, `409 no_subscriptions`, or `503 push_disabled`.
+
+Endpoints that the push service reports gone (404 or 410) are removed
+automatically, as are endpoints that fail 20 times in a row.
+
+## Health
+
+`GET /healthz` returns `ok` while the process is up; `GET /readyz` returns
+`ready` once the database answers. Neither requires authentication and
+neither lives under `/api/v1`.
