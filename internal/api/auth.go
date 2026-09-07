@@ -150,18 +150,20 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 
 // signupMode reports how registration is gated right now.
 func (s *Server) signupMode(ctx context.Context) (string, error) {
+	// An invite code, when configured, gates every registration including the
+	// first one, so a freshly deployed instance cannot be claimed by a
+	// stranger before its owner signs up.
+	if s.cfg.InviteCode != "" {
+		return "invite", nil
+	}
 	n, err := s.store.CountUsers(ctx)
 	if err != nil {
 		return "", err
 	}
-	switch {
-	case n == 0:
+	if n == 0 {
 		return "open", nil
-	case s.cfg.InviteCode != "":
-		return "invite", nil
-	default:
-		return "closed", nil
 	}
+	return "closed", nil
 }
 
 // GET /api/v1/auth/status

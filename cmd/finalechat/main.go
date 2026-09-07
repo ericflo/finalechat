@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/ericflo/finalechat/internal/api"
 	"github.com/ericflo/finalechat/internal/bus"
 	"github.com/ericflo/finalechat/internal/config"
@@ -64,7 +66,7 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.Open(ctx, cfg.DatabaseURL)
+	pool, err := openDatabase(ctx, cfg.DatabaseURL, log)
 	if err != nil {
 		return err
 	}
@@ -115,6 +117,31 @@ func run() error {
 	}
 	sender.Wait(shutdownCtx)
 	return nil
+}
+
+// openDatabase retries for a while so a cold start alongside PostgreSQL does
+// not crash-loop; a persistent failure still exits so the orchestrator sees it.
+func openDatabase(ctx context.Context, url string, log *slog.Logger) (*pgxpool.Pool, error) {
+	deadline := time.Now().Add(2 * time.Minute)
+	delay := time.Second
+	for {
+		pool, err := db.Open(ctx, url)
+		if err == nil {
+			return pool, nil
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			return nil, err
+		}
+		log.Warn("database not ready; retrying", "err", err, "retry_in", delay)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		if delay < 10*time.Second {
+			delay *= 2
+		}
+	}
 }
 
 func newLogger(cfg config.Config) *slog.Logger {

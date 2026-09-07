@@ -186,6 +186,28 @@ func TestSignupClosesAfterFirstAccount(t *testing.T) {
 	}
 }
 
+func TestInviteCodeGatesEvenTheFirstAccount(t *testing.T) {
+	setup(t)
+	testAPI.cfg.InviteCode = "let-me-in"
+	defer func() { testAPI.cfg.InviteCode = "" }()
+	anon := newBrowser(t)
+	status, out := anon.do("GET", "/api/v1/auth/status", nil)
+	if status != 200 || out["signup"] != "invite" {
+		t.Fatalf("expected invite mode, got %d %v", status, out)
+	}
+	status, out = anon.do("POST", "/api/v1/auth/register", map[string]any{"email": "third@example.com", "password": "correct-horse-battery", "invite_code": "wrong"})
+	if status != http.StatusForbidden || str(sub(out, "error"), "code") != "invalid_invite" {
+		t.Fatalf("expected invalid_invite, got %d %v", status, out)
+	}
+	status, _ = anon.do("POST", "/api/v1/auth/register", map[string]any{"email": "third@example.com", "password": "correct-horse-battery", "invite_code": "let-me-in"})
+	if status != http.StatusCreated {
+		t.Fatalf("expected registration with the invite code, got %d", status)
+	}
+	if _, err := testPool.Exec(context.Background(), "DELETE FROM users WHERE email = 'third@example.com'"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLoginAndCSRF(t *testing.T) {
 	setup(t)
 	b := newBrowser(t)
