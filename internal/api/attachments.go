@@ -65,13 +65,23 @@ func (s *Server) storeUpload(r *http.Request, threadID uuid.UUID, contentType, f
 	in.ObjectKey = fmt.Sprintf("a/%s/%s", id, filename)
 	var thumb []byte
 	if imaging.ImageTypes[contentType] {
+		// Decoding a large image costs hundreds of megabytes; only a few may
+		// run at once regardless of how many uploads arrive together.
+		select {
+		case decoding <- struct{}{}:
+		case <-r.Context().Done():
+			return nil, errBadRequest("The upload was cancelled.")
+		case <-time.After(20 * time.Second):
+			return nil, &apiError{Status: http.StatusServiceUnavailable, Code: "busy", Message: "Too many images are being processed right now. Try again shortly.", RetryAfter: 5}
+		}
 		img, info, err := imaging.Decode(contentType, data)
+		var tinfo imaging.Info
+		if err == nil {
+			thumb, tinfo, err = imaging.Thumbnail(img, thumbnailSide)
+		}
+		<-decoding
 		if err != nil {
 			return nil, errValidation("The image could not be decoded: %v", err)
-		}
-		thumb, tinfo, err := imaging.Thumbnail(img, thumbnailSide)
-		if err != nil {
-			return nil, err
 		}
 		in.Kind = store.AttachmentImage
 		in.Width, in.Height = info.Width, info.Height
@@ -105,7 +115,23 @@ func (s *Server) storeUpload(r *http.Request, threadID uuid.UUID, contentType, f
 	return a, nil
 }
 
-var errStorage = &apiError{Status: http.StatusBadGateway, Code: "storage_unavailable", Message: "The file could not be stored right now. Try again."}
+var errStorage = &apiError{Status: http.StatusBadGateway, Code: "storage_unavailable", Message: "The file could not be stored right now. Try again.", RetryAfter: 10}
+
+// decoding bounds concurrent image decodes.
+var decoding = make(chan struct{}, 3)
+
+// uploadDeadline bounds how long a request body may trickle in; SSE and
+// long-polls keep the server-wide read timeout off, so uploads set their own.
+func uploadDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(3 * time.Minute))
+}
+
+// activeContent are types a browser would execute or render with scripts if
+// served from this origin; they are stored as opaque files instead.
+var activeContent = map[string]bool{
+	"text/html": true, "application/xhtml+xml": true, "image/svg+xml": true,
+	"text/xml": true, "application/xml": true, "text/javascript": true, "application/javascript": true,
+}
 
 // normalizeContentType trusts the declared type when it is specific, sniffs
 // otherwise, and maps a few common extensions.
@@ -128,7 +154,7 @@ func normalizeContentType(declared, filename string, data []byte) string {
 		// Declared an image but the bytes disagree; keep it as a plain file.
 		ct = "application/octet-stream"
 	}
-	if ct == "" {
+	if ct == "" || activeContent[ct] {
 		ct = "application/octet-stream"
 	}
 	return ct
@@ -224,11 +250,16 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errAttachmentsDisabled)
 		return
 	}
+	if err := s.limitWrite(principalFrom(r.Context()), s.uploadLimiter); err != nil {
+		writeError(w, err)
+		return
+	}
 	thread, _, err := s.resolveThread(r, true)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
+	uploadDeadline(w)
 	var out []*store.Attachment
 	if isMultipart(r) {
 		form, err := parseMultipart(r)
@@ -302,11 +333,14 @@ func (s *Server) serveAttachment(thumb bool) http.HandlerFunc {
 		}
 		h.Set("Cache-Control", "private, max-age=31536000, immutable")
 		h.Set("X-Content-Type-Options", "nosniff")
+		// Nothing served here may run as this origin: agents upload arbitrary
+		// files, and the session cookie is what a script would steal.
+		h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 		disposition := "attachment"
-		if a.Kind == store.AttachmentImage || contentType == "application/pdf" || strings.HasPrefix(contentType, "text/") {
+		if a.Kind == store.AttachmentImage || contentType == "application/pdf" || contentType == "text/plain" {
 			disposition = "inline"
 		}
-		h.Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, name))
+		h.Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": name}))
 		if r.Method == http.MethodHead {
 			w.WriteHeader(http.StatusOK)
 			return

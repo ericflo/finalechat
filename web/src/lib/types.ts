@@ -14,6 +14,8 @@ export interface User {
 export interface Counts {
   pending_questions: number;
   unread_threads: number;
+  /** Active, unmuted threads with a pending question or unread agent messages. */
+  attention: number;
 }
 
 export type ActivityKind = "thinking" | "working" | "typing" | "waiting" | "tool";
@@ -73,6 +75,8 @@ export interface Message {
   format: "markdown" | "text";
   importance: "normal" | "important";
   meta: Record<string, unknown>;
+  /** "session" when posted from the app, "token" when an agent posted it. */
+  origin: "session" | "token" | "";
   created_at: string;
   attachments: Attachment[];
 }
@@ -87,7 +91,7 @@ export interface Answer {
   text?: string;
 }
 
-export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired";
+export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired" | "dismissed";
 
 export interface Question {
   id: string;

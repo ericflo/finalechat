@@ -259,16 +259,42 @@ func (s *Store) UpdateThread(ctx context.Context, userID, id uuid.UUID, p Thread
 	return scanThread(s.pool.QueryRow(ctx, sql, args...))
 }
 
-// SetThreadActivity records what the agent is doing. A status set while the
-// previous one is still live keeps its start time, so the app can say how
-// long the agent has been busy.
-func (s *Store) SetThreadActivity(ctx context.Context, userID, id uuid.UUID, text, kind string, ttl time.Duration) (*Thread, error) {
-	return scanThread(s.pool.QueryRow(ctx, `UPDATE threads t SET
-			activity_text = $3, activity_kind = $4, activity_at = now(),
-			activity_since = CASE WHEN t.activity_expires_at IS NOT NULL AND t.activity_expires_at > now() AND t.activity_since IS NOT NULL
-				THEN t.activity_since ELSE now() END,
-			activity_expires_at = now() + $5
-		WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns, id, userID, text, kind, ttl))
+// ActivityInput describes a status line to set.
+type ActivityInput struct {
+	Text string
+	Kind string
+	TTL  time.Duration
+	// Seq orders writes from callers that fire them concurrently: a write
+	// whose Seq is not above the live status's is ignored. Zero means unordered.
+	Seq int64
+}
+
+// activitySet is the SET fragment that records a status line; it keeps
+// activity_since while the previous status is still live so the app can say
+// how long the agent has been busy. Parameters: text, kind, ttl, seq.
+func activitySet(text, kind, ttl, seq string) string {
+	return `activity_text = ` + text + `, activity_kind = ` + kind + `, activity_at = now(),
+		activity_since = CASE WHEN t.activity_expires_at IS NOT NULL AND t.activity_expires_at > now() AND t.activity_since IS NOT NULL
+			THEN t.activity_since ELSE now() END,
+		activity_expires_at = now() + ` + ttl + `, activity_seq = GREATEST(t.activity_seq, ` + seq + `::bigint)`
+}
+
+// SetThreadActivity records what the agent is doing. It returns applied=false
+// when a newer status (by Seq) is already live, in which case the returned
+// thread carries that status.
+func (s *Store) SetThreadActivity(ctx context.Context, userID, id uuid.UUID, in ActivityInput) (thread *Thread, applied bool, err error) {
+	thread, err = scanThread(s.pool.QueryRow(ctx, `UPDATE threads t SET `+activitySet("$3", "$4", "$5", "$6")+`
+		WHERE t.id = $1 AND t.user_id = $2
+			AND ($6::bigint = 0 OR t.activity_seq < $6::bigint OR t.activity_expires_at IS NULL OR t.activity_expires_at <= now())
+		RETURNING `+threadColumns, id, userID, in.Text, in.Kind, in.TTL, in.Seq))
+	if err == nil {
+		return thread, true, nil
+	}
+	if err != ErrNotFound {
+		return nil, false, err
+	}
+	thread, err = s.GetThread(ctx, userID, id)
+	return thread, false, err
 }
 
 // ClearThreadActivity drops the status line.
@@ -295,18 +321,30 @@ func (s *Store) DeleteThread(ctx context.Context, userID, id uuid.UUID) error {
 
 // Counts summarises the inbox for badges.
 type Counts struct {
+	// PendingQuestions counts every question waiting for an answer.
 	PendingQuestions int `json:"pending_questions"`
-	UnreadThreads    int `json:"unread_threads"`
+	// UnreadThreads counts active, unmuted threads with unread agent messages.
+	UnreadThreads int `json:"unread_threads"`
+	// Attention counts active, unmuted threads that need the user: a pending
+	// question or unread agent messages. It is what the app badge shows.
+	Attention int `json:"attention"`
 }
 
 // GetCounts computes badge counts for the user.
 func (s *Store) GetCounts(ctx context.Context, userID uuid.UUID) (Counts, error) {
 	var c Counts
-	err := s.pool.QueryRow(ctx, `SELECT
-		(SELECT count(*) FROM questions WHERE user_id = $1 AND status = 'pending')::int,
-		(SELECT count(*) FROM threads t WHERE t.user_id = $1 AND t.archived_at IS NULL AND EXISTS (
-			SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.sender <> 'user' AND m.created_at > t.last_read_at))::int`, userID).
-		Scan(&c.PendingQuestions, &c.UnreadThreads)
+	err := s.pool.QueryRow(ctx, `WITH unread AS (
+			SELECT t.id FROM threads t WHERE t.user_id = $1 AND t.archived_at IS NULL AND NOT t.muted AND EXISTS (
+				SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.sender <> 'user' AND m.created_at > t.last_read_at)
+		), asked AS (
+			SELECT DISTINCT q.thread_id AS id FROM questions q JOIN threads t ON t.id = q.thread_id
+			WHERE q.user_id = $1 AND q.status = 'pending' AND t.archived_at IS NULL AND NOT t.muted
+		)
+		SELECT
+			(SELECT count(*) FROM questions WHERE user_id = $1 AND status = 'pending')::int,
+			(SELECT count(*) FROM unread)::int,
+			(SELECT count(*) FROM (SELECT id FROM unread UNION SELECT id FROM asked) x)::int`, userID).
+		Scan(&c.PendingQuestions, &c.UnreadThreads, &c.Attention)
 	return c, err
 }
 

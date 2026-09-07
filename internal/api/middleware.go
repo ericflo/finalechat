@@ -2,15 +2,31 @@ package api
 
 import (
 	"compress/gzip"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// limitWrite applies a per-token write budget. Sessions (the app) are not
+// metered: an agent loop is the failure mode, not a thumb.
+func (s *Server) limitWrite(p *principal, rl *rateLimiter) error {
+	if p == nil || p.token == nil {
+		return nil
+	}
+	if !rl.allow(p.token.ID.String()) {
+		return &apiError{Status: http.StatusTooManyRequests, Code: "rate_limited", Message: "This token is posting too fast. Slow down and retry.", RetryAfter: 5}
+	}
+	return nil
+}
 
 type statusWriter struct {
 	http.ResponseWriter
@@ -45,10 +61,33 @@ func (w *statusWriter) Flush() {
 
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
+// requestIDKey carries the request id through the context.
+const requestIDKey ctxKey = 2
+
+func requestIDFrom(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDKey).(string)
+	return id
+}
+
+func newRequestID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(b[:])
+}
+
 func (s *Server) logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		sw := &statusWriter{ResponseWriter: w}
+		// A request id ties a log line to an error body the founder pastes back.
+		rid := r.Header.Get("X-Request-Id")
+		if rid == "" || len(rid) > 64 {
+			rid = newRequestID()
+		}
+		w.Header().Set("X-Request-Id", rid)
+		r = r.WithContext(context.WithValue(r.Context(), requestIDKey, rid))
 		defer func() {
 			if rec := recover(); rec != nil {
 				if rec == http.ErrAbortHandler {
@@ -69,10 +108,18 @@ func (s *Server) logging(next http.Handler) http.Handler {
 			} else if r.URL.Path == "/api/v1/events" || strings.HasPrefix(r.URL.Path, "/assets/") {
 				level = slog.LevelDebug
 			}
-			s.log.Log(r.Context(), level, "request",
+			attrs := []any{
 				"method", r.Method, "path", r.URL.Path, "status", sw.status,
 				"bytes", sw.bytes, "duration_ms", time.Since(start).Milliseconds(),
-				"ip", s.clientIP(r), "ua", truncateUA(r.UserAgent()))
+				"ip", s.clientIP(r), "ua", truncateUA(r.UserAgent()), "request_id", rid,
+			}
+			if p := principalFrom(r.Context()); p != nil {
+				attrs = append(attrs, "user_id", p.user.ID.String())
+				if p.token != nil {
+					attrs = append(attrs, "token", p.token.Prefix)
+				}
+			}
+			s.log.Log(r.Context(), level, "request", attrs...)
 		}()
 		next.ServeHTTP(sw, r)
 	})
@@ -131,15 +178,21 @@ func (s *Server) canonicalRedirect(next http.Handler) http.Handler {
 	})
 }
 
+// clientIP is the address of the peer that reached the proxy. The proxy
+// appends it as the last X-Forwarded-For entry; anything before that was
+// supplied by the client and cannot be trusted (it is the key of the login
+// rate limiter).
 func (s *Server) clientIP(r *http.Request) string {
 	if s.cfg.TrustProxy {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if i := strings.IndexByte(xff, ','); i >= 0 {
-				xff = xff[:i]
+			if i := strings.LastIndexByte(xff, ','); i >= 0 {
+				xff = xff[i+1:]
 			}
-			return strings.TrimSpace(xff)
+			if ip := strings.TrimSpace(xff); ip != "" {
+				return ip
+			}
 		}
-		if rip := r.Header.Get("X-Real-Ip"); rip != "" {
+		if rip := strings.TrimSpace(r.Header.Get("X-Real-Ip")); rip != "" {
 			return rip
 		}
 	}
@@ -169,12 +222,26 @@ func newRateLimiter(perMinute int) *rateLimiter {
 	return rl
 }
 
+// maxBuckets bounds the limiter's memory against attacker-chosen keys.
+const maxBuckets = 10000
+
 func (rl *rateLimiter) allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 	now := time.Now()
 	b, ok := rl.buckets[key]
 	if !ok {
+		if len(rl.buckets) >= maxBuckets {
+			// Evict the stalest entry rather than grow without bound.
+			var oldest string
+			var oldestAt time.Time
+			for k, v := range rl.buckets {
+				if oldest == "" || v.last.Before(oldestAt) {
+					oldest, oldestAt = k, v.last
+				}
+			}
+			delete(rl.buckets, oldest)
+		}
 		b = &bucket{tokens: rl.capacity, last: now}
 		rl.buckets[key] = b
 	}

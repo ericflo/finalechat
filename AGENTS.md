@@ -115,8 +115,21 @@ cap keeps proxies happy; loop if you need longer.
 - Keep titles short (the project or task name); the app shows them next to
   the agent name.
 - The user can reply in the app at any time. Replies arrive as messages with
-  `"sender": "user"`; an answered question also adds a user message that
-  records the choice, so polling messages alone is enough to see everything.
+  `"sender": "user"` and `"origin": "session"`; an answered question also adds
+  a user message that records the choice, so polling messages alone is enough
+  to see everything. (A message with `"origin": "token"` was posted by an
+  agent, for example a terminal prompt mirrored into the thread; treat only
+  `session` messages as the user speaking from the app.)
+- The user can also decline a question: its `status` becomes `dismissed`.
+  Do not ask it again; proceed with your best judgement and say so.
+- Retries are safe: send an `Idempotency-Key` header (or a `client_key`
+  field) on a message or question post, and a retry after a timeout returns
+  the original with HTTP 200 and `"created": false` instead of a duplicate.
+  A key is scoped to its thread and may be any string up to 200 characters
+  (a UUID is ideal).
+- Archiving is the user's call: a plain message leaves an archived thread
+  archived (it still collects unread), while an `important` message or a
+  question brings it back to the inbox.
 - Do not post secrets, tokens or credentials.
 
 ## Screenshots and files
@@ -185,11 +198,23 @@ curl -sS https://www.finalechat.com/api/v1/threads/ext:my-session-42/activity \
 
 `kind` is `thinking`, `working` (default), `typing` (you are composing a
 reply), `waiting` (blocked on the user or on something external) or `tool`
-(a command or tool is running). The response is `{"thread": {...}}` whose
-`activity` field is `{text, kind, at, since, expires_at}`; `since` survives
-refreshes so the app can say "for 3 minutes". Clear it early with
-`DELETE /threads/{ref}/activity` or by posting `{"text": ""}`. Like messages,
-this creates a missing `ext:` thread and accepts `title` and `agent`.
+(a command or tool is running). The response is `{"thread": {...}, "applied":
+true}`; the thread's `activity` field is `{text, kind, at, since,
+expires_at}`, and `since` survives refreshes so the app can say "for 3
+minutes". Clear it early with `DELETE /threads/{ref}/activity` or by posting
+`{"text": ""}`. Unlike messages, a status never creates a thread: post a
+message first (a stray status must not litter the inbox), or the call is a
+`404`.
+
+Two details for busy agents. If you keep working after you speak, put the
+next status on the message itself so the line never blinks:
+`{"body": "Tests pass. Starting the backfill.", "activity": {"text": "Running
+the backfill…", "ttl_seconds": 120}}` (questions accept the same field; a
+message or question without it clears the status, because it is the outcome
+the status announced). If several processes write statuses at once, pass a
+monotonic `seq` (a nanosecond timestamp works); a write whose `seq` is not
+above the live status's is ignored and comes back with `"applied": false`,
+so a slow "Thinking…" can never overwrite a newer "Running tests".
 
 With the CLI: `finalechat status "Running the migration…"` (add `--ttl 120`
 for long steps, `--clear` to drop it). With MCP: `finalechat_status`.
@@ -262,9 +287,9 @@ Errors are JSON with a stable `code` and a human `message`:
 | 409 | `conflict`, `already_resolved`, `email_taken`, `no_subscriptions` |
 | 413 | `too_large` |
 | 422 | `validation_failed` |
-| 429 | `rate_limited` |
+| 429 | `rate_limited` (a token writing faster than about 120 messages, 30 questions, 30 uploads or 300 statuses a minute; wait for the `Retry-After` header) |
 | 502 | `storage_unavailable` |
-| 503 | `push_disabled`, `attachments_disabled` |
+| 503 | `push_disabled`, `attachments_disabled`, `busy` |
 | 500 | `internal_error` |
 
 Limits: JSON bodies 1 MiB; message `body` 256 KiB; question `prompt` 8000
@@ -272,8 +297,12 @@ bytes; up to 20 options with labels of 200 and descriptions of 1000
 characters; `meta` 16 KiB; `title` 300, `agent` 120, `external_id` 300
 characters; `wait` is clamped to 600 seconds; `timeout_seconds` 1 to 604800;
 attachments 10 MiB each, 8 per message; activity `text` 200 characters on
-one line with `ttl_seconds` 1 to 600. All timestamps are UTC RFC 3339; all
-ids are UUIDs.
+one line with `ttl_seconds` 1 to 600; a question with no `timeout_seconds`
+expires after 7 days. All timestamps are UTC RFC 3339; all ids are UUIDs.
+Every response carries an `X-Request-Id` header; quote it when reporting a
+problem. `GET /me` lists optional capabilities in `features` (`activity`,
+`idempotency`, `dismiss`, `push`, `attachments`) if you need to
+feature-detect a deployment.
 
 ## Cheat sheet
 
@@ -289,9 +318,9 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `PATCH /threads/{ref}` | `title`, `agent`, `archived`, `muted`, `meta` |
 | `DELETE /threads/{ref}` | Delete thread and contents |
 | `POST /threads/{ref}/read` | Mark read |
-| `POST /threads/{ref}/activity` | Set the status line (`text`, `kind`, `ttl_seconds`); empty `text` clears (creates `ext:` thread) |
+| `POST /threads/{ref}/activity` | Set the status line (`text`, `kind`, `ttl_seconds`, `seq`); empty `text` clears; never creates a thread |
 | `DELETE /threads/{ref}/activity` | Clear the status line |
-| `POST /threads/{ref}/messages` | Post a message (creates `ext:` thread); JSON with `attachments` ids, or multipart with `file` parts |
+| `POST /threads/{ref}/messages` | Post a message (creates `ext:` thread); JSON with `attachments` ids, or multipart with `file` parts; optional `activity`, `client_key` |
 | `GET /threads/{ref}/messages?after=&before=&limit=&sender=&wait=` | Read or wait for messages |
 | `GET /messages/{id}` | One message |
 | `POST /threads/{ref}/attachments` | Upload files (multipart `file` parts or a raw body) to attach later |
@@ -302,6 +331,7 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `GET /questions/{id}?wait=` | One question; optionally block until resolved |
 | `POST /questions/{id}/answer` | Answer (`selected`, `text`) |
 | `POST /questions/{id}/cancel` | Withdraw a pending question |
+| `POST /questions/{id}/dismiss` | The user declines to answer (the app calls this) |
 | `GET /events` | Server-sent events stream (`thread.activity` carries status changes) |
 | `GET /counts` | Pending questions and unread threads |
 | `GET /settings`, `PATCH /settings` | `notify_all_messages`, `remote_mode` |

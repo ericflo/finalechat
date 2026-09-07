@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/ericflo/finalechat/internal/blob"
@@ -22,27 +23,52 @@ type Server struct {
 	blobs       blob.Store
 	log         *slog.Logger
 	authLimiter *rateLimiter
-	started     time.Time
-	shutdown    chan struct{}
+	// Per-token write budgets (tokens per minute); sessions are not metered.
+	messageLimiter  *rateLimiter
+	questionLimiter *rateLimiter
+	uploadLimiter   *rateLimiter
+	activityLimiter *rateLimiter
+	started         time.Time
+	shutdown        chan struct{}
+	draining        atomic.Bool
+}
+
+// Features lists the optional capabilities agents can feature-detect on
+// GET /me and GET /auth/status.
+func (s *Server) Features() []string {
+	f := []string{"activity", "idempotency", "dismiss"}
+	if s.push.Enabled() {
+		f = append(f, "push")
+	}
+	if s.blobs != nil {
+		f = append(f, "attachments")
+	}
+	return f
 }
 
 // New wires a server. blobs may be nil, which disables attachments.
 func New(cfg config.Config, st *store.Store, b *bus.Bus, p *push.Sender, blobs blob.Store, log *slog.Logger) *Server {
 	return &Server{
-		cfg:         cfg,
-		store:       st,
-		bus:         b,
-		push:        p,
-		blobs:       blobs,
-		log:         log,
-		authLimiter: newRateLimiter(20),
-		started:     time.Now().UTC().Truncate(time.Second),
-		shutdown:    make(chan struct{}),
+		cfg:             cfg,
+		store:           st,
+		bus:             b,
+		push:            p,
+		blobs:           blobs,
+		log:             log,
+		authLimiter:     newRateLimiter(20),
+		messageLimiter:  newRateLimiter(120),
+		questionLimiter: newRateLimiter(30),
+		uploadLimiter:   newRateLimiter(30),
+		activityLimiter: newRateLimiter(300),
+		started:         time.Now().UTC().Truncate(time.Second),
+		shutdown:        make(chan struct{}),
 	}
 }
 
-// Shutdown tells long-lived connections to reconnect elsewhere.
+// Shutdown tells long-lived connections to reconnect elsewhere and makes the
+// readiness probe fail so the load balancer stops sending new traffic.
 func (s *Server) Shutdown() {
+	s.draining.Store(true)
 	select {
 	case <-s.shutdown:
 	default:
@@ -63,8 +89,18 @@ func (s *Server) Handler() http.Handler {
 		ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		defer cancel()
 		w.Header().Set("Cache-Control", "no-store")
+		if s.draining.Load() {
+			http.Error(w, "shutting down", http.StatusServiceUnavailable)
+			return
+		}
 		if err := s.store.Pool().Ping(ctx); err != nil {
 			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		// Without a live LISTEN connection this replica would serve stale
+		// silence: no events, long-polls that only end on their deadline.
+		if !s.bus.Healthy() {
+			http.Error(w, "event listener down", http.StatusServiceUnavailable)
 			return
 		}
 		_, _ = w.Write([]byte("ready\n"))
@@ -128,11 +164,14 @@ func (s *Server) Handler() http.Handler {
 	authed.HandleFunc("GET /api/v1/questions/{id}", s.handleGetQuestion)
 	authed.HandleFunc("POST /api/v1/questions/{id}/answer", s.handleAnswerQuestion)
 	authed.HandleFunc("POST /api/v1/questions/{id}/cancel", s.handleCancelQuestion)
+	authed.HandleFunc("POST /api/v1/questions/{id}/dismiss", s.handleDismissQuestion)
 
-	authed.HandleFunc("GET /api/v1/push/subscriptions", s.handleListSubscriptions)
-	authed.HandleFunc("POST /api/v1/push/subscriptions", s.handleSubscribe)
-	authed.HandleFunc("DELETE /api/v1/push/subscriptions", s.handleUnsubscribe)
-	authed.HandleFunc("POST /api/v1/push/test", s.handlePushTest)
+	// Device registration is the app's business; a leaked agent token must
+	// not be able to enroll a device that receives the user's notifications.
+	authed.HandleFunc("GET /api/v1/push/subscriptions", s.sessionOnly(s.handleListSubscriptions))
+	authed.HandleFunc("POST /api/v1/push/subscriptions", s.sessionOnly(s.handleSubscribe))
+	authed.HandleFunc("DELETE /api/v1/push/subscriptions", s.sessionOnly(s.handleUnsubscribe))
+	authed.HandleFunc("POST /api/v1/push/test", s.sessionOnly(s.handlePushTest))
 
 	authed.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &apiError{Status: http.StatusNotFound, Code: "not_found", Message: "Unknown API route. See " + s.cfg.BaseURL + "/api/ for the reference."})
@@ -156,9 +195,32 @@ func (s *Server) Handler() http.Handler {
 	return h
 }
 
-// RunMaintenance expires overdue questions and prunes sessions until ctx ends.
+// RunMaintenance runs the housekeeping loops until ctx ends. Each job has
+// its own cadence and time budget so a slow one (object storage) cannot
+// delay another (question expiry).
 func (s *Server) RunMaintenance(ctx context.Context) {
-	ticker := time.NewTicker(30 * time.Second)
+	go s.every(ctx, 10*time.Second, 10*time.Second, func(ctx context.Context) {
+		expired, err := s.store.ExpireQuestions(ctx)
+		if err != nil {
+			s.log.Error("expire questions", "err", err)
+			return
+		}
+		for _, q := range expired {
+			s.bus.Publish(ctx, bus.Event{Type: bus.QuestionExpired, UserID: q.UserID.String(), ThreadID: q.ThreadID.String(), QuestionID: q.ID.String()})
+		}
+	})
+	go s.every(ctx, 5*time.Minute, 30*time.Second, func(ctx context.Context) {
+		if _, err := s.store.DeleteExpiredSessions(ctx); err != nil {
+			s.log.Error("prune sessions", "err", err)
+		}
+	})
+	go s.every(ctx, 5*time.Minute, 4*time.Minute, s.pruneOrphanAttachments)
+	<-ctx.Done()
+}
+
+// every runs fn on a ticker with a per-run timeout until ctx ends.
+func (s *Server) every(ctx context.Context, interval, budget time.Duration, fn func(context.Context)) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -166,19 +228,8 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 			return
 		case <-ticker.C:
 		}
-		expired, err := s.store.ExpireQuestions(ctx)
-		if err != nil {
-			if ctx.Err() == nil {
-				s.log.Error("expire questions", "err", err)
-			}
-			continue
-		}
-		for _, q := range expired {
-			s.bus.Publish(ctx, bus.Event{Type: bus.QuestionExpired, UserID: q.UserID.String(), ThreadID: q.ThreadID.String(), QuestionID: q.ID.String()})
-		}
-		if _, err := s.store.DeleteExpiredSessions(ctx); err != nil && ctx.Err() == nil {
-			s.log.Error("prune sessions", "err", err)
-		}
-		s.pruneOrphanAttachments(ctx)
+		runCtx, cancel := context.WithTimeout(ctx, budget)
+		fn(runCtx)
+		cancel()
 	}
 }

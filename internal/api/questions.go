@@ -27,7 +27,17 @@ type questionRequest struct {
 	Meta           json.RawMessage        `json:"meta"`
 	Title          string                 `json:"title"`
 	Agent          string                 `json:"agent"`
+	// Activity keeps a status line on the thread while the agent waits (it
+	// may keep working); absent, asking clears the status.
+	Activity *activityBody `json:"activity"`
+	// ClientKey (or the Idempotency-Key header) makes a retried ask return
+	// the first question instead of a duplicate.
+	ClientKey string `json:"client_key"`
 }
+
+// defaultQuestionLifetime bounds a question whose asker set no timeout, so a
+// question from an agent that died cannot stay pending forever.
+const defaultQuestionLifetime = 7 * 24 * time.Hour
 
 func (req *questionRequest) validate() (store.QuestionInput, error) {
 	var in store.QuestionInput
@@ -71,18 +81,29 @@ func (req *questionRequest) validate() (store.QuestionInput, error) {
 		in.AllowFreeform = true
 	}
 	in.MultiSelect = req.MultiSelect.Set && req.MultiSelect.Value
+	lifetime := defaultQuestionLifetime
 	if req.TimeoutSeconds != nil {
 		if *req.TimeoutSeconds < 1 || *req.TimeoutSeconds > 7*86400 {
 			return in, errValidation("timeout_seconds must be between 1 and 604800.")
 		}
-		t := time.Now().Add(time.Duration(*req.TimeoutSeconds) * time.Second)
-		in.ExpiresAt = &t
+		lifetime = time.Duration(*req.TimeoutSeconds) * time.Second
 	}
+	t := time.Now().Add(lifetime)
+	in.ExpiresAt = &t
 	meta, err := metaFrom(req.Meta)
 	if err != nil {
 		return in, err
 	}
 	in.Meta = meta
+	if req.Activity != nil {
+		if in.Activity, err = parseActivity(*req.Activity); err != nil {
+			return in, err
+		}
+	}
+	if len(req.ClientKey) > 200 {
+		return in, errValidation("client_key must be at most 200 characters.")
+	}
+	in.ClientKey = req.ClientKey
 	return in, nil
 }
 
@@ -94,8 +115,15 @@ func (s *Server) handleCreateQuestion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if k := strings.TrimSpace(r.Header.Get("Idempotency-Key")); k != "" {
+		req.ClientKey = k
+	}
 	in, err := req.validate()
 	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.limitWrite(p, s.questionLimiter); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -133,18 +161,22 @@ func (s *Server) handleCreateQuestion(w http.ResponseWriter, r *http.Request) {
 		events, cancel = s.bus.Subscribe(p.user.ID.String())
 		defer cancel()
 	}
-	q, thread, err := s.store.CreateQuestion(r.Context(), p.user.ID, thread.ID, in)
+	q, thread, created, err := s.store.CreateQuestion(r.Context(), p.user.ID, thread.ID, in)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	s.bus.Publish(r.Context(), bus.Event{Type: bus.QuestionCreated, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), QuestionID: q.ID.String()})
-	s.notifyQuestion(thread, q)
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+		s.bus.Publish(context.WithoutCancel(r.Context()), bus.Event{Type: bus.QuestionCreated, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), QuestionID: q.ID.String()})
+		s.notifyQuestion(thread, q)
+	}
 
 	if wait > 0 {
 		q = s.awaitQuestion(r, events, q, wait)
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"question": q, "thread": thread})
+	writeJSON(w, status, map[string]any{"question": q, "thread": thread, "created": created})
 }
 
 // awaitQuestion blocks until the question leaves the pending state or the
@@ -153,7 +185,7 @@ func (s *Server) awaitQuestion(r *http.Request, events <-chan bus.Event, q *stor
 	p := principalFrom(r.Context())
 	deadline := time.Now().Add(wait)
 	for q.Status == store.QuestionPending {
-		matched := waitForEvent(r.Context(), events, deadline, func(ev bus.Event) bool {
+		matched := s.waitForEvent(r.Context(), events, deadline, func(ev bus.Event) bool {
 			return ev.QuestionID == q.ID.String() && ev.Type != bus.QuestionCreated
 		})
 		latest, err := s.store.GetQuestion(r.Context(), p.user.ID, q.ID)
@@ -171,7 +203,7 @@ func (s *Server) notifyQuestion(thread *store.Thread, q *store.Question) {
 	if thread.Muted || !s.push.Enabled() {
 		return
 	}
-	counts, _ := s.store.GetCounts(context.Background(), thread.UserID)
+	badge := s.badge(context.Background(), thread.UserID)
 	options := make([]string, 0, len(q.Options))
 	for _, o := range q.Options {
 		options = append(options, o.Label)
@@ -186,7 +218,7 @@ func (s *Server) notifyQuestion(thread *store.Thread, q *store.Question) {
 		QuestionID: q.ID.String(),
 		Options:    options,
 		Important:  true,
-		Badge:      counts.PendingQuestions + counts.UnreadThreads,
+		Badge:      badge,
 	})
 }
 
@@ -226,9 +258,9 @@ func (s *Server) handleListQuestions(w http.ResponseWriter, r *http.Request) {
 	qs := r.URL.Query()
 	status := qs.Get("status")
 	switch status {
-	case "", store.QuestionPending, store.QuestionAnswered, store.QuestionCancelled, store.QuestionExpired:
+	case "", store.QuestionPending, store.QuestionAnswered, store.QuestionCancelled, store.QuestionExpired, store.QuestionDismissed:
 	default:
-		writeError(w, errValidation("status must be pending, answered, cancelled or expired."))
+		writeError(w, errValidation("status must be pending, answered, cancelled, expired or dismissed."))
 		return
 	}
 	var threadID *uuid.UUID
@@ -343,45 +375,13 @@ func (s *Server) handleAnswerQuestion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errValidation("Choose an option or write a reply."))
 		return
 	}
-	answered, err := s.store.AnswerQuestion(r.Context(), p.user.ID, id, store.Answer{Selected: selected, Text: req.Text})
-	if err != nil {
-		writeError(w, err)
-		return
+	origin := store.OriginToken
+	if !p.viaToken() {
+		origin = store.OriginSession
 	}
-	// Record the answer in the thread as a user message so the transcript reads
-	// naturally and agents that only poll messages still see it.
-	var body strings.Builder
-	if len(selected) > 0 {
-		body.WriteString(strings.Join(selected, ", "))
-	}
-	if req.Text != "" {
-		if body.Len() > 0 {
-			body.WriteString(" — ")
-		}
-		body.WriteString(req.Text)
-	}
-	msg, thread, err := s.store.CreateMessage(r.Context(), p.user.ID, answered.ThreadID, store.MessageInput{
-		Sender: store.SenderUser, Body: body.String(), Format: "text", Importance: store.ImportanceNormal,
-		Meta: store.JSON{"question_id": answered.ID.String(), "kind": "answer"},
-	})
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	s.bus.Publish(r.Context(), bus.Event{Type: bus.QuestionAnswered, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), QuestionID: answered.ID.String()})
-	s.bus.Publish(r.Context(), bus.Event{Type: bus.MessageCreated, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), MessageID: msg.ID.String()})
-	writeJSON(w, http.StatusOK, map[string]any{"question": answered, "message": msg, "thread": thread})
-}
-
-// POST /api/v1/questions/{id}/cancel
-func (s *Server) handleCancelQuestion(w http.ResponseWriter, r *http.Request) {
-	p := principalFrom(r.Context())
-	id, err := parseUUID(r.PathValue("id"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	q, err := s.store.CancelQuestion(r.Context(), p.user.ID, id)
+	// The answer, its transcript message (so agents that only poll messages
+	// still see it) and the thread bump commit together; the events follow.
+	answered, msg, thread, err := s.store.AnswerQuestion(r.Context(), p.user.ID, id, store.Answer{Selected: selected, Text: req.Text}, origin)
 	if errors.Is(err, store.ErrInvalidState) {
 		writeError(w, &apiError{Status: http.StatusConflict, Code: "already_resolved", Message: "This question has already been resolved."})
 		return
@@ -390,6 +390,50 @@ func (s *Server) handleCancelQuestion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	s.bus.Publish(r.Context(), bus.Event{Type: bus.QuestionCancelled, UserID: p.user.ID.String(), ThreadID: q.ThreadID.String(), QuestionID: q.ID.String()})
+	decorate(msg)
+	bg := context.WithoutCancel(r.Context())
+	s.bus.Publish(bg, bus.Event{Type: bus.QuestionAnswered, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), QuestionID: answered.ID.String()})
+	s.bus.Publish(bg, bus.Event{Type: bus.MessageCreated, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), MessageID: msg.ID.String()})
+	writeJSON(w, http.StatusOK, map[string]any{"question": answered, "message": msg, "thread": thread})
+}
+
+// POST /api/v1/questions/{id}/cancel
+//
+// The agent withdraws a question it no longer needs answered.
+func (s *Server) handleCancelQuestion(w http.ResponseWriter, r *http.Request) {
+	s.resolveQuestion(w, r, store.QuestionCancelled)
+}
+
+// POST /api/v1/questions/{id}/dismiss
+//
+// The user declines to answer; the agent sees status "dismissed".
+func (s *Server) handleDismissQuestion(w http.ResponseWriter, r *http.Request) {
+	s.resolveQuestion(w, r, store.QuestionDismissed)
+}
+
+func (s *Server) resolveQuestion(w http.ResponseWriter, r *http.Request, status string) {
+	p := principalFrom(r.Context())
+	id, err := parseUUID(r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var q *store.Question
+	eventType := bus.QuestionCancelled
+	if status == store.QuestionDismissed {
+		q, err = s.store.DismissQuestion(r.Context(), p.user.ID, id)
+		eventType = bus.QuestionDismissed
+	} else {
+		q, err = s.store.CancelQuestion(r.Context(), p.user.ID, id)
+	}
+	if errors.Is(err, store.ErrInvalidState) {
+		writeError(w, &apiError{Status: http.StatusConflict, Code: "already_resolved", Message: "This question has already been resolved."})
+		return
+	}
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	s.bus.Publish(context.WithoutCancel(r.Context()), bus.Event{Type: eventType, UserID: p.user.ID.String(), ThreadID: q.ThreadID.String(), QuestionID: q.ID.String()})
 	writeJSON(w, http.StatusOK, map[string]any{"question": q})
 }

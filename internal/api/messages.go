@@ -31,6 +31,13 @@ type messageRequest struct {
 	Agent string `json:"agent"`
 	// Attachments are ids of pending uploads in the same thread.
 	Attachments []string `json:"attachments"`
+	// Activity sets the thread's status line in the same transaction, for an
+	// agent that keeps working after it speaks. Absent, an agent message
+	// clears the status.
+	Activity *activityBody `json:"activity"`
+	// ClientKey (or the Idempotency-Key header) makes a retried post return
+	// the first message instead of a duplicate.
+	ClientKey string `json:"client_key"`
 }
 
 // POST /api/v1/threads/{thread}/messages
@@ -44,6 +51,7 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	var form *multipart.Form
 	if isMultipart(r) {
 		var err error
+		uploadDeadline(w)
 		form, err = parseMultipart(r)
 		if err != nil {
 			writeError(w, err)
@@ -67,8 +75,24 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		if ids := v("attachments"); ids != "" {
 			req.Attachments = strings.Split(ids, ",")
 		}
+		if a := v("activity"); a != "" {
+			var body activityBody
+			if err := json.Unmarshal([]byte(a), &body); err != nil {
+				writeError(w, errValidation("activity must be a JSON object."))
+				return
+			}
+			req.Activity = &body
+		}
+		req.ClientKey = v("client_key")
 	} else if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
+		return
+	}
+	if k := strings.TrimSpace(r.Header.Get("Idempotency-Key")); k != "" {
+		req.ClientKey = k
+	}
+	if len(req.ClientKey) > 200 {
+		writeError(w, errValidation("client_key must be at most 200 characters."))
 		return
 	}
 	hasFiles := form != nil && len(form.File) > 0
@@ -117,6 +141,17 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	var activity *store.ActivityInput
+	if req.Activity != nil {
+		if activity, err = parseActivity(*req.Activity); err != nil {
+			writeError(w, err)
+			return
+		}
+	}
+	if err := s.limitWrite(p, s.messageLimiter); err != nil {
+		writeError(w, err)
+		return
+	}
 	attachmentIDs := make([]uuid.UUID, 0, len(req.Attachments))
 	for _, raw := range req.Attachments {
 		raw = strings.TrimSpace(raw)
@@ -161,8 +196,14 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errValidation("At most %d attachments per message.", store.MaxAttachmentsPerMessage))
 		return
 	}
-	msg, thread, err := s.store.CreateMessage(r.Context(), p.user.ID, thread.ID, store.MessageInput{
+	origin := store.OriginToken
+	if !p.viaToken() {
+		origin = store.OriginSession
+	}
+	msg, thread, created, err := s.store.CreateMessage(r.Context(), p.user.ID, thread.ID, store.MessageInput{
 		Sender: req.Sender, Body: req.Body, Format: req.Format, Importance: req.Importance, Meta: meta, AttachmentIDs: attachmentIDs,
+		Origin: origin, MarkRead: req.Sender == store.SenderUser && origin == store.OriginSession,
+		ClientKey: req.ClientKey, Activity: activity,
 	})
 	if errors.Is(err, store.ErrNotFound) && len(attachmentIDs) > 0 {
 		writeError(w, errValidation("One or more attachments are unknown, belong to another thread, or are already attached."))
@@ -173,9 +214,15 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decorate(msg)
-	s.bus.Publish(r.Context(), bus.Event{Type: bus.MessageCreated, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), MessageID: msg.ID.String()})
-	s.notifyMessage(r.Context(), p.user, thread, msg, req.Notify.ptr())
-	writeJSON(w, http.StatusCreated, map[string]any{"message": msg, "thread": thread})
+	if !created {
+		// A retry of a post that already landed: nothing new to announce.
+		writeJSON(w, http.StatusOK, map[string]any{"message": msg, "thread": thread, "created": false})
+		return
+	}
+	bg := context.WithoutCancel(r.Context())
+	s.bus.Publish(bg, bus.Event{Type: bus.MessageCreated, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), MessageID: msg.ID.String()})
+	s.notifyMessage(bg, p.user, thread, msg, req.Notify.ptr())
+	writeJSON(w, http.StatusCreated, map[string]any{"message": msg, "thread": thread, "created": true})
 }
 
 // notifyMessage applies the notification policy for a new message.
@@ -190,7 +237,7 @@ func (s *Server) notifyMessage(ctx context.Context, user *store.User, thread *st
 	if !should {
 		return
 	}
-	counts, _ := s.store.GetCounts(ctx, user.ID)
+	badge := s.badge(ctx, user.ID)
 	body := store.Preview(msg.Body)
 	if len(msg.Attachments) > 0 {
 		label := "📎 Attachment"
@@ -212,8 +259,20 @@ func (s *Server) notifyMessage(ctx context.Context, user *store.User, thread *st
 		ThreadID:  thread.ID.String(),
 		MessageID: msg.ID.String(),
 		Important: msg.Importance == store.ImportanceImportant,
-		Badge:     counts.PendingQuestions + counts.UnreadThreads,
+		Badge:     badge,
 	})
+}
+
+// badge is the app-icon count to send with a notification, or nil when the
+// count is unknown (a nil badge leaves the icon alone; a zero would clear it).
+func (s *Server) badge(ctx context.Context, userID uuid.UUID) *int {
+	counts, err := s.store.GetCounts(ctx, userID)
+	if err != nil {
+		s.log.Warn("badge counts", "err", err)
+		return nil
+	}
+	n := counts.Attention
+	return &n
 }
 
 func threadTitle(t *store.Thread) string {
@@ -298,7 +357,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"messages": msgs, "has_more": hasMore, "thread_id": thread.ID})
 			return
 		}
-		if !waitForEvent(r.Context(), events, deadline, func(ev bus.Event) bool {
+		if !s.waitForEvent(r.Context(), events, deadline, func(ev bus.Event) bool {
 			return ev.Type == bus.MessageCreated && ev.ThreadID == thread.ID.String()
 		}) {
 			writeJSON(w, http.StatusOK, map[string]any{"messages": []any{}, "has_more": false, "thread_id": thread.ID, "timed_out": true})
@@ -307,17 +366,29 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// waitForEvent blocks until an event matching pred arrives, the deadline
-// passes, or the request is cancelled. It returns true when an event matched.
-func waitForEvent(ctx context.Context, events <-chan bus.Event, deadline time.Time, pred func(bus.Event) bool) bool {
+// requeryFloor bounds how long a long-poll trusts the event bus before it
+// looks at the database again, so a lost notification costs seconds rather
+// than the whole wait.
+const requeryFloor = 10 * time.Second
+
+// waitForEvent blocks until an event matching pred arrives or the re-query
+// floor elapses (both return true: look again), or until the deadline
+// passes, the request is cancelled, or the server is shutting down (false).
+func (s *Server) waitForEvent(ctx context.Context, events <-chan bus.Event, deadline time.Time, pred func(bus.Event) bool) bool {
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
+	floor := time.NewTimer(requeryFloor)
+	defer floor.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return false
+		case <-s.shutdown:
+			return false
 		case <-timer.C:
 			return false
+		case <-floor.C:
+			return true
 		case ev, ok := <-events:
 			if !ok {
 				return false

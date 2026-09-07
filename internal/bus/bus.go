@@ -26,7 +26,14 @@ type Event struct {
 	MessageID  string    `json:"message_id,omitempty"`
 	QuestionID string    `json:"question_id,omitempty"`
 	At         time.Time `json:"at"`
+	// Activity carries a thread's status line inline (it is small and
+	// frequent) so consumers need no database round trip; "null" clears.
+	Activity json.RawMessage `json:"activity,omitempty"`
 }
+
+// listenerStaleAfter is how long the bus may go without a live LISTEN
+// connection before it reports itself unhealthy.
+const listenerStaleAfter = 15 * time.Second
 
 // Event types.
 const (
@@ -39,6 +46,7 @@ const (
 	QuestionAnswered  = "question.answered"
 	QuestionCancelled = "question.cancelled"
 	QuestionExpired   = "question.expired"
+	QuestionDismissed = "question.dismissed"
 	SettingsUpdated   = "settings.updated"
 )
 
@@ -54,15 +62,44 @@ type Bus struct {
 
 	mu   sync.RWMutex
 	subs map[*subscriber]struct{}
+
+	state        sync.Mutex
+	connected    bool
+	disconnected time.Time // when the listener last went down
 }
 
 // New creates a bus backed by the pool.
 func New(pool *pgxpool.Pool, log *slog.Logger) *Bus {
-	return &Bus{pool: pool, log: log, subs: map[*subscriber]struct{}{}}
+	return &Bus{pool: pool, log: log, subs: map[*subscriber]struct{}{}, disconnected: time.Now()}
+}
+
+// Healthy reports whether the LISTEN connection is up, or went down recently
+// enough that a reconnect is still expected to catch up.
+func (b *Bus) Healthy() bool {
+	b.state.Lock()
+	defer b.state.Unlock()
+	return b.connected || time.Since(b.disconnected) < listenerStaleAfter
+}
+
+func (b *Bus) setConnected(up bool) {
+	b.state.Lock()
+	defer b.state.Unlock()
+	if b.connected && !up {
+		b.disconnected = time.Now()
+	}
+	b.connected = up
+}
+
+func (b *Bus) isConnected() bool {
+	b.state.Lock()
+	defer b.state.Unlock()
+	return b.connected
 }
 
 // Publish delivers an event to every replica. It is safe to call from within
-// request handlers after the corresponding transaction has committed.
+// request handlers after the corresponding transaction has committed; the
+// caller's context may already be cancelled (the client hung up), so the
+// publish runs on a detached one.
 func (b *Bus) Publish(ctx context.Context, ev Event) {
 	if ev.At.IsZero() {
 		ev.At = time.Now().UTC()
@@ -72,9 +109,15 @@ func (b *Bus) Publish(ctx context.Context, ev Event) {
 		b.log.Error("marshal event", "err", err)
 		return
 	}
-	if _, err := b.pool.Exec(ctx, "SELECT pg_notify($1, $2)", channel, string(payload)); err != nil {
-		b.log.Error("publish event", "err", err, "type", ev.Type)
-		// Fall back to local delivery so at least this replica's clients see it.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, err = b.pool.Exec(ctx, "SELECT pg_notify($1, $2)", channel, string(payload))
+	if err != nil {
+		b.log.Error("publish event", "err", err, "type", ev.Type, "thread_id", ev.ThreadID)
+	}
+	// Without a live listener the notification would never come back to this
+	// replica; deliver locally so its own clients still see it.
+	if err != nil || !b.isConnected() {
 		b.dispatch(ev)
 	}
 }
@@ -105,6 +148,11 @@ func (b *Bus) dispatch(ev Event) {
 		if s.userID != ev.UserID {
 			continue
 		}
+		// Status lines are frequent and disposable: never let them crowd out
+		// a message or a question on a subscriber that is falling behind.
+		if ev.Type == ThreadActivity && len(s.ch) > cap(s.ch)/2 {
+			continue
+		}
 		select {
 		case s.ch <- ev:
 		default:
@@ -119,10 +167,11 @@ func (b *Bus) Run(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		err := b.listen(ctx)
+		b.setConnected(false)
 		if ctx.Err() != nil {
 			return
 		}
-		b.log.Warn("event listener disconnected", "err", err, "retry_in", backoff)
+		b.log.Error("event listener disconnected", "err", err, "retry_in", backoff)
 		select {
 		case <-ctx.Done():
 			return
@@ -148,6 +197,7 @@ func (b *Bus) listen(ctx context.Context) error {
 	if _, err := raw.Exec(ctx, "LISTEN "+channel); err != nil {
 		return err
 	}
+	b.setConnected(true)
 	b.log.Info("event listener connected")
 	for {
 		notification, err := raw.WaitForNotification(ctx)

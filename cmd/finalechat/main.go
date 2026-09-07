@@ -88,7 +88,9 @@ func run() error {
 		err := b2.Ping(pingCtx)
 		cancel()
 		if err != nil {
-			return fmt.Errorf("attachment storage: %w", err)
+			// Messages and questions must not depend on object storage being
+			// up at the moment a pod starts; uploads authorize lazily.
+			log.Error("attachment storage unreachable at start; continuing", "err", err)
 		}
 		blobs = b2
 	case "memory":
@@ -130,6 +132,12 @@ func run() error {
 	}
 	log.Info("shutting down")
 	srv.Shutdown()
+	// Readiness now fails; give the load balancer a moment to notice before
+	// connections are refused.
+	select {
+	case <-time.After(cfg.ShutdownDelay):
+	case <-errCh:
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {

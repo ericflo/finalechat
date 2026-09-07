@@ -499,7 +499,7 @@
           "Events"
         ],
         "summary": "Server-sent events stream",
-        "description": "text/event-stream of `ready`, `thread.created`, `thread.updated`, `thread.deleted, thread.activity ({at, thread}; no counts)`, `message.created`, `question.created`, `question.answered`, `question.cancelled`, `question.expired`, `settings.updated` and `reconnect` events. Each data payload carries the full current objects (`thread`, `message`, `question`, `settings`) plus `counts` and `at`. A `: ping` comment is sent every 20 seconds.",
+        "description": "text/event-stream of `ready`, `thread.created`, `thread.updated`, `thread.deleted, thread.activity ({at, thread_id, activity}; no thread, no counts), question.dismissed, ping ({at} every 20 seconds)`, `message.created`, `question.created`, `question.answered`, `question.cancelled`, `question.expired`, `settings.updated` and `reconnect` events. Each data payload carries the full current objects (`thread`, `message`, `question`, `settings`) plus `counts` and `at`. A `: ping` comment is sent every 20 seconds.",
         "responses": {
           "200": {
             "description": "Event stream.",
@@ -1351,8 +1351,8 @@
         "tags": [
           "Threads"
         ],
-        "summary": "Set the agent's status line (creates a missing ext: thread)",
-        "description": "What the agent is doing right now, shown in the app as a typing indicator with a timer. Lapses after ttl_seconds unless set again and is dropped when the agent posts a message or question. Never notifies and does not bump last_activity_at. Emits thread.activity. PUT is accepted as an alias.",
+        "summary": "Set the agent's status line (never creates a thread)",
+        "description": "What the agent is doing right now, shown in the app as a typing indicator with a timer. Lapses after ttl_seconds unless set again and is dropped when the agent posts a message or question without its own activity field. Never notifies, does not bump last_activity_at, and returns 404 for an unknown thread. Emits thread.activity. PUT is accepted as an alias.",
         "parameters": [
           {
             "name": "ref",
@@ -1384,7 +1384,7 @@
         },
         "responses": {
           "200": {
-            "description": "The thread; `thread.activity` is the new status or null.",
+            "description": "The thread; applied is false when the write was ignored (stale seq or an unchanged repeat).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1392,6 +1392,9 @@
                   "properties": {
                     "thread": {
                       "$ref": "#/components/schemas/Thread"
+                    },
+                    "applied": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -1423,6 +1426,16 @@
           },
           "422": {
             "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (see Retry-After)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1683,6 +1696,16 @@
                 "value": "ext:claude-code:7f3a9c2e"
               }
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "Same as the client_key body field."
           }
         ],
         "requestBody": {
@@ -1719,6 +1742,10 @@
                     },
                     "thread": {
                       "$ref": "#/components/schemas/Thread"
+                    },
+                    "created": {
+                      "type": "boolean",
+                      "description": "False when an idempotency key matched an earlier post (then the status is 200)."
                     }
                   },
                   "required": [
@@ -1824,6 +1851,42 @@
           },
           "503": {
             "description": "Attachments are not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "An earlier post with the same idempotency key; the original is returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "$ref": "#/components/schemas/Message"
+                    },
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    },
+                    "created": {
+                      "type": "boolean",
+                      "description": "False when an idempotency key matched an earlier post (then the status is 200)."
+                    }
+                  },
+                  "required": [
+                    "message",
+                    "thread"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (see Retry-After)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1963,6 +2026,16 @@
               "maximum": 600
             },
             "description": "Seconds to hold the request open for the answer; also accepted as the `wait` body field. Clamped to 600."
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "Same as the client_key body field."
           }
         ],
         "requestBody": {
@@ -1988,6 +2061,10 @@
                     },
                     "thread": {
                       "$ref": "#/components/schemas/Thread"
+                    },
+                    "created": {
+                      "type": "boolean",
+                      "description": "False when an idempotency key matched an earlier post (then the status is 200)."
                     }
                   },
                   "required": [
@@ -2080,6 +2157,42 @@
           },
           "422": {
             "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "An earlier post with the same idempotency key; the original is returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "$ref": "#/components/schemas/Question"
+                    },
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    },
+                    "created": {
+                      "type": "boolean",
+                      "description": "False when an idempotency key matched an earlier post (then the status is 200)."
+                    }
+                  },
+                  "required": [
+                    "question",
+                    "thread"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (see Retry-After)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2568,6 +2681,103 @@
           "Questions"
         ],
         "summary": "Withdraw a pending question",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Question id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cancelled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "question": {
+                      "$ref": "#/components/schemas/Question"
+                    }
+                  },
+                  "required": [
+                    "question"
+                  ]
+                },
+                "example": {
+                  "question": {
+                    "id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4",
+                    "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                    "prompt": "Staging looks good. Promote to production?",
+                    "options": [
+                      {
+                        "label": "Ship it",
+                        "description": "Promote the same image"
+                      },
+                      {
+                        "label": "Hold",
+                        "description": "Wait for me to look"
+                      }
+                    ],
+                    "allow_freeform": true,
+                    "multi_select": false,
+                    "status": "cancelled",
+                    "answer": null,
+                    "meta": {},
+                    "created_at": "2026-09-07T05:38:55.043799Z",
+                    "answered_at": "2026-09-07T05:39:05.920678Z",
+                    "expires_at": "2026-09-07T06:38:55.043382Z"
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Question was not pending (`invalid_state`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/questions/{id}/dismiss": {
+      "post": {
+        "tags": [
+          "Questions"
+        ],
+        "summary": "Decline to answer (the app's counterpart of cancel)",
+        "description": "The user declines; status becomes dismissed and the agent's wait returns. Emits question.dismissed.",
         "parameters": [
           {
             "name": "id",
@@ -3539,6 +3749,7 @@
       "Counts": {
         "type": "object",
         "required": [
+          "attention",
           "pending_questions",
           "unread_threads"
         ],
@@ -3548,12 +3759,17 @@
           },
           "unread_threads": {
             "type": "integer",
-            "description": "Active threads with at least one unread non-user message."
+            "description": "Active, unmuted threads with unread agent messages."
+          },
+          "attention": {
+            "type": "integer",
+            "description": "Active, unmuted threads with a pending question or unread agent messages; the app badge."
           }
         },
         "example": {
           "pending_questions": 1,
-          "unread_threads": 3
+          "unread_threads": 3,
+          "attention": 3
         }
       },
       "Thread": {
@@ -3703,7 +3919,8 @@
           "importance",
           "meta",
           "created_at",
-          "attachments"
+          "attachments",
+          "origin"
         ],
         "properties": {
           "id": {
@@ -3755,6 +3972,15 @@
               "$ref": "#/components/schemas/Attachment"
             },
             "description": "Files carried by the message, in upload order."
+          },
+          "origin": {
+            "type": "string",
+            "enum": [
+              "",
+              "session",
+              "token"
+            ],
+            "description": "session when the app posted it, token when an agent did; empty on rows from before this field existed."
           }
         },
         "example": {
@@ -3766,7 +3992,8 @@
           "importance": "important",
           "meta": {},
           "created_at": "2026-09-07T05:38:55.033453Z",
-          "attachments": []
+          "attachments": [],
+          "origin": "token"
         }
       },
       "QuestionOption": {
@@ -3852,7 +4079,8 @@
               "pending",
               "answered",
               "cancelled",
-              "expired"
+              "expired",
+              "dismissed"
             ]
           },
           "answer": {
@@ -3887,7 +4115,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "UTC RFC 3339 timestamp."
+            "description": "When the question expires; set from timeout_seconds, or 7 days after creation when omitted."
           }
         },
         "example": {
@@ -4067,6 +4295,15 @@
             },
             "maxItems": 8,
             "description": "Ids of pending uploads from the same thread (POST /threads/{ref}/attachments). An unknown, foreign or already attached id fails with 422."
+          },
+          "activity": {
+            "$ref": "#/components/schemas/ActivityRequest",
+            "description": "Set the thread's status line in the same request (for an agent that keeps working). Absent, the post clears the status."
+          },
+          "client_key": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Idempotency key scoped to the thread (the Idempotency-Key header is equivalent): a repeat returns the original with 200 and created=false."
           }
         },
         "example": {
@@ -4125,6 +4362,15 @@
           "agent": {
             "type": "string",
             "description": "Applied only when this request creates the ext: thread."
+          },
+          "activity": {
+            "$ref": "#/components/schemas/ActivityRequest",
+            "description": "Set the thread's status line in the same request (for an agent that keeps working). Absent, the post clears the status."
+          },
+          "client_key": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Idempotency key scoped to the thread (the Idempotency-Key header is equivalent): a repeat returns the original with 200 and created=false."
           }
         },
         "example": {
@@ -4265,6 +4511,13 @@
           "attachments_enabled": {
             "type": "boolean",
             "description": "Whether files can be uploaded."
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional capabilities: activity, idempotency, dismiss, push, attachments."
           }
         },
         "example": {
@@ -4316,6 +4569,13 @@
           "attachments_enabled": {
             "type": "boolean",
             "description": "Whether files can be uploaded."
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional capabilities: activity, idempotency, dismiss, push, attachments."
           }
         },
         "example": {
@@ -4532,6 +4792,14 @@
             },
             "maxItems": 8,
             "description": "File parts (any field name works). At most 10 MiB each, 8 per message including pending ids."
+          },
+          "activity": {
+            "type": "string",
+            "description": "JSON-encoded ActivityRequest."
+          },
+          "client_key": {
+            "type": "string",
+            "maxLength": 200
           }
         }
       },
@@ -4614,15 +4882,9 @@
             "default": 45,
             "description": "Seconds until the status lapses unless set again."
           },
-          "title": {
-            "type": "string",
-            "maxLength": 300,
-            "description": "Title for a freshly created ext: thread."
-          },
-          "agent": {
-            "type": "string",
-            "maxLength": 120,
-            "description": "Agent name for a freshly created ext: thread."
+          "seq": {
+            "type": "integer",
+            "description": "Optional ordering for concurrent writers; a write whose seq is not above the live status's is ignored (applied=false)."
           }
         },
         "example": {

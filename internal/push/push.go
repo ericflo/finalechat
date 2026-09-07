@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -35,8 +36,9 @@ type Notification struct {
 	Options []string `json:"options,omitempty"`
 	// Important asks for a more insistent presentation.
 	Important bool `json:"important,omitempty"`
-	// Badge is the app icon badge count after this notification.
-	Badge int `json:"badge"`
+	// Badge is the app icon badge count after this notification; nil when
+	// unknown, which leaves the badge alone.
+	Badge *int `json:"badge,omitempty"`
 }
 
 // Sender pushes notifications.
@@ -116,6 +118,40 @@ func (s *Sender) Send(userID uuid.UUID, n Notification) {
 }
 
 func (s *Sender) deliver(ctx context.Context, sub *store.PushSubscription, payload []byte, urgency webpush.Urgency, ttl int) {
+	// Push services have transient bad moments; a question notification is
+	// worth a few retries before it is given up on.
+	delay := time.Second
+	for attempt := 1; ; attempt++ {
+		outcome, retryAfter := s.attempt(ctx, sub, payload, urgency, ttl)
+		if outcome != retry || attempt >= 3 || ctx.Err() != nil {
+			if outcome == retry {
+				s.log.Warn("push undelivered", "endpoint", shorten(sub.Endpoint), "attempts", attempt)
+			}
+			return
+		}
+		wait := delay
+		if retryAfter > wait {
+			wait = retryAfter
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		delay *= 3
+	}
+}
+
+type outcome int
+
+const (
+	delivered outcome = iota
+	rejected          // the subscription is bad; counted toward removal
+	gone              // the service says it no longer exists; removed
+	retry             // transient; try again
+)
+
+func (s *Sender) attempt(ctx context.Context, sub *store.PushSubscription, payload []byte, urgency webpush.Urgency, ttl int) (outcome, time.Duration) {
 	resp, err := webpush.SendNotificationWithContext(ctx, payload, &webpush.Subscription{
 		Endpoint: sub.Endpoint,
 		Keys:     webpush.Keys{P256dh: sub.P256DH, Auth: sub.Auth},
@@ -129,8 +165,7 @@ func (s *Sender) deliver(ctx context.Context, sub *store.PushSubscription, paylo
 	})
 	if err != nil {
 		s.log.Warn("push delivery failed", "endpoint", shorten(sub.Endpoint), "err", err)
-		_ = s.store.RecordPushResult(ctx, sub.ID, false)
-		return
+		return retry, 0
 	}
 	defer resp.Body.Close()
 	var body bytes.Buffer
@@ -138,15 +173,25 @@ func (s *Sender) deliver(ctx context.Context, sub *store.PushSubscription, paylo
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		_ = s.store.RecordPushResult(ctx, sub.ID, true)
+		return delivered, 0
 	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
 		s.log.Info("push subscription gone; removing", "endpoint", shorten(sub.Endpoint), "status", resp.StatusCode)
 		_ = s.store.DeletePushSubscriptionByID(ctx, sub.ID)
+		return gone, 0
+	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+		s.log.Warn("push service busy", "endpoint", shorten(sub.Endpoint), "status", resp.StatusCode, "body", body.String())
+		var after time.Duration
+		if v, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && v > 0 && v <= 60 {
+			after = time.Duration(v) * time.Second
+		}
+		return retry, after
 	default:
 		s.log.Warn("push service rejected notification", "endpoint", shorten(sub.Endpoint), "status", resp.StatusCode, "body", body.String())
 		_ = s.store.RecordPushResult(ctx, sub.ID, false)
 		if sub.FailureCount+1 >= 20 {
 			_ = s.store.DeletePushSubscriptionByID(ctx, sub.ID)
 		}
+		return rejected, 0
 	}
 }
 

@@ -19,7 +19,8 @@ import (
 //	event: message.created  data: {"message": {...}, "thread": {...}}
 //	event: question.*       data: {"question": {...}, "thread": {...}}
 //	event: thread.*         data: {"thread": {...}} or {"thread_id": "..."} when deleted
-//	event: thread.activity  data: {"thread": {...}} (thread.activity is the status, or null)
+//	event: thread.activity  data: {"thread_id": "...", "activity": {...} | null}
+//	event: ping             data: {"at": "..."} every 20 seconds
 //	event: ready            data: {"counts": {...}}
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
@@ -67,10 +68,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 			return
 		case <-heartbeat.C:
-			if _, err := fmt.Fprint(w, ": ping\n\n"); err != nil {
+			// A named event (not a comment) so the client can watch for liveness.
+			if !send("ping", map[string]any{"at": time.Now().UTC()}) {
 				return
 			}
-			flusher.Flush()
 		case ev, ok := <-events:
 			if !ok {
 				return
@@ -103,6 +104,17 @@ func (s *Server) expandEvent(r *http.Request, ev bus.Event) (map[string]any, err
 		out["settings"] = user.Settings
 		return out, nil
 	}
+	if ev.Type == bus.ThreadActivity {
+		// Frequent and self-contained: the status travels in the event, so no
+		// database work per subscriber.
+		out["thread_id"] = ev.ThreadID
+		if len(ev.Activity) > 0 {
+			out["activity"] = ev.Activity
+		} else {
+			out["activity"] = nil
+		}
+		return out, nil
+	}
 	threadID, err := uuid.Parse(ev.ThreadID)
 	if err != nil {
 		return nil, err
@@ -118,10 +130,6 @@ func (s *Server) expandEvent(r *http.Request, ev bus.Event) (map[string]any, err
 		return nil, err
 	}
 	out["thread"] = thread
-	if ev.Type == bus.ThreadActivity {
-		// Status lines are frequent and never change the badge counts.
-		return out, nil
-	}
 	switch ev.Type {
 	case bus.MessageCreated:
 		id, err := uuid.Parse(ev.MessageID)
@@ -134,7 +142,7 @@ func (s *Server) expandEvent(r *http.Request, ev bus.Event) (map[string]any, err
 		}
 		decorate(msg)
 		out["message"] = msg
-	case bus.QuestionCreated, bus.QuestionAnswered, bus.QuestionCancelled, bus.QuestionExpired:
+	case bus.QuestionCreated, bus.QuestionAnswered, bus.QuestionCancelled, bus.QuestionExpired, bus.QuestionDismissed:
 		id, err := uuid.Parse(ev.QuestionID)
 		if err != nil {
 			return nil, err

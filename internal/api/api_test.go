@@ -349,8 +349,13 @@ func TestThreadsAndMessages(t *testing.T) {
 	if n := len(archived["threads"].([]any)); n != 1 {
 		t.Fatalf("expected one archived thread, got %d", n)
 	}
-	// A new message un-archives.
-	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+id+"/messages", map[string]any{"body": "back"})
+	// A plain agent message leaves an archived thread archived (the user put
+	// it away); an important one brings it back.
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+id+"/messages", map[string]any{"body": "still going"})
+	if th := sub(a.must(http.StatusOK, "GET", "/api/v1/threads/"+id, nil), "thread"); th["archived_at"] == nil {
+		t.Fatalf("a plain message should not un-archive, got %v", th)
+	}
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+id+"/messages", map[string]any{"body": "back", "importance": "important"})
 	if th := sub(a.must(http.StatusOK, "GET", "/api/v1/threads/"+id, nil), "thread"); th["archived_at"] != nil {
 		t.Fatalf("expected un-archived thread, got %v", th)
 	}
@@ -552,7 +557,7 @@ func TestSettingsAndPushEndpoints(t *testing.T) {
 	if vapid["enabled"] != false {
 		t.Fatalf("expected push disabled, got %v", vapid)
 	}
-	if status, out := b.do("POST", "/api/v1/push/subscriptions", map[string]any{"endpoint": "https://push.example/x", "keys": map[string]any{"p256dh": "a", "auth": "b"}}); status != http.StatusServiceUnavailable || str(sub(out, "error"), "code") != "push_disabled" {
+	if status, out := b.do("POST", "/api/v1/push/subscriptions", map[string]any{"endpoint": "https://fcm.googleapis.com/fcm/send/x", "keys": map[string]any{"p256dh": "a", "auth": "b"}}); status != http.StatusServiceUnavailable || str(sub(out, "error"), "code") != "push_disabled" {
 		t.Fatalf("expected push_disabled, got %d %v", status, out)
 	}
 }
@@ -817,15 +822,19 @@ func TestAgentActivity(t *testing.T) {
 	}
 	waitEvent("ready")
 
-	// Setting a status on a fresh ext: thread creates the thread, names it, and
-	// carries the status back.
+	// A status belongs to a conversation that exists: unlike messages, this
+	// never creates a thread (a stray hook must not litter the inbox).
+	if status, _ := a.do("POST", "/api/v1/threads/ext:act-1/activity", map[string]any{"text": "x"}); status != http.StatusNotFound {
+		t.Fatalf("expected 404 for an unknown thread, got %d", status)
+	}
+	a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "act-1", "title": "activity", "agent": "eagent"})
 	out := a.must(http.StatusOK, "POST", "/api/v1/threads/ext:act-1/activity", map[string]any{
-		"text": "  checking out\nthe files you asked for…  ", "kind": "tool", "ttl_seconds": 30, "title": "activity", "agent": "eagent",
+		"text": "  checking out\nthe files you asked for…  ", "kind": "tool", "ttl_seconds": 30,
 	})
 	thread := sub(out, "thread")
 	act := sub(thread, "activity")
-	if str(thread, "title") != "activity" || str(thread, "agent") != "eagent" {
-		t.Fatalf("thread was not named from the activity request: %v", thread)
+	if out["applied"] != true {
+		t.Fatalf("expected the status to be applied: %v", out)
 	}
 	if str(act, "text") != "checking out the files you asked for…" || str(act, "kind") != "tool" {
 		t.Fatalf("unexpected activity: %v", act)
@@ -834,8 +843,8 @@ func TestAgentActivity(t *testing.T) {
 		t.Fatalf("activity is missing timestamps: %v", act)
 	}
 	ev := waitEvent("thread.activity")
-	if str(sub(sub(ev, "thread"), "activity"), "text") != "checking out the files you asked for…" {
-		t.Fatalf("event did not carry the status: %v", ev)
+	if str(sub(ev, "activity"), "text") != "checking out the files you asked for…" || str(ev, "thread_id") != str(thread, "id") {
+		t.Fatalf("event did not carry the status inline: %v", ev)
 	}
 	if _, has := ev["counts"]; has {
 		t.Fatalf("activity events should not carry counts: %v", ev)
@@ -843,14 +852,32 @@ func TestAgentActivity(t *testing.T) {
 	threadID := str(thread, "id")
 	since := str(act, "since")
 
-	// A refresh keeps `since` so the app can say how long the agent has been at it.
+	// An identical repeat with most of its life left is a no-op; a refresh
+	// keeps `since` so the app can say how long the agent has been at it.
+	if out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "checking out the files you asked for…", "kind": "tool", "ttl_seconds": 30}); out["applied"] != false {
+		t.Fatalf("expected a repeat to be coalesced: %v", out)
+	}
 	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "running tests"})
 	act = sub(sub(out, "thread"), "activity")
 	if str(act, "since") != since || str(act, "kind") != "working" || str(act, "text") != "running tests" {
 		t.Fatalf("refresh changed since or defaults: %v (want since %s)", act, since)
 	}
+
+	// Ordering: concurrent writers pass seq; an older one landing late loses.
+	a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "Running: go test", "seq": 20})
+	if out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "Thinking…", "seq": 10}); out["applied"] != false || str(sub(sub(out, "thread"), "activity"), "text") != "Running: go test" {
+		t.Fatalf("a stale seq should be ignored: %v", out)
+	}
+	if out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "Editing main.go", "seq": 30}); out["applied"] != true {
+		t.Fatalf("a newer seq should apply: %v", out)
+	}
+	// Once the live status lapses, any seq is accepted again.
+	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+threadID+"/activity", nil)
+	if out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "fresh session", "seq": 1}); out["applied"] != true {
+		t.Fatalf("seq should reset after a clear: %v", out)
+	}
 	// The app sees it on the thread and in the inbox.
-	if got := sub(sub(b.must(http.StatusOK, "GET", "/api/v1/threads/"+threadID, nil), "thread"), "activity"); str(got, "text") != "running tests" {
+	if got := sub(sub(b.must(http.StatusOK, "GET", "/api/v1/threads/"+threadID, nil), "thread"), "activity"); str(got, "text") != "fresh session" {
 		t.Fatalf("thread does not show the status: %v", got)
 	}
 
@@ -865,10 +892,15 @@ func TestAgentActivity(t *testing.T) {
 		t.Fatalf("expected a validation error for a long status, got %d", status)
 	}
 
-	// The user's reply leaves the status alone; the agent's message clears it.
+	// The user's reply leaves the status alone; the agent's message clears it
+	// unless it carries the next status.
 	out = b.must(http.StatusCreated, "POST", "/api/v1/threads/"+threadID+"/messages", map[string]any{"body": "take your time"})
 	if sub(sub(out, "thread"), "activity") == nil {
 		t.Fatalf("a user message should not clear the agent's status: %v", out)
+	}
+	out = a.must(http.StatusCreated, "POST", "/api/v1/threads/"+threadID+"/messages", map[string]any{"body": "tests pass, starting the backfill", "activity": map[string]any{"text": "Running the backfill", "kind": "tool", "ttl_seconds": 120}})
+	if str(sub(sub(out, "thread"), "activity"), "text") != "Running the backfill" {
+		t.Fatalf("a message should be able to carry the next status: %v", out)
 	}
 	out = a.must(http.StatusCreated, "POST", "/api/v1/threads/"+threadID+"/messages", map[string]any{"body": "tests pass"})
 	if sub(out, "thread")["activity"] != nil {
@@ -913,5 +945,178 @@ func TestAgentActivity(t *testing.T) {
 	// Unknown threads are not created by DELETE.
 	if status, _ := a.do("DELETE", "/api/v1/threads/ext:never-made/activity", nil); status != http.StatusNotFound {
 		t.Fatalf("expected 404 for an unknown thread, got %d", status)
+	}
+	// Status writes never move the thread in the inbox.
+	before := str(sub(a.must(http.StatusOK, "GET", "/api/v1/threads/"+threadID, nil), "thread"), "last_activity_at")
+	a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "still here"})
+	if after := str(sub(a.must(http.StatusOK, "GET", "/api/v1/threads/"+threadID, nil), "thread"), "last_activity_at"); after != before {
+		t.Fatalf("activity moved last_activity_at from %s to %s", before, after)
+	}
+}
+
+func TestIdempotentPosts(t *testing.T) {
+	_, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "idem:1", "title": "idem"}), "thread"), "id")
+	first := a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "once", "client_key": "k1"})
+	again := a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "once", "client_key": "k1"})
+	if str(sub(first, "message"), "id") != str(sub(again, "message"), "id") || again["created"] != false {
+		t.Fatalf("a repeated client_key should return the first message: %v / %v", first, again)
+	}
+	// The header form works too, and the key is scoped to the thread.
+	viaHeader, _ := a.do("POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "twice"}, "Idempotency-Key", "k1")
+	if viaHeader != http.StatusOK {
+		t.Fatalf("Idempotency-Key header should dedupe, got %d", viaHeader)
+	}
+	other := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "idem:2"}), "thread"), "id")
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+other+"/messages", map[string]any{"body": "elsewhere", "client_key": "k1"})
+	msgs := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages", nil)["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("expected exactly one message after retries, got %d", len(msgs))
+	}
+	// Questions dedupe the same way.
+	q1 := a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/questions", map[string]any{"prompt": "Ship?", "client_key": "q1"})
+	q2 := a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/questions", map[string]any{"prompt": "Ship?", "client_key": "q1"})
+	if str(sub(q1, "question"), "id") != str(sub(q2, "question"), "id") {
+		t.Fatalf("a repeated question client_key should return the first question")
+	}
+	if n := len(a.must(http.StatusOK, "GET", "/api/v1/questions?status=pending&thread_id="+thread, nil)["questions"].([]any)); n != 1 {
+		t.Fatalf("expected one pending question, got %d", n)
+	}
+	// Questions without a timeout still get a lifetime.
+	if sub(q1, "question")["expires_at"] == nil {
+		t.Fatalf("expected a default expiry on the question: %v", q1)
+	}
+}
+
+func TestDismissAndProvenance(t *testing.T) {
+	b, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "dismiss:1", "title": "dismiss"}), "thread"), "id")
+	q := sub(a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/questions", map[string]any{"prompt": "Keep going?", "options": []map[string]any{{"label": "Yes"}}}), "question")
+	qid := str(q, "id")
+	// Counts see the pending question as attention.
+	if c := sub(b.must(http.StatusOK, "GET", "/api/v1/counts", nil), "counts"); c["attention"].(float64) < 1 {
+		t.Fatalf("expected attention >= 1, got %v", c)
+	}
+	out := b.must(http.StatusOK, "POST", "/api/v1/questions/"+qid+"/dismiss", nil)
+	if str(sub(out, "question"), "status") != "dismissed" {
+		t.Fatalf("expected dismissed, got %v", out)
+	}
+	if status, _ := b.do("POST", "/api/v1/questions/"+qid+"/answer", map[string]any{"selected": []string{"Yes"}}); status != http.StatusConflict {
+		t.Fatalf("answering a dismissed question should conflict, got %d", status)
+	}
+	if got := str(sub(a.must(http.StatusOK, "GET", "/api/v1/questions/"+qid, nil), "question"), "status"); got != "dismissed" {
+		t.Fatalf("agent should see dismissed, got %s", got)
+	}
+
+	// An agent posting sender=user (a terminal mirror) is recorded with token
+	// origin and does not mark the thread read; the app's own reply does.
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "agent says"})
+	mirror := sub(a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "typed at the terminal", "sender": "user"}), "message")
+	if str(mirror, "origin") != "token" {
+		t.Fatalf("expected token origin on a mirrored message, got %v", mirror)
+	}
+	if th := sub(a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread, nil), "thread"); th["unread_count"].(float64) < 1 {
+		t.Fatalf("a mirrored user message must not mark the thread read: %v", th)
+	}
+	reply := sub(b.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "from the phone"}), "message")
+	if str(reply, "origin") != "session" {
+		t.Fatalf("expected session origin on the app's reply, got %v", reply)
+	}
+	if th := sub(b.must(http.StatusOK, "GET", "/api/v1/threads/"+thread, nil), "thread"); th["unread_count"].(float64) != 0 {
+		t.Fatalf("the app's own reply should mark the thread read: %v", th)
+	}
+	// Muted threads do not count toward the badge.
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "more"})
+	b.must(http.StatusOK, "PATCH", "/api/v1/threads/"+thread, map[string]any{"muted": true})
+	c := sub(b.must(http.StatusOK, "GET", "/api/v1/counts", nil), "counts")
+	for _, other := range b.must(http.StatusOK, "GET", "/api/v1/threads", nil)["threads"].([]any) {
+		th := other.(map[string]any)
+		if str(th, "id") != thread && th["unread_count"].(float64) > 0 && th["muted"] != true {
+			t.Skip("another test left unread threads; badge assertion is not isolated")
+		}
+	}
+	if c["unread_threads"].(float64) != 0 {
+		t.Fatalf("muted thread still counted as unread: %v", c)
+	}
+}
+
+func TestPushEndpointsAreForTheApp(t *testing.T) {
+	b, a := setup(t)
+	sub := map[string]any{"endpoint": "https://web.push.apple.com/QAbc", "keys": map[string]any{"p256dh": "k", "auth": "a"}}
+	if status, out := a.do("POST", "/api/v1/push/subscriptions", sub); status != http.StatusForbidden {
+		t.Fatalf("tokens must not enroll devices, got %d %v", status, out)
+	}
+	if status, out := b.do("POST", "/api/v1/push/subscriptions", map[string]any{"endpoint": "https://evil.example/hook", "keys": map[string]any{"p256dh": "k", "auth": "a"}}); status != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown push services must be refused, got %d %v", status, out)
+	}
+	// Push is disabled in the test server, so a valid host still reports that.
+	if status, out := b.do("POST", "/api/v1/push/subscriptions", sub); status != http.StatusServiceUnavailable {
+		t.Fatalf("expected push_disabled, got %d %v", status, out)
+	}
+	// Logging out needs a same-origin request.
+	anon := newBrowser(t)
+	if status, _ := anon.do("POST", "/api/v1/auth/logout", map[string]any{}, "Sec-Fetch-Site", "cross-site"); status != http.StatusForbidden {
+		t.Fatalf("cross-site logout should be refused, got %d", status)
+	}
+}
+
+func TestUploadedHTMLIsInert(t *testing.T) {
+	_, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "html:1"}), "thread"), "id")
+	req, _ := http.NewRequest("POST", testSrv.URL+"/api/v1/threads/"+thread+"/attachments?filename=report.html", strings.NewReader("<script>alert(document.cookie)</script>"))
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Content-Type", "text/html")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("upload failed: %d %v", res.StatusCode, out)
+	}
+	att := out["attachments"].([]any)[0].(map[string]any)
+	if str(att, "content_type") != "application/octet-stream" {
+		t.Fatalf("html should be stored as an opaque file, got %s", str(att, "content_type"))
+	}
+	get, _ := http.NewRequest("GET", testSrv.URL+str(att, "url"), nil)
+	get.Header.Set("Authorization", "Bearer "+a.token)
+	res, err = http.DefaultClient.Do(get)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if cd := res.Header.Get("Content-Disposition"); !strings.HasPrefix(cd, "attachment") {
+		t.Fatalf("expected an attachment disposition, got %q", cd)
+	}
+	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "sandbox") {
+		t.Fatalf("expected a sandboxing CSP on attachments, got %q", csp)
+	}
+}
+
+func TestTokenWritesAreRateLimited(t *testing.T) {
+	_, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "rate:1"}), "thread"), "id")
+	saved := testAPI.activityLimiter
+	testAPI.activityLimiter = newRateLimiter(3)
+	defer func() { testAPI.activityLimiter = saved }()
+	var last int
+	for i := 0; i < 5; i++ {
+		last, _ = a.do("POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": fmt.Sprintf("step %d", i)})
+	}
+	if last != http.StatusTooManyRequests {
+		t.Fatalf("expected the fourth write to be limited, got %d", last)
+	}
+	req, _ := http.NewRequest("POST", testSrv.URL+"/api/v1/threads/"+thread+"/activity", strings.NewReader(`{"text":"x"}`))
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.Header.Get("Retry-After") == "" || res.Header.Get("X-Request-Id") == "" {
+		t.Fatalf("expected Retry-After and X-Request-Id headers, got %v", res.Header)
 	}
 }

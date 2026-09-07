@@ -23,6 +23,12 @@ const (
 	ImportanceImportant = "important"
 )
 
+// Message origins: how the message reached the server.
+const (
+	OriginSession = "session" // the app, signed in with a browser session
+	OriginToken   = "token"   // an agent, using an API token
+)
+
 // Message is one entry in a thread.
 type Message struct {
 	ID         uuid.UUID `json:"id"`
@@ -33,17 +39,20 @@ type Message struct {
 	Format     string    `json:"format"`
 	Importance string    `json:"importance"`
 	Meta       JSON      `json:"meta"`
-	CreatedAt  time.Time `json:"created_at"`
+	// Origin is "session" when the app posted the message and "token" when
+	// an agent did; older rows have "".
+	Origin    string    `json:"origin"`
+	CreatedAt time.Time `json:"created_at"`
 	// Attachments are the files carried by the message, in upload order.
 	Attachments []*Attachment `json:"attachments"`
 }
 
-const messageColumns = "m.id, m.thread_id, m.user_id, m.sender, m.body, m.format, m.importance, m.meta, m.created_at"
+const messageColumns = "m.id, m.thread_id, m.user_id, m.sender, m.body, m.format, m.importance, m.meta, m.origin, m.created_at"
 
 func scanMessage(row pgx.Row) (*Message, error) {
 	var m Message
 	var meta []byte
-	if err := row.Scan(&m.ID, &m.ThreadID, &m.UserID, &m.Sender, &m.Body, &m.Format, &m.Importance, &meta, &m.CreatedAt); err != nil {
+	if err := row.Scan(&m.ID, &m.ThreadID, &m.UserID, &m.Sender, &m.Body, &m.Format, &m.Importance, &meta, &m.Origin, &m.CreatedAt); err != nil {
 		return nil, translate(err)
 	}
 	scanJSON(meta, &m.Meta)
@@ -57,6 +66,17 @@ type MessageInput struct {
 	Format     string
 	Importance string
 	Meta       JSON
+	// Origin records who posted: OriginSession or OriginToken.
+	Origin string
+	// MarkRead advances the thread's read marker to this message; set for
+	// the user's own replies from the app.
+	MarkRead bool
+	// ClientKey makes the create idempotent within the thread: a repeat with
+	// the same key returns the first message instead of a duplicate.
+	ClientKey string
+	// Activity, when set, becomes the thread's status line in the same
+	// transaction; otherwise an agent message clears the status.
+	Activity *ActivityInput
 	// AttachmentIDs are pending uploads in the same thread to bind.
 	AttachmentIDs []uuid.UUID
 }
@@ -81,49 +101,82 @@ func Preview(body string) string {
 }
 
 // CreateMessage appends a message and bumps the thread. The returned thread
-// reflects the new preview and activity time.
-func (s *Store) CreateMessage(ctx context.Context, userID, threadID uuid.UUID, in MessageInput) (*Message, *Thread, error) {
-	var msg *Message
-	var thread *Thread
-	err := s.withTx(ctx, func(tx pgx.Tx) error {
+// reflects the new preview and activity time. created is false when
+// in.ClientKey matched an existing message, which is returned instead.
+func (s *Store) CreateMessage(ctx context.Context, userID, threadID uuid.UUID, in MessageInput) (msg *Message, thread *Thread, created bool, err error) {
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
 		var err error
-		msg, err = scanMessage(tx.QueryRow(ctx, `WITH m AS (
-				INSERT INTO messages (id, thread_id, user_id, sender, body, format, importance, meta)
-				SELECT $1, $2, $3, $4, $5, $6, $7, $8
-				WHERE EXISTS (SELECT 1 FROM threads WHERE id = $2 AND user_id = $3)
-				RETURNING *
-			) SELECT `+messageColumns+` FROM m`,
-			NewID(), threadID, userID, in.Sender, in.Body, in.Format, in.Importance, in.Meta.value()))
-		if err != nil {
-			return err
-		}
-		if err := attachToMessage(ctx, tx, userID, threadID, msg.ID, in.AttachmentIDs); err != nil {
-			return err
-		}
-		lastRead := "t.last_read_at"
-		// A message from the agent is the outcome its status line announced,
-		// so the status goes with it; the user's reply leaves it alone.
-		activity := activityCleared
-		if in.Sender == SenderUser {
-			// The user's own reply implies they have read everything before it.
-			lastRead = "GREATEST(t.last_read_at, m.created_at)"
-			activity = "activity_text = t.activity_text"
-		}
-		thread, err = scanThread(tx.QueryRow(ctx, `WITH m AS (SELECT $3::timestamptz AS created_at)
-			UPDATE threads t SET preview = $4, preview_sender = $5, last_activity_at = m.created_at, updated_at = now(),
-				last_read_at = `+lastRead+`,
-				archived_at = NULL, `+activity+`
-			FROM m WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns,
-			threadID, userID, msg.CreatedAt, previewFor(in.Body, len(in.AttachmentIDs)), in.Sender))
+		msg, thread, created, err = createMessageTx(ctx, tx, userID, threadID, in)
 		return err
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if err := s.hydrateAttachments(ctx, userID, []*Message{msg}); err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	return msg, thread, nil
+	return msg, thread, created, nil
+}
+
+// createMessageTx is CreateMessage inside a caller's transaction.
+func createMessageTx(ctx context.Context, tx pgx.Tx, userID, threadID uuid.UUID, in MessageInput) (msg *Message, thread *Thread, created bool, err error) {
+	var clientKey *string
+	if in.ClientKey != "" {
+		clientKey = &in.ClientKey
+		existing, err := scanMessage(tx.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.thread_id = $1 AND m.user_id = $2 AND m.client_key = $3", threadID, userID, in.ClientKey))
+		if err == nil {
+			thread, err := scanThread(tx.QueryRow(ctx, "SELECT "+threadColumns+" FROM threads t WHERE t.id = $1 AND t.user_id = $2", threadID, userID))
+			return existing, thread, false, err
+		}
+		if err != ErrNotFound {
+			return nil, nil, false, err
+		}
+	}
+	msg, err = scanMessage(tx.QueryRow(ctx, `WITH m AS (
+			INSERT INTO messages (id, thread_id, user_id, sender, body, format, importance, meta, origin, client_key)
+			SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+			WHERE EXISTS (SELECT 1 FROM threads WHERE id = $2 AND user_id = $3)
+			RETURNING *
+		) SELECT `+messageColumns+` FROM m`,
+		NewID(), threadID, userID, in.Sender, in.Body, in.Format, in.Importance, in.Meta.value(), in.Origin, clientKey))
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if err := attachToMessage(ctx, tx, userID, threadID, msg.ID, in.AttachmentIDs); err != nil {
+		return nil, nil, false, err
+	}
+	lastRead := "t.last_read_at"
+	if in.MarkRead {
+		// The user's own reply implies they have read everything before it.
+		lastRead = "GREATEST(t.last_read_at, m.created_at)"
+	}
+	// A plain agent message leaves an archived thread archived; the user's
+	// own reply and anything marked important bring it back.
+	archived := "t.archived_at"
+	if in.Sender == SenderUser || in.Importance == ImportanceImportant {
+		archived = "NULL"
+	}
+	// An agent message is the outcome its status line announced, so the
+	// status goes with it unless the post carries the next one; the user's
+	// reply leaves it alone.
+	activity := activityCleared
+	args := []any{threadID, userID, msg.CreatedAt, previewFor(in.Body, len(in.AttachmentIDs)), in.Sender}
+	switch {
+	case in.Activity != nil:
+		args = append(args, in.Activity.Text, in.Activity.Kind, in.Activity.TTL, in.Activity.Seq)
+		activity = activitySet("$6", "$7", "$8", "$9")
+	case in.Sender == SenderUser:
+		activity = "activity_text = t.activity_text"
+	}
+	thread, err = scanThread(tx.QueryRow(ctx, `WITH m AS (SELECT $3::timestamptz AS created_at)
+		UPDATE threads t SET preview = $4, preview_sender = $5, last_activity_at = m.created_at, updated_at = now(),
+			last_read_at = `+lastRead+`,
+			archived_at = `+archived+`, `+activity+`
+		FROM m WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns, args...))
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return msg, thread, true, nil
 }
 
 // previewFor renders the inbox preview, noting attachments when present.

@@ -54,6 +54,11 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
 	}
 	defer conn.Release()
 
+	// A migration that cannot get its lock or finishes slowly should fail
+	// loudly rather than hold a starting pod forever.
+	if _, err := conn.Exec(ctx, "SET lock_timeout = '15s'; SET statement_timeout = '120s'"); err != nil {
+		return fmt.Errorf("set migration timeouts: %w", err)
+	}
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", migrationLock); err != nil {
 		return fmt.Errorf("acquire migration lock: %w", err)
 	}

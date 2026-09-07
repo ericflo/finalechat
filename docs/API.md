@@ -78,7 +78,7 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | 409 | `no_subscriptions` | Test push with no subscribed device |
 | 413 | `too_large` | JSON body over 1 MiB, an attachment over 10 MiB, or a multipart request over the combined limit |
 | 422 | `validation_failed` | A field failed validation; `message` says which |
-| 429 | `rate_limited` | Too many login or register attempts (20 per minute per IP) |
+| 429 | `rate_limited` (login attempts per address; token writes beyond about 120 messages, 30 questions, 30 uploads or 300 statuses a minute; honour `Retry-After`) | Too many login or register attempts (20 per minute per IP) |
 | 502 | `storage_unavailable` | Object storage rejected an upload or download; retry |
 | 503 | `push_disabled` | Push is not configured on this server |
 | 503 | `attachments_disabled` | Attachment storage is not configured on this server |
@@ -100,6 +100,27 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | `limit` | threads 1 to 200 (default 50); messages and questions 1 to 500 (default 100) |
 | Attachment | 10 MiB per file, 8 per message or upload request; `filename` 200 characters |
 | Activity `text` / `ttl_seconds` | 200 characters on one line / 1 to 600 seconds (default 45) |
+
+### Idempotency
+
+`POST /threads/{ref}/messages` and `POST /threads/{ref}/questions` accept an
+`Idempotency-Key` header (or a `client_key` body field, up to 200
+characters, scoped to the thread). A repeat with the same key returns the
+original object with HTTP 200 and `"created": false` instead of creating a
+duplicate, so a client may retry a post whose response was lost.
+
+### Request ids
+
+Every response carries an `X-Request-Id` header (a client may supply its
+own, up to 64 characters). Server logs record it; quote it when reporting a
+problem.
+
+### Features
+
+`GET /auth/status` and `GET /me` list optional capabilities in `features`:
+`activity`, `idempotency`, `dismiss`, and `push` / `attachments` when those
+are configured. Clients that must work against older deployments can
+feature-detect with it.
 
 ### Thread references
 
@@ -166,7 +187,9 @@ counts non-user messages since `last_read_at`. A muted thread never sends
 push notifications.
 
 `activity` is the agent's live status line, or `null` when there is none or
-the last one has lapsed. `kind` is `thinking`, `working`, `typing`, `waiting`
+the last one has lapsed. Archiving sticks: a plain agent message leaves an
+archived thread archived (its unread count still grows), while a message
+marked `important`, a question, or the user's own reply brings it back. `kind` is `thinking`, `working`, `typing`, `waiting`
 or `tool`; `at` is when it was last set or refreshed, `since` when the agent
 became continuously busy (kept across refreshes), and `expires_at` when it
 lapses. See [POST /threads/{ref}/activity](#post-threadsrefactivity).
@@ -503,14 +526,16 @@ rarely need it.
 ### POST /threads/{ref}/activity
 
 Sets the agent's status line: what it is doing right now, shown in the app
-as a typing indicator with a timer. Creates a missing `ext:` thread on
-demand (with `title` and `agent`, as on messages). `PUT` is accepted too.
+as a typing indicator with a timer. Unlike messages this never creates a
+thread (`404` for an unknown reference): a status belongs to a conversation
+that exists. `PUT` is accepted too.
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `text` | string | One line, at most 200 characters; whitespace is collapsed. Empty clears the status. |
 | `kind` | string | `thinking`, `working` (default), `typing`, `waiting` or `tool` |
 | `ttl_seconds` | integer | 1 to 600, default 45. The status lapses when this runs out unless set again. |
+| `seq` | integer | Optional ordering for concurrent writers: a write whose `seq` is not above the live status's is ignored (`"applied": false`). Any `seq` is accepted once the status has lapsed or been cleared. |
 
 ```bash
 curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/activity \
@@ -519,18 +544,21 @@ curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/acti
 ```
 
 ```json
-{"thread": {"id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7", "...": "...",
+{"applied": true,
+ "thread": {"id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7", "...": "...",
   "activity": {"text": "Running the test suite…", "kind": "tool",
                "at": "2026-09-07T05:40:02.114532Z", "since": "2026-09-07T05:38:57.301176Z",
                "expires_at": "2026-09-07T05:42:02.114532Z"}}}
 ```
 
 Setting a status while the previous one is still live keeps `since`, so a
-sequence of statuses reads as one stretch of work. Posting a message or a
-question from the agent clears the status (the message is what the status
-announced); a message from the user leaves it alone. Emits `thread.activity`;
-never pushes a notification and does not bump `last_activity_at` or the
-thread's position in the inbox.
+sequence of statuses reads as one stretch of work. A repeat of the current
+text and kind while it has more than half its life left is a no-op
+(`"applied": false`). Posting a message or a question from the agent clears
+the status (the message is what the status announced) unless that post
+carries its own `activity` field; a message from the user leaves it alone.
+Emits `thread.activity`; never pushes a notification and does not bump
+`last_activity_at` or the thread's position in the inbox.
 
 ### DELETE /threads/{ref}/activity
 
@@ -821,6 +849,13 @@ and marks the thread read. A question that is no longer pending returns
 `409 already_resolved` with the current status in the message. Emits
 `question.answered` and `message.created`.
 
+### POST /questions/{id}/dismiss
+
+The user declines to answer: `status` becomes `dismissed`, the agent's wait
+returns, and the question stops counting as pending. Returns
+`{"question": {...}}` and emits `question.dismissed`. `409 already_resolved`
+if the question is no longer pending.
+
 ### POST /questions/{id}/cancel
 
 Withdraws a pending question (for example, the agent found the answer
@@ -857,14 +892,16 @@ data: {"at":"…","thread":{…},"message":{…},"counts":{…}}
 | `ready` | `{at, counts}` once on connect |
 | `thread.created`, `thread.updated` | `{at, thread, counts}` |
 | `thread.deleted` | `{at, thread_id, counts}` |
-| `thread.activity` | `{at, thread}`; `thread.activity` is the new status or `null`. No counts: statuses never change badges. |
+| `thread.activity` | `{at, thread_id, activity}`; `activity` is the new status or `null`. No thread object and no counts: statuses are frequent and never change badges. |
+| `question.dismissed` | `{at, thread, question, counts}` when the user declines a question |
+| `ping` | `{at}` every 20 seconds; a client that sees none for 45 seconds should reconnect |
 | `message.created` | `{at, thread, message, counts}` |
 | `question.created`, `question.answered`, `question.cancelled`, `question.expired` | `{at, thread, question, counts}` |
 | `settings.updated` | `{at, settings}` |
 | `reconnect` | `{}` when the server is shutting down; reconnect immediately |
 
-A comment line (`: ping`) is sent every 20 seconds to keep the connection
-alive. There is no replay: after reconnecting, refetch the state you care
+A `ping` event is sent every 20 seconds to keep the connection alive and
+let clients detect a dead socket. There is no replay: after reconnecting, refetch the state you care
 about. A subscriber that falls too far behind is dropped and should
 reconnect.
 

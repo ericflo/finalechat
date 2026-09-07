@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/ericflo/finalechat/internal/store"
 )
@@ -18,6 +20,8 @@ type apiError struct {
 	Status  int    `json:"-"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// RetryAfter, in seconds, is sent as a Retry-After header when set.
+	RetryAfter int `json:"-"`
 }
 
 func (e *apiError) Error() string { return e.Message }
@@ -35,7 +39,7 @@ var (
 	errForbidden    = &apiError{Status: http.StatusForbidden, Code: "forbidden", Message: "You do not have access to this resource."}
 	errNotFound     = &apiError{Status: http.StatusNotFound, Code: "not_found", Message: "Not found."}
 	errConflict     = &apiError{Status: http.StatusConflict, Code: "conflict", Message: "Conflict."}
-	errRateLimited  = &apiError{Status: http.StatusTooManyRequests, Code: "rate_limited", Message: "Too many attempts. Try again in a minute."}
+	errRateLimited  = &apiError{Status: http.StatusTooManyRequests, Code: "rate_limited", Message: "Too many attempts. Try again in a minute.", RetryAfter: 60}
 	errCSRF         = &apiError{Status: http.StatusForbidden, Code: "csrf", Message: "Cross-site request rejected."}
 )
 
@@ -59,7 +63,13 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrInvalidState):
 		ae = &apiError{Status: http.StatusConflict, Code: "invalid_state", Message: "The resource is not in a state that allows this operation."}
 	default:
+		// The client gets a generic message; the cause goes to the log, next
+		// to the request line that carries the request id.
+		slog.Error("internal error", "err", err)
 		ae = &apiError{Status: http.StatusInternalServerError, Code: "internal_error", Message: "Something went wrong on our side."}
+	}
+	if ae.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(ae.RetryAfter))
 	}
 	writeJSON(w, ae.Status, map[string]any{"error": ae})
 }

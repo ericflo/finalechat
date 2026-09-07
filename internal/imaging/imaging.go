@@ -30,8 +30,10 @@ var ImageTypes = map[string]bool{
 	"image/webp": true,
 }
 
-// MaxPixels bounds decode work so a tiny file cannot declare a huge canvas.
-const MaxPixels = 40_000_000
+// MaxPixels bounds decode work so a tiny file cannot declare a huge canvas:
+// a 16 MP image is already ~64 MB decoded, and a phone screenshot or a 4K
+// render is well under it.
+const MaxPixels = 16_000_000
 
 // Decode reads the image using the declared content type.
 func Decode(contentType string, data []byte) (image.Image, Info, error) {

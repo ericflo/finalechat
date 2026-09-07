@@ -2,9 +2,11 @@ package api
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/ericflo/finalechat/internal/push"
+	"github.com/ericflo/finalechat/internal/store"
 )
 
 // GET /api/v1/push/vapid
@@ -23,10 +25,6 @@ type subscriptionRequest struct {
 // POST /api/v1/push/subscriptions
 func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
-	if !s.push.Enabled() {
-		writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "push_disabled", Message: "Push notifications are not configured on this server."})
-		return
-	}
 	var req struct {
 		Subscription *subscriptionRequest `json:"subscription"`
 		subscriptionRequest
@@ -43,12 +41,56 @@ func (s *Server) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errValidation("A PushSubscription with endpoint and keys is required."))
 		return
 	}
+	if !knownPushService(sub.Endpoint) {
+		// The server POSTs to this URL on every notification; only the
+		// browsers' push services may be on the receiving end.
+		writeError(w, errValidation("The push endpoint is not a known browser push service."))
+		return
+	}
+	if !s.push.Enabled() {
+		writeError(w, &apiError{Status: http.StatusServiceUnavailable, Code: "push_disabled", Message: "Push notifications are not configured on this server."})
+		return
+	}
 	stored, err := s.store.UpsertPushSubscription(r.Context(), p.user.ID, sub.Endpoint, sub.Keys.P256DH, sub.Keys.Auth, r.UserAgent())
+	if err == store.ErrConflict {
+		writeError(w, &apiError{Status: http.StatusConflict, Code: "conflict", Message: "That push endpoint is registered to another account."})
+		return
+	}
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"subscription": stored})
+}
+
+// pushServiceHosts are the browsers' push services; endpoints elsewhere are
+// refused.
+var pushServiceHosts = []string{
+	".push.apple.com",            // Safari and iOS
+	"fcm.googleapis.com",         // Chrome, Edge, Brave, Android
+	".push.services.mozilla.com", // Firefox
+	".notify.windows.com",        // Edge (WNS)
+	".push.samsungosp.com",       // Samsung Internet
+	".pushsvc.duckduckgo.com",    // DuckDuckGo
+	".webpush.duckduckgo.com",    //
+}
+
+func knownPushService(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, h := range pushServiceHosts {
+		if strings.HasPrefix(h, ".") {
+			if strings.HasSuffix(host, h) || host == h[1:] {
+				return true
+			}
+		} else if host == h {
+			return true
+		}
+	}
+	return false
 }
 
 // DELETE /api/v1/push/subscriptions
@@ -101,7 +143,6 @@ func (s *Server) handlePushTest(w http.ResponseWriter, r *http.Request) {
 		Body:  "This is what a notification from an agent looks like.",
 		URL:   s.cfg.BaseURL + "/",
 		Tag:   "test",
-		Badge: 0,
 	})
 	writeJSON(w, http.StatusAccepted, map[string]any{"ok": true, "devices": len(subs)})
 }

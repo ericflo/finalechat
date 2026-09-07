@@ -51,6 +51,9 @@ type Config struct {
 	TrustProxy bool
 	// SessionTTL is the sliding lifetime of a browser session.
 	SessionTTL time.Duration
+	// ShutdownDelay is how long the server keeps serving after readiness
+	// starts failing, so a load balancer drains it before connections close.
+	ShutdownDelay time.Duration
 	// LogJSON switches the logger to JSON output.
 	LogJSON bool
 	// LogLevel is one of debug, info, warn, error.
@@ -77,6 +80,7 @@ func Load(version string) (Config, error) {
 		SecureCookies:   getenvBool("FINALECHAT_SECURE_COOKIES", true),
 		TrustProxy:      getenvBool("FINALECHAT_TRUST_PROXY", true),
 		SessionTTL:      getenvDuration("FINALECHAT_SESSION_TTL", 90*24*time.Hour),
+		ShutdownDelay:   getenvDuration("FINALECHAT_SHUTDOWN_DELAY", 3*time.Second),
 		LogJSON:         getenvBool("FINALECHAT_LOG_JSON", true),
 		LogLevel:        getenv("FINALECHAT_LOG_LEVEL", "info"),
 		Version:         version,

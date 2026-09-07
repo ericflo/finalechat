@@ -58,7 +58,7 @@ EXIT_OK = 0
 EXIT_USAGE = 1
 EXIT_API = 2
 EXIT_TIMEOUT = 3
-EXIT_RESOLVED = 4  # question cancelled or expired
+EXIT_RESOLVED = 4  # question cancelled, expired or dismissed
 
 # The API caps one long-poll at 600 seconds; we chain them.
 POLL_CHUNK = 600
@@ -92,10 +92,11 @@ class APIError(CLIError):
 
     exit_code = EXIT_API
 
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(self, status: int, code: str, message: str, retry_after: float = 0.0):
         super().__init__(message)
         self.status = status
         self.code = code
+        self.retry_after = retry_after
 
 
 class NotSignedIn(CLIError):
@@ -155,7 +156,34 @@ class Client:
     # -- transport ---------------------------------------------------------
 
     def request(self, method: str, path: str, body: dict | None = None, params: dict | None = None,
-                timeout: float = 15.0) -> dict:
+                timeout: float = 15.0, retries: int | None = None) -> dict:
+        """One JSON request. GETs, and POSTs that carry an idempotency key, are
+        retried on transport errors, 429 and 5xx with a short backoff, so a
+        deploy or a blip neither ends a long wait nor loses a message."""
+        if retries is None:
+            retries = 3 if method == "GET" or (body or {}).get("client_key") else 0
+        delay = 1.0
+        for attempt in range(retries + 1):
+            try:
+                return self._request_once(method, path, body, params, timeout)
+            except NotSignedIn:
+                raise
+            except (APIError, CLIError) as err:
+                if isinstance(err, APIError):
+                    transient = err.status in (429, 502, 503, 504)
+                else:
+                    transient = err.exit_code == EXIT_API
+                if not transient or attempt >= retries:
+                    raise
+                wait = delay
+                if isinstance(err, APIError) and err.retry_after:
+                    wait = max(wait, min(30.0, err.retry_after))
+                time.sleep(wait)
+                delay = min(8.0, delay * 2)
+        raise CLIError("request failed", EXIT_API)  # not reached
+
+    def _request_once(self, method: str, path: str, body: dict | None, params: dict | None,
+                      timeout: float) -> dict:
         if not self.token:
             raise NotSignedIn()
         url = self.base_url + path
@@ -179,15 +207,19 @@ class Client:
         except urllib.error.HTTPError as err:
             raw = err.read()
             try:
+                retry_after = float(err.headers.get("Retry-After") or 0)
+            except (TypeError, ValueError):
+                retry_after = 0.0
+            try:
                 payload = json.loads(raw.decode("utf-8"))
                 info = payload.get("error") or {}
                 raise APIError(err.code, str(info.get("code") or "http_error"),
-                               str(info.get("message") or f"HTTP {err.code}")) from None
+                               str(info.get("message") or f"HTTP {err.code}"), retry_after) from None
             except ValueError:
-                raise APIError(err.code, "http_error", f"HTTP {err.code} from {url}") from None
+                raise APIError(err.code, "http_error", f"HTTP {err.code} from {url}", retry_after) from None
         except urllib.error.URLError as err:
             raise CLIError(f"Could not reach {self.base_url}: {err.reason}", EXIT_API) from None
-        except socket.timeout:
+        except (socket.timeout, TimeoutError):
             raise CLIError(f"Timed out talking to {self.base_url}", EXIT_API) from None
         if not raw:
             return {}
@@ -271,12 +303,18 @@ class Client:
     def me(self, timeout: float = 15.0) -> dict:
         return self.request("GET", "/api/v1/me", timeout=timeout)
 
+    _remote_known: bool | None = None
+
     def remote_mode(self) -> bool:
+        """Whether the user is in remote mode. A network blip keeps the last
+        known answer rather than flipping to off, which would cancel live waits."""
         try:
             me = self.me(timeout=10)
-            return bool(((me.get("user") or {}).get("settings") or {}).get("remote_mode"))
+            self._remote_known = bool(((me.get("user") or {}).get("settings") or {}).get("remote_mode"))
         except CLIError:
-            return False
+            if self._remote_known is None:
+                return False
+        return self._remote_known
 
     def update_settings(self, **fields) -> dict:
         return self.request("PATCH", "/api/v1/settings", body=fields).get("settings", {})
@@ -298,18 +336,25 @@ class Client:
         return self.request("GET", f"/api/v1/threads/{self.ref_path(ref)}").get("thread", {})
 
     def set_activity(self, ref: str, text: str, *, kind: str | None = None, ttl: int | None = None,
-                     title: str = "", agent: str = "") -> dict:
-        """Set the thread's live status line; an empty text clears it."""
+                     seq: int | None = None, title: str = "", agent: str = "") -> dict:
+        """Set the thread's live status line; an empty text clears it. The
+        thread must exist: an `ext:` reference is created first when it is
+        missing (so `finalechat status` works before the first message)."""
         body: dict = {"text": text}
         if kind:
             body["kind"] = kind
         if ttl:
             body["ttl_seconds"] = int(ttl)
-        if title:
-            body["title"] = title
-        if agent:
-            body["agent"] = agent
-        return self.request("POST", f"/api/v1/threads/{self.ref_path(ref)}/activity", body=body, timeout=10)
+        if seq:
+            body["seq"] = int(seq)
+        path = f"/api/v1/threads/{self.ref_path(ref)}/activity"
+        try:
+            return self.request("POST", path, body=body, timeout=10, retries=0)
+        except APIError as err:
+            if err.status != 404 or not ref.startswith("ext:"):
+                raise
+            self.create_thread(ref[4:], title=title, agent=agent)
+            return self.request("POST", path, body=body, timeout=10, retries=0)
 
     def clear_activity(self, ref: str) -> dict:
         return self.request("DELETE", f"/api/v1/threads/{self.ref_path(ref)}/activity", timeout=10)
@@ -322,9 +367,12 @@ class Client:
 
     def post_message(self, ref: str, body: str, *, sender: str | None = None, important: bool = False,
                      notify: bool | None = None, fmt: str = "markdown", meta: dict | None = None,
-                     title: str = "", agent: str = "", files: list | None = None) -> dict:
-        """Post a message; with `files` (list of (filename, content_type, bytes)) it is one multipart request."""
-        payload: dict = {"body": body, "format": fmt, "importance": "important" if important else "normal"}
+                     title: str = "", agent: str = "", files: list | None = None,
+                     client_key: str | None = None) -> dict:
+        """Post a message; with `files` (list of (filename, content_type, bytes)) it is one multipart request.
+        A `client_key` makes the post safe to retry (the server dedupes it)."""
+        payload: dict = {"body": body, "format": fmt, "importance": "important" if important else "normal",
+                         "client_key": client_key or secrets.token_hex(16)}
         if sender:
             payload["sender"] = sender
         if notify is not None:
@@ -356,7 +404,8 @@ class Client:
 
     def ask(self, ref: str, prompt: str, options: list, *, multi: bool = False, freeform: bool = True,
             timeout_seconds: int | None = None, meta: dict | None = None, title: str = "", agent: str = "") -> dict:
-        payload: dict = {"prompt": prompt, "options": options, "allow_freeform": freeform, "multi_select": multi}
+        payload: dict = {"prompt": prompt, "options": options, "allow_freeform": freeform, "multi_select": multi,
+                         "client_key": secrets.token_hex(16)}
         if timeout_seconds:
             payload["timeout_seconds"] = timeout_seconds
         if meta:
@@ -418,6 +467,13 @@ def wait_for_reply(client: Client, ref: str, after: str | None, total: int, keep
         # Without an anchor the server waits for anything created from now on.
         resp = client.list_messages(ref, after=after, sender="user", wait=min(chunk, remaining))
         msgs = resp.get("messages") or []
+        # A "user" message posted by an agent (a mirrored terminal prompt) is
+        # not the user replying from the app; keep waiting past it.
+        mirrored = [m for m in msgs if m.get("origin") == "token"]
+        if mirrored and len(mirrored) == len(msgs):
+            after = msgs[-1].get("id") or after
+            continue
+        msgs = [m for m in msgs if m.get("origin") != "token"]
         if msgs:
             return msgs[0]
 
@@ -553,7 +609,10 @@ def save_attachment(client: Client, ref: str, out: str | None) -> str:
     if out:
         target = os.path.expanduser(out)
         if os.path.isdir(target):
-            target = os.path.join(target, filename)
+            safe = os.path.basename(filename)
+            if safe in ("", ".", ".."):
+                safe = attachment_id(ref)
+            target = os.path.join(target, safe)
     else:
         target = os.path.join(os.getcwd(), os.path.basename(filename) or attachment_id(ref))
     target = unique_path(target)
@@ -900,7 +959,8 @@ def cmd_status(args) -> int:
     if args.clear:
         resp = client.clear_activity(target.ref)
     elif text:
-        resp = client.set_activity(target.ref, text, kind=args.kind, ttl=args.ttl, title=target.title, agent=target.agent)
+        resp = client.set_activity(target.ref, text, kind=args.kind, ttl=args.ttl, seq=args.seq,
+                                   title=target.title, agent=target.agent)
     else:
         thread = client.get_thread(target.ref)
         if args.json:
@@ -913,7 +973,9 @@ def cmd_status(args) -> int:
         return EXIT_OK
     thread = resp.get("thread") or {}
     activity = thread.get("activity")
-    if activity:
+    if text and resp.get("applied") is False:
+        print(f"status unchanged · thread {thread.get('id')} · a newer or identical status is live: {describe_activity(activity)}")
+    elif activity:
         expires = parse_time(activity.get("expires_at"))
         left = max(0, int((expires - datetime.now(timezone.utc)).total_seconds())) if expires else 0
         print(f"status set · thread {thread.get('id')} · lapses in {left}s or at your next message")
@@ -951,7 +1013,10 @@ def finish_question(question: dict, as_json: bool) -> int:
         print(f"No answer yet. Question {question.get('id')} is still pending; "
               f"resume with `finalechat wait-answer {question.get('id')}`", file=sys.stderr)
         return EXIT_TIMEOUT
-    print(f"Question {question.get('id')} was {status}.", file=sys.stderr)
+    if status == "dismissed":
+        print(f"The user dismissed question {question.get('id')}; do not ask it again.", file=sys.stderr)
+    else:
+        print(f"Question {question.get('id')} was {status}.", file=sys.stderr)
     return EXIT_RESOLVED
 
 
@@ -1028,7 +1093,9 @@ def cmd_remote(args) -> int:
 def cli_path() -> str:
     """Absolute path of this executable, for hook commands."""
     invoked = os.path.realpath(os.path.abspath(sys.argv[0]))
-    if os.path.isfile(invoked) and os.access(invoked, os.X_OK):
+    if os.path.isfile(invoked):
+        # The file this process is running; hooks re-invoke it through the
+        # interpreter, so it need not be executable itself.
         return invoked
     candidate = shutil.which("finalechat")
     if candidate:
@@ -1272,7 +1339,10 @@ def spawn_status(ref: str, text: str, kind: str, ttl: int, title: str, agent: st
     text = truncate(" ".join(text.split()), 200)
     if not text or not status_enabled():
         return
-    argv = [sys.executable, cli_path(), "status", text, "--kind", kind, "--ttl", str(ttl), "-t", ref]
+    # The sequence number is taken now, so a slow earlier write can never
+    # overtake a newer one on the server.
+    argv = [sys.executable, cli_path(), "status", text, "--kind", kind, "--ttl", str(ttl), "-t", ref,
+            "--seq", str(time.time_ns())]
     if title:
         argv += ["--title", title]
     if agent:
@@ -1293,6 +1363,30 @@ def clear_status(client: Client, ref: str) -> None:
         hook_log(f"status clear failed: {err}")
 
 
+SECRET_PATTERNS = [
+    re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}"),
+    re.compile(r"(?i)\b(authorization|token|api[_-]?key|secret|password|passwd|pwd)(\s*[=:]\s*|\s+)['\"]?(?!bearer\b)[^\s'\"]{4,}"),
+    re.compile(r"\b(fc|sk|ghp|gho|ghs|xox[abp]|AKIA|glpat)[-_][A-Za-z0-9_-]{6,}"),
+    re.compile(r"://[^/\s:@]+:[^/\s@]+@"),
+    re.compile(r"\b[A-Fa-f0-9]{32,}\b"),
+]
+
+
+def redact_secrets(text: str) -> str:
+    """Hide anything in a command line that looks like a credential before it
+    is shown on the phone (and stored on the server)."""
+    def hide(m: "re.Match[str]") -> str:
+        whole = m.group(0)
+        if whole.startswith("://"):
+            return "://••••@"
+        keyword = m.group(1) if m.lastindex else ""
+        return f"{keyword} ••••" if keyword and not whole.startswith(keyword + "-") and not whole.startswith(keyword + "_") else "••••"
+    out = text
+    for pat in SECRET_PATTERNS:
+        out = pat.sub(hide, out)
+    return out
+
+
 def tool_status_text(payload: dict) -> str:
     """One readable line for a tool call: "Running: go test ./..."."""
     name = str(payload.get("tool_name") or "a tool")
@@ -1310,6 +1404,7 @@ def tool_status_text(payload: dict) -> str:
     if name == "Bash":
         command = str(inp.get("command") or "").strip()
         first = command.splitlines()[0].strip() if command else ""
+        first = redact_secrets(truncate(first, 120))
         return f"Running: {first}" if first else "Running a command"
     if name == "Read":
         return f"Reading {rel(inp.get('file_path'))}".rstrip()
@@ -2117,6 +2212,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="what sort of activity (default working)")
     p.add_argument("--ttl", type=int, metavar="SECS", help="seconds until it lapses unless set again (default 45, max 600)")
     p.add_argument("--clear", action="store_true", help="drop the status now")
+    p.add_argument("--seq", type=int, metavar="N", help="ordering for concurrent writers: a status with a lower N than the live one is ignored")
     p.add_argument("--json", action="store_true", help="print the thread as JSON")
     p.set_defaults(func=cmd_status)
 

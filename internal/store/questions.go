@@ -16,6 +16,8 @@ const (
 	QuestionAnswered  = "answered"
 	QuestionCancelled = "cancelled"
 	QuestionExpired   = "expired"
+	// QuestionDismissed means the user declined to answer.
+	QuestionDismissed = "dismissed"
 )
 
 // QuestionOption is one choice offered to the user.
@@ -82,37 +84,62 @@ type QuestionInput struct {
 	MultiSelect   bool
 	ExpiresAt     *time.Time
 	Meta          JSON
+	// ClientKey makes the create idempotent within the thread.
+	ClientKey string
+	// Activity, when set, becomes the thread's status line (for an agent
+	// that keeps working while it waits); otherwise the status is cleared.
+	Activity *ActivityInput
 }
 
-// CreateQuestion records a question and bumps the thread.
-func (s *Store) CreateQuestion(ctx context.Context, userID, threadID uuid.UUID, in QuestionInput) (*Question, *Thread, error) {
+// CreateQuestion records a question and bumps the thread. created is false
+// when in.ClientKey matched an existing question, which is returned instead.
+func (s *Store) CreateQuestion(ctx context.Context, userID, threadID uuid.UUID, in QuestionInput) (q *Question, thread *Thread, created bool, err error) {
 	options, _ := json.Marshal(in.Options)
 	if in.Options == nil {
 		options = []byte("[]")
 	}
-	var q *Question
-	var thread *Thread
-	err := s.withTx(ctx, func(tx pgx.Tx) error {
+	var clientKey *string
+	if in.ClientKey != "" {
+		clientKey = &in.ClientKey
+	}
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		if clientKey != nil {
+			existing, err := scanQuestion(tx.QueryRow(ctx, "SELECT "+questionColumns+" FROM questions q WHERE q.thread_id = $1 AND q.user_id = $2 AND q.client_key = $3", threadID, userID, in.ClientKey))
+			if err == nil {
+				q = existing
+				thread, err = scanThread(tx.QueryRow(ctx, "SELECT "+threadColumns+" FROM threads t WHERE t.id = $1 AND t.user_id = $2", threadID, userID))
+				return err
+			}
+			if err != ErrNotFound {
+				return err
+			}
+		}
 		var err error
 		q, err = scanQuestion(tx.QueryRow(ctx, `WITH q AS (
-				INSERT INTO questions (id, thread_id, user_id, prompt, options, allow_freeform, multi_select, expires_at, meta)
-				SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9
+				INSERT INTO questions (id, thread_id, user_id, prompt, options, allow_freeform, multi_select, expires_at, meta, client_key)
+				SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 				WHERE EXISTS (SELECT 1 FROM threads WHERE id = $2 AND user_id = $3)
 				RETURNING *
 			) SELECT `+questionColumns+` FROM q`,
-			NewID(), threadID, userID, in.Prompt, options, in.AllowFreeform, in.MultiSelect, in.ExpiresAt, in.Meta.value()))
+			NewID(), threadID, userID, in.Prompt, options, in.AllowFreeform, in.MultiSelect, in.ExpiresAt, in.Meta.value(), clientKey))
 		if err != nil {
 			return err
 		}
-		thread, err = scanThread(tx.QueryRow(ctx, `UPDATE threads t SET preview = $3, preview_sender = 'question', last_activity_at = $4, updated_at = now(), archived_at = NULL, `+activityCleared+`
-			WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns,
-			threadID, userID, Preview(in.Prompt), q.CreatedAt))
+		created = true
+		activity := activityCleared
+		args := []any{threadID, userID, Preview(in.Prompt), q.CreatedAt}
+		if in.Activity != nil {
+			args = append(args, in.Activity.Text, in.Activity.Kind, in.Activity.TTL, in.Activity.Seq)
+			activity = activitySet("$5", "$6", "$7", "$8")
+		}
+		thread, err = scanThread(tx.QueryRow(ctx, `UPDATE threads t SET preview = $3, preview_sender = 'question', last_activity_at = $4, updated_at = now(), archived_at = NULL, `+activity+`
+			WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns, args...))
 		return err
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	return q, thread, nil
+	return q, thread, created, nil
 }
 
 // GetQuestion loads a question the user owns.
@@ -152,10 +179,10 @@ func (s *Store) ListQuestions(ctx context.Context, userID uuid.UUID, threadID *u
 	return out, rows.Err()
 }
 
-// ListThreadQuestions returns every question in a thread in ascending order so
-// the app can interleave them with messages.
+// ListThreadQuestions returns the newest 500 questions in a thread in
+// ascending order so the app can interleave them with messages.
 func (s *Store) ListThreadQuestions(ctx context.Context, userID, threadID uuid.UUID) ([]*Question, error) {
-	rows, err := s.pool.Query(ctx, "SELECT "+questionColumns+" FROM questions q WHERE q.user_id = $1 AND q.thread_id = $2 ORDER BY q.created_at ASC, q.id ASC LIMIT 500", userID, threadID)
+	rows, err := s.pool.Query(ctx, "SELECT "+questionColumns+" FROM questions q WHERE q.user_id = $1 AND q.thread_id = $2 ORDER BY q.created_at DESC, q.id DESC LIMIT 500", userID, threadID)
 	if err != nil {
 		return nil, err
 	}
@@ -168,19 +195,29 @@ func (s *Store) ListThreadQuestions(ctx context.Context, userID, threadID uuid.U
 		}
 		out = append(out, q)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
 }
 
-// AnswerQuestion records the user's answer. It fails with ErrInvalidState if
-// the question is no longer pending. The thread's read marker is advanced
-// because answering implies the user has seen the thread.
-func (s *Store) AnswerQuestion(ctx context.Context, userID, id uuid.UUID, a Answer) (*Question, error) {
+// AnswerQuestion records the user's answer and, in the same transaction, the
+// transcript message that carries it (so agents polling messages see it) and
+// the thread bump. It fails with ErrInvalidState if the question is no longer
+// pending. The thread's read marker is advanced because answering implies the
+// user has seen the thread.
+func (s *Store) AnswerQuestion(ctx context.Context, userID, id uuid.UUID, a Answer, origin string) (*Question, *Message, *Thread, error) {
 	if a.Selected == nil {
 		a.Selected = []string{}
 	}
 	a.Text = strings.TrimSpace(a.Text)
 	raw, _ := json.Marshal(a)
 	var q *Question
+	var msg *Message
+	var thread *Thread
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		var err error
 		q, err = scanQuestion(tx.QueryRow(ctx, `UPDATE questions q SET status = 'answered', answer = $3, answered_at = now()
@@ -196,19 +233,48 @@ func (s *Store) AnswerQuestion(ctx context.Context, userID, id uuid.UUID, a Answ
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, "UPDATE threads SET last_read_at = GREATEST(last_read_at, now()), updated_at = now() WHERE id = $1", q.ThreadID)
+		var body strings.Builder
+		if len(a.Selected) > 0 {
+			body.WriteString(strings.Join(a.Selected, ", "))
+		}
+		if a.Text != "" {
+			if body.Len() > 0 {
+				body.WriteString(" — ")
+			}
+			body.WriteString(a.Text)
+		}
+		msg, thread, _, err = createMessageTx(ctx, tx, userID, q.ThreadID, MessageInput{
+			Sender: SenderUser, Body: body.String(), Format: "text", Importance: ImportanceNormal, Origin: origin, MarkRead: true,
+			Meta: JSON{"question_id": q.ID.String(), "kind": "answer"},
+		})
 		return err
 	})
-	return q, err
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := s.hydrateAttachments(ctx, userID, []*Message{msg}); err != nil {
+		return nil, nil, nil, err
+	}
+	return q, msg, thread, nil
 }
 
-// CancelQuestion withdraws a pending question.
+// CancelQuestion withdraws a pending question (the agent no longer needs an
+// answer). DismissQuestion is the user's counterpart.
 func (s *Store) CancelQuestion(ctx context.Context, userID, id uuid.UUID) (*Question, error) {
-	q, err := scanQuestion(s.pool.QueryRow(ctx, `UPDATE questions q SET status = 'cancelled', answered_at = now()
-		WHERE q.id = $1 AND q.user_id = $2 AND q.status = 'pending' RETURNING `+questionColumns, id, userID))
+	return s.resolveQuestion(ctx, userID, id, QuestionCancelled)
+}
+
+// DismissQuestion records that the user declined to answer.
+func (s *Store) DismissQuestion(ctx context.Context, userID, id uuid.UUID) (*Question, error) {
+	return s.resolveQuestion(ctx, userID, id, QuestionDismissed)
+}
+
+func (s *Store) resolveQuestion(ctx context.Context, userID, id uuid.UUID, status string) (*Question, error) {
+	q, err := scanQuestion(s.pool.QueryRow(ctx, `UPDATE questions q SET status = $3, answered_at = now()
+		WHERE q.id = $1 AND q.user_id = $2 AND q.status = 'pending' RETURNING `+questionColumns, id, userID, status))
 	if err == ErrNotFound {
-		var status string
-		if scanErr := s.pool.QueryRow(ctx, "SELECT status FROM questions WHERE id = $1 AND user_id = $2", id, userID).Scan(&status); scanErr == nil {
+		var current string
+		if scanErr := s.pool.QueryRow(ctx, "SELECT status FROM questions WHERE id = $1 AND user_id = $2", id, userID).Scan(&current); scanErr == nil {
 			return nil, ErrInvalidState
 		}
 	}

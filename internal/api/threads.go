@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -39,7 +40,7 @@ func (s *Server) resolveThread(r *http.Request, autoCreate bool) (*store.Thread,
 				return nil, false, err
 			}
 			if created {
-				s.bus.Publish(r.Context(), bus.Event{Type: bus.ThreadCreated, UserID: p.user.ID.String(), ThreadID: t.ID.String()})
+				s.bus.Publish(context.WithoutCancel(r.Context()), bus.Event{Type: bus.ThreadCreated, UserID: p.user.ID.String(), ThreadID: t.ID.String()})
 			}
 			return t, created, nil
 		}
@@ -95,9 +96,9 @@ func (s *Server) handleCreateThread(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
-		s.bus.Publish(r.Context(), bus.Event{Type: bus.ThreadCreated, UserID: p.user.ID.String(), ThreadID: thread.ID.String()})
+		s.bus.Publish(context.WithoutCancel(r.Context()), bus.Event{Type: bus.ThreadCreated, UserID: p.user.ID.String(), ThreadID: thread.ID.String()})
 	} else {
-		s.bus.Publish(r.Context(), bus.Event{Type: bus.ThreadUpdated, UserID: p.user.ID.String(), ThreadID: thread.ID.String()})
+		s.bus.Publish(context.WithoutCancel(r.Context()), bus.Event{Type: bus.ThreadUpdated, UserID: p.user.ID.String(), ThreadID: thread.ID.String()})
 	}
 	writeJSON(w, status, map[string]any{"thread": thread, "created": created})
 }
@@ -189,7 +190,7 @@ func (s *Server) handleUpdateThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	s.bus.Publish(r.Context(), bus.Event{Type: bus.ThreadUpdated, UserID: p.user.ID.String(), ThreadID: updated.ID.String()})
+	s.bus.Publish(context.WithoutCancel(r.Context()), bus.Event{Type: bus.ThreadUpdated, UserID: p.user.ID.String(), ThreadID: updated.ID.String()})
 	writeJSON(w, http.StatusOK, map[string]any{"thread": updated})
 }
 
@@ -210,8 +211,17 @@ func (s *Server) handleDeleteThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	s.deleteAttachmentObjects(r.Context(), attachments)
-	s.bus.Publish(r.Context(), bus.Event{Type: bus.ThreadDeleted, UserID: p.user.ID.String(), ThreadID: thread.ID.String()})
+	// The rows are gone; the bytes follow in the background so a thread full
+	// of screenshots does not hold the request open for hundreds of round
+	// trips (a stray object costs storage, not correctness).
+	if len(attachments) > 0 {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			s.deleteAttachmentObjects(ctx, attachments)
+		}()
+	}
+	s.bus.Publish(context.WithoutCancel(r.Context()), bus.Event{Type: bus.ThreadDeleted, UserID: p.user.ID.String(), ThreadID: thread.ID.String()})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -228,7 +238,7 @@ func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	s.bus.Publish(r.Context(), bus.Event{Type: bus.ThreadUpdated, UserID: p.user.ID.String(), ThreadID: updated.ID.String()})
+	s.bus.Publish(context.WithoutCancel(r.Context()), bus.Event{Type: bus.ThreadUpdated, UserID: p.user.ID.String(), ThreadID: updated.ID.String()})
 	writeJSON(w, http.StatusOK, map[string]any{"thread": updated})
 }
 

@@ -31,16 +31,24 @@ func scanPush(row pgx.Row) (*PushSubscription, error) {
 	return &p, nil
 }
 
-// UpsertPushSubscription stores or refreshes a subscription. An endpoint that
-// moves between users is reassigned to the latest one.
+// UpsertPushSubscription stores or refreshes a subscription. An endpoint
+// already registered by another user is refused with ErrConflict; push
+// services hand out fresh endpoints per install, so a genuine move shows up
+// as a new endpoint and the old one is removed when the service reports it
+// gone.
 func (s *Store) UpsertPushSubscription(ctx context.Context, userID uuid.UUID, endpoint, p256dh, auth, userAgent string) (*PushSubscription, error) {
-	return scanPush(s.pool.QueryRow(ctx, `WITH p AS (
+	sub, err := scanPush(s.pool.QueryRow(ctx, `WITH p AS (
 			INSERT INTO push_subscriptions (id, user_id, endpoint, p256dh, auth, user_agent)
 			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (endpoint) DO UPDATE SET user_id = EXCLUDED.user_id, p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth,
+			ON CONFLICT (endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth,
 				user_agent = EXCLUDED.user_agent, failure_count = 0
+			WHERE push_subscriptions.user_id = EXCLUDED.user_id
 			RETURNING *
 		) SELECT `+pushColumns+` FROM p`, NewID(), userID, endpoint, p256dh, auth, truncate(userAgent, 512)))
+	if err == ErrNotFound {
+		return nil, ErrConflict
+	}
+	return sub, err
 }
 
 // DeletePushSubscription removes an endpoint owned by the user.

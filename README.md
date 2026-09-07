@@ -77,6 +77,7 @@ try attachments without B2.
 | `FINALECHAT_SECURE_COOKIES` | `true` | Set `false` for plain-HTTP development |
 | `FINALECHAT_TRUST_PROXY` | `true` | Honour `X-Forwarded-For` |
 | `FINALECHAT_SESSION_TTL` | `2160h` | Sliding browser session lifetime |
+| `FINALECHAT_SHUTDOWN_DELAY` | `3s` | How long `/readyz` fails before connections close on shutdown, so a load balancer drains first |
 | `FINALECHAT_LOG_JSON` / `FINALECHAT_LOG_LEVEL` | `true` / `info` | Logging |
 
 ## Deploy

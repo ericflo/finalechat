@@ -173,7 +173,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	resp := map[string]any{"signup": mode, "authenticated": false, "push_enabled": s.push.Enabled(), "attachments_enabled": s.blobs != nil, "version": s.cfg.Version}
+	resp := map[string]any{"signup": mode, "authenticated": false, "push_enabled": s.push.Enabled(), "attachments_enabled": s.blobs != nil, "version": s.cfg.Version, "features": s.Features()}
 	if p := principalFrom(r.Context()); p != nil {
 		resp["authenticated"] = true
 		resp["user"] = p.user
@@ -231,7 +231,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	hash, err := auth.HashPassword(req.Password)
+	var hash string
+	withHashing(func() { hash, err = auth.HashPassword(req.Password) })
 	if err != nil {
 		writeError(w, err)
 		return
@@ -277,7 +278,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	user, hash, err := s.store.GetUserByEmail(r.Context(), strings.ToLower(req.Email))
 	if err == store.ErrNotFound {
 		// Burn comparable time so account existence is not observable.
-		_, _ = auth.VerifyPassword("$argon2id$v=19$m=65536,t=2,p=2$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", req.Password)
+		withHashing(func() {
+			_, _ = auth.VerifyPassword("$argon2id$v=19$m=65536,t=2,p=2$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", req.Password)
+		})
 		writeError(w, invalid)
 		return
 	}
@@ -285,7 +288,8 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	ok, err := auth.VerifyPassword(hash, req.Password)
+	var ok bool
+	withHashing(func() { ok, err = auth.VerifyPassword(hash, req.Password) })
 	if err != nil || !ok {
 		writeError(w, invalid)
 		return
@@ -311,11 +315,36 @@ func (s *Server) startSession(w http.ResponseWriter, r *http.Request, user *stor
 
 // POST /api/v1/auth/logout
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if !s.sameOrigin(r) {
+		writeError(w, errCSRF)
+		return
+	}
 	if p := principalFrom(r.Context()); p != nil && p.sessionHash != nil {
 		_ = s.store.DeleteSession(r.Context(), p.sessionHash)
+		s.clearSessionCookie(w)
 	}
-	s.clearSessionCookie(w)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// sessionOnly rejects API tokens for routes that belong to the app.
+func (s *Server) sessionOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if p := principalFrom(r.Context()); p != nil && p.viaToken() {
+			writeError(w, &apiError{Status: http.StatusForbidden, Code: "forbidden", Message: "This route is for the app; API tokens cannot use it."})
+			return
+		}
+		next(w, r)
+	}
+}
+
+// hashing bounds concurrent password hashing: argon2 costs 64 MiB per call,
+// so unbounded parallel logins would be a memory exhaustion primitive.
+var hashing = make(chan struct{}, 4)
+
+func withHashing(fn func()) {
+	hashing <- struct{}{}
+	defer func() { <-hashing }()
+	fn()
 }
 
 // GET /api/v1/me
@@ -326,7 +355,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	resp := map[string]any{"user": p.user, "counts": counts, "push_enabled": s.push.Enabled(), "attachments_enabled": s.blobs != nil, "base_url": s.cfg.BaseURL, "version": s.cfg.Version}
+	resp := map[string]any{"user": p.user, "counts": counts, "push_enabled": s.push.Enabled(), "attachments_enabled": s.blobs != nil, "base_url": s.cfg.BaseURL, "version": s.cfg.Version, "features": s.Features()}
 	if p.token != nil {
 		resp["token"] = p.token
 		resp["auth"] = "token"

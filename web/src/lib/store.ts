@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import { api, APIError } from "./api";
 import { setBadge } from "./push";
 import { syncServerTime } from "./time";
-import type { Counts, Message, Question, Settings, Thread, User } from "./types";
+import type { Activity, Counts, Message, Question, Settings, Thread, User } from "./types";
 
 export type Connection = "idle" | "connecting" | "online" | "offline";
 
@@ -33,7 +33,7 @@ const defaultSettings: Settings = { notify_all_messages: false, remote_mode: fal
 let state: State = {
   user: null,
   settings: defaultSettings,
-  counts: { pending_questions: 0, unread_threads: 0 },
+  counts: { pending_questions: 0, unread_threads: 0, attention: 0 },
   pushEnabled: false,
   attachmentsEnabled: false,
   version: "",
@@ -142,7 +142,7 @@ export async function signOut() {
       pending: [],
       inboxLoaded: false,
       archivedLoaded: false,
-      counts: { pending_questions: 0, unread_threads: 0 },
+      counts: { pending_questions: 0, unread_threads: 0, attention: 0 },
     });
     setBadge(0);
   }
@@ -157,7 +157,8 @@ export function setUser(user: User) {
 
 function applyCounts(counts: Counts) {
   set({ counts });
-  setBadge(counts.pending_questions + counts.unread_threads);
+  // The badge is the number of threads that need the user: one countable thing.
+  setBadge(counts.attention ?? counts.pending_questions + counts.unread_threads);
 }
 
 function upsertThreads(list: Thread[]) {
@@ -370,7 +371,14 @@ export function connect() {
 
   withPayload("thread.created", (d) => d.thread && upsertThreads([d.thread]));
   withPayload("thread.updated", (d) => d.thread && upsertThreads([d.thread]));
-  withPayload("thread.activity", (d) => d.thread && upsertThreads([d.thread]));
+  withPayload("thread.activity", (d) => d.thread_id && applyActivity(d.thread_id, d.activity ?? null, d.at));
+  es.addEventListener("ping", (ev) => {
+    try {
+      syncServerTime((JSON.parse((ev as MessageEvent).data) as { at?: string }).at);
+    } catch {
+      // ignore
+    }
+  });
   withPayload("thread.deleted", (d) => {
     if (!d.thread_id) return;
     const id = d.thread_id;
@@ -384,7 +392,7 @@ export function connect() {
     if (d.message) appendMessage(d.message);
     if (d.thread) upsertThreads([d.thread]);
   });
-  for (const name of ["question.created", "question.answered", "question.cancelled", "question.expired"]) {
+  for (const name of ["question.created", "question.answered", "question.cancelled", "question.expired", "question.dismissed"]) {
     withPayload(name, (d) => {
       if (d.question) upsertQuestion(d.question);
       if (d.thread) upsertThreads([d.thread]);
@@ -404,10 +412,22 @@ interface EventPayload {
   at?: string;
   thread?: Thread;
   thread_id?: string;
+  activity?: Activity | null;
   message?: Message;
   question?: Question;
   settings?: Settings;
   counts?: Counts;
+}
+
+/** Merges a status line into its thread; an event older than what we hold is ignored. */
+function applyActivity(threadId: string, activity: Activity | null, at?: string) {
+  set((s) => {
+    const t = s.threads[threadId];
+    if (!t) return {};
+    const held = t.activity;
+    if (held && at && new Date(at).getTime() < new Date(held.at).getTime()) return {};
+    return { threads: { ...s.threads, [threadId]: { ...t, activity } } };
+  });
 }
 
 function scheduleReconnect(delay: number) {

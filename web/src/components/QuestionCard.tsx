@@ -42,7 +42,7 @@ export function QuestionCard({ q, showThread, highlight }: { q: Question; showTh
     }
   };
 
-  const statusLabel = { pending: "Needs you", answered: "Answered", cancelled: "Withdrawn", expired: "Expired" }[q.status];
+  const statusLabel = { pending: "Needs you", answered: "Answered", cancelled: "Withdrawn", expired: "Expired", dismissed: "Dismissed" }[q.status];
 
   return (
     <div ref={ref} className={`question ${pending ? "" : "resolved"}`} data-question-id={q.id}>
@@ -119,8 +119,10 @@ export function QuestionCard({ q, showThread, highlight }: { q: Question; showTh
           {q.answer.text && <div style={{ whiteSpace: "pre-wrap" }}>{q.answer.text}</div>}
         </div>
       )}
-      {(q.status === "cancelled" || q.status === "expired") && (
-        <div className="q-answer gone">{q.status === "cancelled" ? "The agent withdrew this question." : "This question expired before it was answered."}</div>
+      {(q.status === "cancelled" || q.status === "expired" || q.status === "dismissed") && (
+        <div className="q-answer gone">
+          {q.status === "cancelled" ? "The agent withdrew this question." : q.status === "expired" ? "This question expired before it was answered." : "You dismissed this question."}
+        </div>
       )}
     </div>
   );
