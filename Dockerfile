@@ -31,11 +31,14 @@ RUN --mount=type=cache,id=finalechat-go-mod,target=/go/pkg/mod,sharing=locked \
     set -eu \
     && mkdir -p /tmp/pg && chown postgres:postgres /tmp/pg \
     && gosu postgres initdb -D /tmp/pg --auth=trust >/dev/null \
-    && gosu postgres pg_ctl -D /tmp/pg -o "-k /tmp -p 5432 -c listen_addresses=127.0.0.1" -l /tmp/pg.log -w start >/dev/null \
-    && gosu postgres createdb -h 127.0.0.1 finalechat_test \
+    # Unix socket only: concurrent builds on one runner can share a network
+    # namespace, and a fixed TCP port then fails to bind. The socket lives in
+    # this build's own /tmp. Print the server log if it still will not start.
+    && { gosu postgres pg_ctl -D /tmp/pg -o "-k /tmp -c listen_addresses=''" -l /tmp/pg.log -w start >/dev/null || { cat /tmp/pg.log; exit 1; }; } \
+    && gosu postgres createdb -h /tmp finalechat_test \
     && test -z "$(gofmt -l cmd internal assets.go)" \
     && go vet ./... \
-    && FINALECHAT_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:5432/finalechat_test?sslmode=disable' go test -count=1 ./... \
+    && FINALECHAT_TEST_DATABASE_URL='postgres://postgres@/finalechat_test?host=/tmp&sslmode=disable' go test -count=1 ./... \
     && gosu postgres pg_ctl -D /tmp/pg -w stop >/dev/null \
     && date -u +%Y-%m-%dT%H:%M:%SZ >/tmp/tests-passed
 
