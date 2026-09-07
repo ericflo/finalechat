@@ -155,7 +155,7 @@ func attachToMessage(ctx context.Context, tx pgx.Tx, userID, threadID, messageID
 
 // OrphanAttachments lists uploads never attached to a message.
 func (s *Store) OrphanAttachments(ctx context.Context, olderThan time.Duration, limit int) ([]*Attachment, error) {
-	rows, err := s.pool.Query(ctx, "SELECT "+attachmentColumns+" FROM attachments a WHERE a.message_id IS NULL AND a.created_at < now() - $1 ORDER BY a.created_at LIMIT $2", olderThan, limit)
+	rows, err := s.pool.Query(ctx, "SELECT "+attachmentColumns+" FROM attachments a WHERE a.message_id IS NULL AND a.created_at < now() - $1::interval ORDER BY a.created_at LIMIT $2", olderThan, limit)
 	if err != nil {
 		return nil, err
 	}

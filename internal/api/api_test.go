@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ericflo/finalechat/internal/blob"
@@ -699,6 +700,55 @@ func TestAttachments(t *testing.T) {
 	if _, _, _, err := testAPI.blobs.Get(context.Background(), "a/"+attID+"/shot.png"); err == nil {
 		t.Fatal("object should have been deleted from blob storage")
 	}
+}
+
+func TestOrphanAttachmentSweep(t *testing.T) {
+	_, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "orphan:1", "title": "orphans"}), "thread"), "id")
+	req, _ := http.NewRequest("POST", testSrv.URL+"/api/v1/threads/"+thread+"/attachments?filename=stray.png", bytes.NewReader(makePNG(t, 8, 8)))
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Content-Type", "image/png")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var up map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&up)
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: %d %v", res.StatusCode, up)
+	}
+	id := str(up["attachments"].([]any)[0].(map[string]any), "id")
+	// Fresh uploads survive the sweep; backdated ones are removed with their objects.
+	testAPI.pruneOrphanAttachments(context.Background())
+	if _, err := testAPI.store.GetAttachment(context.Background(), principalUser(t, a), uuidMust(t, id)); err != nil {
+		t.Fatalf("fresh upload was swept: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(), "UPDATE attachments SET created_at = now() - interval '2 days' WHERE id = $1", id); err != nil {
+		t.Fatal(err)
+	}
+	testAPI.pruneOrphanAttachments(context.Background())
+	if _, err := testAPI.store.GetAttachment(context.Background(), principalUser(t, a), uuidMust(t, id)); err == nil {
+		t.Fatal("stale upload was not swept")
+	}
+	if _, _, _, err := testAPI.blobs.Get(context.Background(), "a/"+id+"/stray.png"); err == nil {
+		t.Fatal("stale object was not deleted")
+	}
+}
+
+func principalUser(t *testing.T, c *client) uuid.UUID {
+	t.Helper()
+	me := c.must(http.StatusOK, "GET", "/api/v1/me", nil)
+	return uuidMust(t, str(sub(me, "user"), "id"))
+}
+
+func uuidMust(t *testing.T, s string) uuid.UUID {
+	t.Helper()
+	id, err := uuid.Parse(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
 }
 
 func makePNG(t *testing.T, w, h int) []byte {
