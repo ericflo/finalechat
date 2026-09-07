@@ -331,7 +331,10 @@ func (s *Server) serveAttachment(thumb bool) http.HandlerFunc {
 		if size > 0 {
 			h.Set("Content-Length", strconv.FormatInt(size, 10))
 		}
-		h.Set("Cache-Control", "private, max-age=31536000, immutable")
+		// Revalidate on every use: the service worker keeps its own copy for
+		// offline reading, and a signed-out browser must not keep serving
+		// attachments from its HTTP cache for a year.
+		h.Set("Cache-Control", "private, no-cache")
 		h.Set("X-Content-Type-Options", "nosniff")
 		// Nothing served here may run as this origin: agents upload arbitrary
 		// files, and the session cookie is what a script would steal.

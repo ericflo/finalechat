@@ -43,19 +43,26 @@ type Message struct {
 	// an agent did; older rows have "".
 	Origin    string    `json:"origin"`
 	CreatedAt time.Time `json:"created_at"`
+	// Deleted marks a tombstone: the message was removed but its id and
+	// position are kept so that pagination anchors keep working. Tombstones
+	// are only returned on catch-up pages (after=<id> without a sender
+	// filter) so clients can prune them.
+	Deleted   bool       `json:"deleted,omitempty"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 	// Attachments are the files carried by the message, in upload order.
 	Attachments []*Attachment `json:"attachments"`
 }
 
-const messageColumns = "m.id, m.thread_id, m.user_id, m.sender, m.body, m.format, m.importance, m.meta, m.origin, m.created_at"
+const messageColumns = "m.id, m.thread_id, m.user_id, m.sender, m.body, m.format, m.importance, m.meta, m.origin, m.created_at, m.deleted_at"
 
 func scanMessage(row pgx.Row) (*Message, error) {
 	var m Message
 	var meta []byte
-	if err := row.Scan(&m.ID, &m.ThreadID, &m.UserID, &m.Sender, &m.Body, &m.Format, &m.Importance, &meta, &m.Origin, &m.CreatedAt); err != nil {
+	if err := row.Scan(&m.ID, &m.ThreadID, &m.UserID, &m.Sender, &m.Body, &m.Format, &m.Importance, &meta, &m.Origin, &m.CreatedAt, &m.DeletedAt); err != nil {
 		return nil, translate(err)
 	}
 	scanJSON(meta, &m.Meta)
+	m.Deleted = m.DeletedAt != nil
 	return &m, nil
 }
 
@@ -136,9 +143,20 @@ func createMessageTx(ctx context.Context, tx pgx.Tx, userID, threadID uuid.UUID,
 			INSERT INTO messages (id, thread_id, user_id, sender, body, format, importance, meta, origin, client_key)
 			SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 			WHERE EXISTS (SELECT 1 FROM threads WHERE id = $2 AND user_id = $3)
+			ON CONFLICT (thread_id, client_key) WHERE client_key IS NOT NULL DO NOTHING
 			RETURNING *
 		) SELECT `+messageColumns+` FROM m`,
 		NewID(), threadID, userID, in.Sender, in.Body, in.Format, in.Importance, in.Meta.value(), in.Origin, clientKey))
+	if err == ErrNotFound && clientKey != nil {
+		// A concurrent post with the same key won the insert; DO NOTHING
+		// waited for it to commit, so this read sees it.
+		existing, err := scanMessage(tx.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.thread_id = $1 AND m.user_id = $2 AND m.client_key = $3", threadID, userID, in.ClientKey))
+		if err != nil {
+			return nil, nil, false, err
+		}
+		thread, err := scanThread(tx.QueryRow(ctx, "SELECT "+threadColumns+" FROM threads t WHERE t.id = $1 AND t.user_id = $2", threadID, userID))
+		return existing, thread, false, err
+	}
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -214,17 +232,31 @@ func (s *Store) hydrateAttachments(ctx context.Context, userID uuid.UUID, msgs [
 	return nil
 }
 
-// DeleteMessage removes a message and its attachment rows, and repairs the
-// thread's preview from what remains. The removed attachments are returned
-// so the caller can delete their objects.
+// FindMessageByClientKey returns the message an idempotency key already
+// created in the thread, or ErrNotFound.
+func (s *Store) FindMessageByClientKey(ctx context.Context, userID, threadID uuid.UUID, key string) (*Message, error) {
+	m, err := scanMessage(s.pool.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.thread_id = $1 AND m.user_id = $2 AND m.client_key = $3", threadID, userID, key))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.hydrateAttachments(ctx, userID, []*Message{m}); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// DeleteMessage turns a message into a tombstone (body and meta gone, id
+// and position kept so pagination anchors still resolve), removes its
+// attachment rows, and repairs the thread's preview from what remains. The
+// removed attachments are returned so the caller can delete their objects.
 func (s *Store) DeleteMessage(ctx context.Context, userID, id uuid.UUID) (msg *Message, thread *Thread, attachments []*Attachment, err error) {
 	err = s.withTx(ctx, func(tx pgx.Tx) error {
 		var err error
-		msg, err = scanMessage(tx.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.id = $1 AND m.user_id = $2", id, userID))
+		msg, err = scanMessage(tx.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.id = $1 AND m.user_id = $2 AND m.deleted_at IS NULL", id, userID))
 		if err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, "SELECT "+attachmentColumns+" FROM attachments a WHERE a.message_id = $1", id)
+		rows, err := tx.Query(ctx, "DELETE FROM attachments a WHERE a.message_id = $1 RETURNING "+attachmentColumns, id)
 		if err != nil {
 			return err
 		}
@@ -237,30 +269,39 @@ func (s *Store) DeleteMessage(ctx context.Context, userID, id uuid.UUID) (msg *M
 			attachments = append(attachments, a)
 		}
 		rows.Close()
-		if _, err := tx.Exec(ctx, "DELETE FROM messages WHERE id = $1", id); err != nil {
+		if _, err := tx.Exec(ctx, "UPDATE messages SET deleted_at = now(), body = '', meta = '{}'::jsonb, format = 'text', client_key = NULL WHERE id = $1", id); err != nil {
 			return err
 		}
 		// The preview follows the newest remaining message or question.
-		thread, err = scanThread(tx.QueryRow(ctx, `WITH latest AS (
-				SELECT body AS text, sender, created_at, 0 AS attachments FROM messages WHERE thread_id = $1
+		var text, sender string
+		var attachmentCount int
+		err = tx.QueryRow(ctx, `SELECT text, sender, n FROM (
+				SELECT m.body AS text, m.sender, m.created_at, (SELECT count(*) FROM attachments a WHERE a.message_id = m.id)::int AS n
+					FROM messages m WHERE m.thread_id = $1 AND m.deleted_at IS NULL
 				UNION ALL
-				SELECT prompt, 'question', created_at, 0 FROM questions WHERE thread_id = $1
-				ORDER BY created_at DESC LIMIT 1
-			)
-			UPDATE threads t SET preview = COALESCE((SELECT text FROM latest), ''), preview_sender = COALESCE((SELECT sender FROM latest), ''), updated_at = now()
-			WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns, msg.ThreadID, userID))
+				SELECT q.prompt, 'question', q.created_at, 0 FROM questions q WHERE q.thread_id = $1
+			) latest ORDER BY created_at DESC LIMIT 1`, msg.ThreadID).Scan(&text, &sender, &attachmentCount)
+		if err != nil && err != pgx.ErrNoRows {
+			return err
+		}
+		preview := ""
+		if err == nil {
+			preview = previewFor(text, attachmentCount)
+		}
+		thread, err = scanThread(tx.QueryRow(ctx, `UPDATE threads t SET preview = $3, preview_sender = $4, updated_at = now()
+			WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns, msg.ThreadID, userID, preview, sender))
 		return err
 	})
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	thread.Preview = Preview(thread.Preview)
+	msg.Deleted = true
 	return msg, thread, attachments, nil
 }
 
 // GetMessage loads a message the user owns.
 func (s *Store) GetMessage(ctx context.Context, userID, id uuid.UUID) (*Message, error) {
-	m, err := scanMessage(s.pool.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.id = $1 AND m.user_id = $2", id, userID))
+	m, err := scanMessage(s.pool.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.id = $1 AND m.user_id = $2 AND m.deleted_at IS NULL", id, userID))
 	if err != nil {
 		return nil, err
 	}
@@ -295,6 +336,12 @@ func (s *Store) ListMessages(ctx context.Context, userID, threadID uuid.UUID, p 
 	}
 	args := []any{threadID, userID, p.Limit + 1}
 	where := "m.thread_id = $1 AND m.user_id = $2"
+	// A catch-up page (after=<id>, no sender filter) includes tombstones so
+	// a client that held the message learns it is gone; everything else
+	// shows live messages only.
+	if p.After == nil || p.Sender != "" {
+		where += " AND m.deleted_at IS NULL"
+	}
 	order := "ORDER BY m.created_at DESC, m.id DESC"
 	reverse := true
 	if p.After != nil {

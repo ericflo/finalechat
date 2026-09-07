@@ -49,6 +49,10 @@ type Config struct {
 	SecureCookies bool
 	// TrustProxy controls whether X-Forwarded-* headers are honoured.
 	TrustProxy bool
+	// TrustedProxyHops is how many proxies append to X-Forwarded-For before
+	// the request reaches this server; the client address is that many
+	// entries from the right.
+	TrustedProxyHops int
 	// SessionTTL is the sliding lifetime of a browser session.
 	SessionTTL time.Duration
 	// ShutdownDelay is how long the server keeps serving after readiness
@@ -65,25 +69,26 @@ type Config struct {
 // Load reads configuration from the environment.
 func Load(version string) (Config, error) {
 	cfg := Config{
-		Addr:            getenv("FINALECHAT_ADDR", ":8080"),
-		DatabaseURL:     os.Getenv("DATABASE_URL"),
-		BaseURL:         strings.TrimRight(getenv("FINALECHAT_BASE_URL", "http://localhost:8080"), "/"),
-		CanonicalHost:   os.Getenv("FINALECHAT_CANONICAL_HOST"),
-		VAPIDPublicKey:  os.Getenv("FINALECHAT_VAPID_PUBLIC_KEY"),
-		VAPIDPrivateKey: os.Getenv("FINALECHAT_VAPID_PRIVATE_KEY"),
-		VAPIDSubject:    getenv("FINALECHAT_VAPID_SUBJECT", "mailto:hello@finalechat.com"),
-		InviteCode:      os.Getenv("FINALECHAT_INVITE_CODE"),
-		B2KeyID:         os.Getenv("FINALECHAT_B2_KEY_ID"),
-		B2Key:           os.Getenv("FINALECHAT_B2_KEY"),
-		B2Bucket:        os.Getenv("FINALECHAT_B2_BUCKET"),
-		BlobStore:       strings.ToLower(os.Getenv("FINALECHAT_BLOB_STORE")),
-		SecureCookies:   getenvBool("FINALECHAT_SECURE_COOKIES", true),
-		TrustProxy:      getenvBool("FINALECHAT_TRUST_PROXY", true),
-		SessionTTL:      getenvDuration("FINALECHAT_SESSION_TTL", 90*24*time.Hour),
-		ShutdownDelay:   getenvDuration("FINALECHAT_SHUTDOWN_DELAY", 3*time.Second),
-		LogJSON:         getenvBool("FINALECHAT_LOG_JSON", true),
-		LogLevel:        getenv("FINALECHAT_LOG_LEVEL", "info"),
-		Version:         version,
+		Addr:             getenv("FINALECHAT_ADDR", ":8080"),
+		DatabaseURL:      os.Getenv("DATABASE_URL"),
+		BaseURL:          strings.TrimRight(getenv("FINALECHAT_BASE_URL", "http://localhost:8080"), "/"),
+		CanonicalHost:    os.Getenv("FINALECHAT_CANONICAL_HOST"),
+		VAPIDPublicKey:   os.Getenv("FINALECHAT_VAPID_PUBLIC_KEY"),
+		VAPIDPrivateKey:  os.Getenv("FINALECHAT_VAPID_PRIVATE_KEY"),
+		VAPIDSubject:     getenv("FINALECHAT_VAPID_SUBJECT", "mailto:hello@finalechat.com"),
+		InviteCode:       os.Getenv("FINALECHAT_INVITE_CODE"),
+		B2KeyID:          os.Getenv("FINALECHAT_B2_KEY_ID"),
+		B2Key:            os.Getenv("FINALECHAT_B2_KEY"),
+		B2Bucket:         os.Getenv("FINALECHAT_B2_BUCKET"),
+		BlobStore:        strings.ToLower(os.Getenv("FINALECHAT_BLOB_STORE")),
+		SecureCookies:    getenvBool("FINALECHAT_SECURE_COOKIES", true),
+		TrustProxy:       getenvBool("FINALECHAT_TRUST_PROXY", true),
+		TrustedProxyHops: getenvInt("FINALECHAT_TRUSTED_PROXY_HOPS", 1),
+		SessionTTL:       getenvDuration("FINALECHAT_SESSION_TTL", 90*24*time.Hour),
+		ShutdownDelay:    getenvDuration("FINALECHAT_SHUTDOWN_DELAY", 3*time.Second),
+		LogJSON:          getenvBool("FINALECHAT_LOG_JSON", true),
+		LogLevel:         getenv("FINALECHAT_LOG_LEVEL", "info"),
+		Version:          version,
 	}
 	if hosts := os.Getenv("FINALECHAT_REDIRECT_HOSTS"); hosts != "" {
 		for _, h := range strings.Split(hosts, ",") {
@@ -144,6 +149,18 @@ func getenvBool(name string, def bool) bool {
 		return false
 	}
 	return def
+}
+
+func getenvInt(name string, def int) int {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
 }
 
 func getenvDuration(name string, def time.Duration) time.Duration {

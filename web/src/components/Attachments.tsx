@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Attachment } from "../lib/types";
-import { IconClose, IconDownload, IconFile } from "./Icons";
+import { IconBack, IconClose, IconDownload, IconFile } from "./Icons";
 
 export function humanSize(n: number): string {
   if (n < 1024) return `${n} B`;
@@ -11,7 +11,7 @@ export function humanSize(n: number): string {
 const maxTiles = 4;
 
 /** Renders a message's attachments: an image grid plus file chips. */
-export function AttachmentList({ items, onOpen }: { items: Attachment[]; onOpen: (a: Attachment) => void }) {
+export function AttachmentList({ items, onOpen }: { items: Attachment[]; onOpen: (images: Attachment[], index: number) => void }) {
   const images = items.filter((a) => a.kind === "image");
   const files = items.filter((a) => a.kind !== "image");
   const shown = images.length > maxTiles ? images.slice(0, maxTiles) : images;
@@ -30,8 +30,8 @@ export function AttachmentList({ items, onOpen }: { items: Attachment[]; onOpen:
                 type="button"
                 className="att-image"
                 style={images.length === 1 ? { aspectRatio: `${w} / ${h}` } : undefined}
-                onClick={() => onOpen(a)}
-                aria-label={last ? `Open ${images.length} images` : `Open ${a.filename}`}
+                onClick={() => onOpen(images, i)}
+                aria-label={last ? `Open ${a.filename} and ${extra} more` : `Open ${a.filename}`}
               >
                 <img src={a.thumb_url ?? a.url} alt={a.filename} loading="lazy" decoding="async" />
                 {last && <span className="att-more">+{extra}</span>}
@@ -60,16 +60,29 @@ interface View {
 
 /** Full-screen image viewer with pinch, double-tap and wheel zoom, drag to pan,
  * and a swipe down to dismiss. Terminal screenshots need the zoom. */
-export function ImageViewer({ item, onClose }: { item: Attachment; onClose: () => void }) {
+export function ImageViewer({ items, index, onClose }: { items: Attachment[]; index: number; onClose: () => void }) {
+  const [i, setI] = useState(index);
+  const item = items[Math.min(i, items.length - 1)] as Attachment;
   const [loaded, setLoaded] = useState(false);
   const [view, setView] = useState<View>({ scale: 1, x: 0, y: 0 });
+  const go = (delta: number) => {
+    const next = i + delta;
+    if (next < 0 || next >= items.length) return;
+    setI(next);
+    setLoaded(false);
+    setView({ scale: 1, x: 0, y: 0 });
+  };
   const bodyRef = useRef<HTMLDivElement>(null);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const gesture = useRef<{ start: View; dist: number; cx: number; cy: number; moved: boolean } | null>(null);
   const lastTap = useRef(0);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowRight") go(1);
+      if (e.key === "ArrowLeft") go(-1);
+    };
     window.addEventListener("keydown", onKey);
     const { overflow } = document.body.style;
     document.body.style.overflow = "hidden";
@@ -77,7 +90,8 @@ export function ImageViewer({ item, onClose }: { item: Attachment; onClose: () =
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = overflow;
     };
-  }, [onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, i]);
 
   const clamp = (v: View): View => {
     const scale = Math.min(5, Math.max(1, v.scale));
@@ -149,6 +163,14 @@ export function ImageViewer({ item, onClose }: { item: Attachment; onClose: () =
       onClose();
       return;
     }
+    // At rest, a horizontal swipe pages through the message's images.
+    const dx = e.clientX - g.cx;
+    const dy = e.clientY - g.cy;
+    if (g.start.scale === 1 && view.scale === 1 && Math.abs(dx) > 60 && Math.abs(dy) < 60) {
+      setView({ scale: 1, x: 0, y: 0 });
+      go(dx < 0 ? 1 : -1);
+      return;
+    }
     if (g.start.scale === 1 && view.scale === 1) setView({ scale: 1, x: 0, y: 0 });
     if (!g.moved) {
       const now = Date.now();
@@ -176,8 +198,19 @@ export function ImageViewer({ item, onClose }: { item: Attachment; onClose: () =
           <span className="att-meta">
             {" "}
             · {item.width}×{item.height} · {humanSize(item.size)}
+            {items.length > 1 && ` · ${i + 1} / ${items.length}`}
           </span>
         </span>
+        {items.length > 1 && (
+          <>
+            <button type="button" className="icon-btn" onClick={() => go(-1)} disabled={i === 0} aria-label="Previous image">
+              <IconBack />
+            </button>
+            <button type="button" className="icon-btn viewer-next" onClick={() => go(1)} disabled={i >= items.length - 1} aria-label="Next image">
+              <IconBack />
+            </button>
+          </>
+        )}
         <a className="icon-btn" href={item.url} download={item.filename} target="_blank" rel="noopener" aria-label="Download">
           <IconDownload />
         </a>
@@ -200,7 +233,7 @@ export function ImageViewer({ item, onClose }: { item: Attachment; onClose: () =
           }}
         />
       </div>
-      {loaded && view.scale === 1 && <div className="viewer-hint">Double-tap or pinch to zoom · swipe down to close</div>}
+      {loaded && view.scale === 1 && <div className="viewer-hint">{items.length > 1 ? "Swipe for the next image · " : ""}Double-tap or pinch to zoom · swipe down to close</div>}
     </div>
   );
 }

@@ -46,8 +46,9 @@ curl -sS https://www.finalechat.com/api/v1/threads/ext:my-session-42/messages \
 
 **2. Ask a question and block for the answer.** `wait` holds the request open
 up to 600 seconds. The response carries the question in its current state:
-`status` is `answered` when the user responded, otherwise still `pending`
-(keep waiting with `GET /questions/{id}?wait=600`).
+`status` is `answered` when the user responded, `pending` while they have
+not (keep waiting with `GET /questions/{id}?wait=600`), or `dismissed`,
+`cancelled` or `expired` when there will be no answer.
 
 ```bash
 curl -sS "https://www.finalechat.com/api/v1/threads/ext:my-session-42/questions?wait=600" \
@@ -116,12 +117,17 @@ cap keeps proxies happy; loop if you need longer.
   the agent name.
 - The user can reply in the app at any time. Replies arrive as messages with
   `"sender": "user"` and `"origin": "session"`; an answered question also adds
-  a user message that records the choice, so polling messages alone is enough
-  to see everything. (A message with `"origin": "token"` was posted by an
-  agent, for example a terminal prompt mirrored into the thread; treat only
-  `session` messages as the user speaking from the app.)
-- The user can also decline a question: its `status` becomes `dismissed`.
-  Do not ask it again; proceed with your best judgement and say so.
+  a user message that records the choice. (A message with `"origin":
+  "token"` was posted by an agent, for example a terminal prompt mirrored
+  into the thread; treat only `session` messages as the user speaking from
+  the app.)
+- Only an answer writes a message. A question the user declines becomes
+  `dismissed`, one you withdraw becomes `cancelled`, and one that runs out
+  becomes `expired`, silently: while you have a question open, watch it with
+  `GET /questions/{id}?wait=600` (or the `wait` on the ask itself) rather than
+  polling messages alone, and treat every status other than `pending` as
+  final. On `dismissed`, do not ask again; proceed with your best judgement
+  and say so.
 - Retries are safe: send an `Idempotency-Key` header (or a `client_key`
   field) on a message or question post, and a retry after a timeout returns
   the original with HTTP 200 and `"created": false` instead of a duplicate.
@@ -204,9 +210,11 @@ reply), `waiting` (blocked on the user or on something external) or `tool`
 true}`; the thread's `activity` field is `{text, kind, at, since,
 expires_at}`, and `since` survives refreshes so the app can say "for 3
 minutes". Clear it early with `DELETE /threads/{ref}/activity` or by posting
-`{"text": ""}`. Unlike messages, a status never creates a thread: post a
-message first (a stray status must not litter the inbox), or the call is a
-`404`.
+`{"text": ""}`. Unlike messages, a status never creates a thread: post a message first (a
+stray status must not litter the inbox), or the call is a `404`. The app
+also shows a few reserved `meta` keys on the thread as chips: `host`, `cwd`,
+`branch`, `model`, `cost_usd` and `tokens`; set them with
+`PATCH /threads/{ref}` (`meta` merges) whenever you have them.
 
 Two details for busy agents. If you keep working after you speak, put the
 next status on the message itself so the line never blinks:
@@ -214,9 +222,12 @@ next status on the message itself so the line never blinks:
 the backfill…", "ttl_seconds": 120}}` (questions accept the same field; a
 message or question without it clears the status, because it is the outcome
 the status announced). If several processes write statuses at once, pass a
-monotonic `seq` (a nanosecond timestamp works); a write whose `seq` is not
-above the live status's is ignored and comes back with `"applied": false`,
-so a slow "Thinking…" can never overwrite a newer "Running tests".
+monotonic `seq` (the convention is a nanosecond timestamp, and every writer
+of a thread must use the same clock); a write whose `seq` is not above the
+live status's is ignored and comes back with `"applied": false`, so a slow
+"Thinking…" can never overwrite a newer "Running tests". Pass the same
+`seq` when you clear (`DELETE …/activity?seq=`) so a straggler cannot bring
+the status back.
 
 With the CLI: `finalechat status "Running the migration…"` (add `--ttl 120`
 for long steps, `--clear` to drop it). With MCP: `finalechat_status`.

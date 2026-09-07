@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../components/Attachments";
-import { Avatar, ConfirmSheet, Sheet } from "../components/Common";
+import { Avatar, ConfirmSheet, Sheet, sheetsOpen } from "../components/Common";
 import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBranch, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconSend, IconServer, IconTrash } from "../components/Icons";
 import { api } from "../lib/api";
 import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
@@ -8,7 +8,7 @@ import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
 import { renderMarkdown, renderText } from "../lib/markdown";
 import { navigate } from "../lib/router";
-import { deleteThread, loadOlderMessages, loadThread, markRead, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
+import { AlreadyPostedError, deleteThread, loadOlderMessages, loadThread, markRead, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
 import type { Activity, Attachment, Message, Question, Thread } from "../lib/types";
 
@@ -35,7 +35,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   const [menu, setMenu] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [viewing, setViewing] = useState<Attachment | null>(null);
+  const [viewing, setViewing] = useState<{ items: Attachment[]; index: number } | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -44,7 +44,10 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   const [unseen, setUnseen] = useState(0);
   const lastCount = useRef(0);
   const lastTail = useRef<string | null>(null);
-  const restore = useRef<{ height: number; top: number } | null>(null);
+  const restore = useRef<{ height: number; top: number; head: string | null } | null>(null);
+  // Set by the composer before a send: your own message always comes into
+  // view, however far up you had scrolled.
+  const justSent = useRef(false);
   const initialised = useRef<string | null>(null);
   const activity = useLiveActivity(thread?.activity);
 
@@ -87,8 +90,11 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
     return items.findIndex((it) => it.at > unreadMarker && (it.kind === "question" || it.m.sender !== "user"));
   }, [items, unreadMarker]);
 
+  // The document, not the sentinel: the sticky composer sits in flow after
+  // the list, so the true bottom leaves the last bubble clear of it.
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "auto") => {
-    bottomRef.current?.scrollIntoView({ block: "end", behavior });
+    const el = document.scrollingElement;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior });
   }, []);
 
   // Scroll management: stick to the bottom for appended items, hold the
@@ -96,7 +102,11 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   useLayoutEffect(() => {
     if (!loaded) return;
     const el = document.scrollingElement;
-    if (restore.current && el) {
+    const head = items.length ? itemKey(items[0] as Item) : null;
+    // The anchor restore belongs to the prepend: only spend it when the first
+    // item changed. A live message that lands first is handled as an append
+    // below and the restore waits for the history page.
+    if (restore.current && el && head !== restore.current.head) {
       el.scrollTop = restore.current.top + (el.scrollHeight - restore.current.height);
       restore.current = null;
       lastTail.current = items.length ? itemKey(items[items.length - 1] as Item) : null;
@@ -115,8 +125,14 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
     }
     const appended = tail !== null && tail !== lastTail.current;
     if (appended) {
-      if (atBottom) scrollToBottom();
-      else setUnseen((n) => n + Math.max(1, items.length - lastCount.current));
+      if (atBottom || justSent.current) {
+        justSent.current = false;
+        scrollToBottom();
+        if (!atBottom) {
+          setAtBottom(true);
+          setUnseen(0);
+        }
+      } else setUnseen((n) => n + Math.max(1, items.length - lastCount.current));
     }
     lastTail.current = tail;
     lastCount.current = items.length;
@@ -131,7 +147,8 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
 
   const onScroll = useCallback(() => {
     const el = document.scrollingElement;
-    if (!el) return;
+    // A sheet pins the body; the scroll it causes is not the reader moving.
+    if (!el || sheetsOpen > 0) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nearBottom = distance < 80;
     setAtBottom(nearBottom);
@@ -148,7 +165,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
     const el = document.scrollingElement;
     if (!el || loadingOlder) return;
     setLoadingOlder(true);
-    restore.current = { height: el.scrollHeight, top: el.scrollTop };
+    restore.current = { height: el.scrollHeight, top: el.scrollTop, head: items.length ? itemKey(items[0] as Item) : null };
     try {
       await loadOlderMessages(id);
     } catch {
@@ -259,7 +276,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
                   New
                 </div>
               )}
-              {it.kind === "message" ? <MessageBubble m={it.m} grouped={grouped} showMeta={showMeta} onOpen={setViewing} /> : <QuestionCard q={it.q} highlight={highlightQuestion === it.q.id} />}
+              {it.kind === "message" ? <MessageBubble m={it.m} grouped={grouped} showMeta={showMeta} onOpen={(items, index) => setViewing({ items, index })} /> : <QuestionCard q={it.q} highlight={highlightQuestion === it.q.id} />}
             </div>
           );
         })}
@@ -279,8 +296,14 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
           <IconDown /> {unseen > 0 ? `${unseen} new` : "Latest"}
         </button>
       )}
-      <Composer threadId={id} ended={thread ? isEnded(thread) : false} />
-      {viewing && <ImageViewer item={viewing} onClose={() => setViewing(null)} />}
+      <Composer
+        threadId={id}
+        ended={thread ? isEnded(thread) : false}
+        onSending={(sending) => {
+          justSent.current = sending;
+        }}
+      />
+      {viewing && <ImageViewer items={viewing.items} index={viewing.index} onClose={() => setViewing(null)} />}
 
       {menu && thread && (
         <Sheet onClose={() => setMenu(false)} label="Thread options">
@@ -437,7 +460,7 @@ function RenameSheet({ initial, onClose, onSave }: { initial: string; onClose: (
 /** Bodies taller than this collapse behind "Show all" so one log dump does not bury the thread. */
 const collapseAt = 520;
 
-const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, onOpen }: { m: Message; grouped: boolean; showMeta: boolean; onOpen: (a: Attachment) => void }) {
+const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, onOpen }: { m: Message; grouped: boolean; showMeta: boolean; onOpen: (images: Attachment[], index: number) => void }) {
   const html = useMemo(() => (m.format === "markdown" ? renderMarkdown(m.body) : renderText(m.body)), [m.format, m.body]);
   const kind = typeof m.meta.kind === "string" ? m.meta.kind : "";
   const via = typeof m.meta.via === "string" ? m.meta.via : "";
@@ -454,15 +477,24 @@ const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, onOpen
     setTall(el.scrollHeight > collapseAt + 80);
   }, [html]);
   const collapsed = tall && !expanded;
+  const collapse = () => {
+    setExpanded(false);
+    requestAnimationFrame(() => bodyRef.current?.closest(".msg")?.scrollIntoView({ block: "start" }));
+  };
   return (
     <div className={`msg ${m.sender} ${m.importance === "important" ? "important" : ""} ${grouped ? "grouped" : ""} ${mirrored ? "mirrored" : ""}`}>
       {m.importance === "important" && <span className="important-chip">Important</span>}
       <div className={`bubble ${m.sender === "system" ? "" : "md"} ${hasMedia ? "has-media" : ""} ${collapsed ? "collapsed" : ""}`}>
         {hasBody && <div ref={bodyRef} className={`${m.sender === "system" ? "" : "md"} body`} dangerouslySetInnerHTML={{ __html: html }} />}
         {attachments.length > 0 && <AttachmentList items={attachments} onOpen={onOpen} />}
-        {tall && (
-          <button type="button" className="show-all" onClick={() => setExpanded((v) => !v)}>
-            {expanded ? "Show less" : "Show all"}
+        {tall && !expanded && (
+          <button type="button" className="show-all" onClick={() => setExpanded(true)}>
+            Show all
+          </button>
+        )}
+        {tall && expanded && (
+          <button type="button" className="show-less" onClick={collapse}>
+            Show less
           </button>
         )}
       </div>
@@ -500,7 +532,7 @@ function ActivityBubble({ a }: { a: Activity }) {
   );
 }
 
-function Composer({ threadId, ended }: { threadId: string; ended: boolean }) {
+function Composer({ threadId, ended, onSending }: { threadId: string; ended: boolean; onSending: (sending: boolean) => void }) {
   const attachmentsEnabled = useStore((s) => s.attachmentsEnabled);
   const connection = useStore((s) => s.connection);
   const draft = useStore((s) => s.drafts[threadId] ?? "");
@@ -512,8 +544,11 @@ function Composer({ threadId, ended }: { threadId: string; ended: boolean }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const draftTimer = useRef<number | undefined>(undefined);
-  // One key per composed message: a retry after a lost response cannot double-post.
-  const clientKey = useRef(newKey());
+  // One key per composed payload: a retry after a lost response cannot
+  // double-post, and an edited reply gets a fresh key so it is not mistaken
+  // for a replay of the old text.
+  const keyed = useRef<{ payload: string; key: string } | null>(null);
+  const sendRef = useRef<() => void>(() => {});
   const touch = useMemo(() => isTouch(), []);
 
   // Toasts and the jump pill sit above the composer, whatever its height.
@@ -602,15 +637,14 @@ function Composer({ threadId, ended }: { threadId: string; ended: boolean }) {
   const send = async () => {
     const body = text.trim();
     if (!canSend) return;
+    const ids = ready.map((u) => (u.attachment as Attachment).id);
+    const payload = JSON.stringify([body, ids]);
+    if (!keyed.current || keyed.current.payload !== payload) keyed.current = { payload, key: newKey() };
     setBusy(true);
+    onSending(true);
     try {
-      await sendMessage(
-        threadId,
-        body,
-        ready.map((u) => (u.attachment as Attachment).id),
-        clientKey.current,
-      );
-      clientKey.current = newKey();
+      await sendMessage(threadId, body, ids, keyed.current.key);
+      keyed.current = null;
       setText("");
       window.clearTimeout(draftTimer.current);
       setDraft(threadId, "");
@@ -618,12 +652,20 @@ function Composer({ threadId, ended }: { threadId: string; ended: boolean }) {
       setUploads([]);
       requestAnimationFrame(resize);
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Could not send", "error", { label: "Retry", onClick: () => void send() });
+      onSending(false);
+      if (e instanceof AlreadyPostedError) {
+        // The earlier attempt did land; what is typed now is a new message.
+        keyed.current = null;
+        toast(e.message, "error");
+      } else {
+        toast(e instanceof Error ? e.message : "Could not send", "error", { label: "Retry", onClick: () => sendRef.current() });
+      }
     } finally {
       setBusy(false);
       ref.current?.focus();
     }
   };
+  sendRef.current = () => void send();
 
   return (
     <div

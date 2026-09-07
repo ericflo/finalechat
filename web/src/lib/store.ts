@@ -38,6 +38,8 @@ export interface State {
   threadError: Record<string, string>;
   /** last_read_at at the moment a thread with unread messages was opened; drives the "New" divider. */
   unreadMarker: Record<string, string>;
+  /** Server time of the last status event applied per thread; older activity in any payload is ignored. */
+  activitySeen: Record<string, number>;
   pending: Question[];
   toasts: Toast[];
   drafts: Record<string, string>;
@@ -110,6 +112,7 @@ let state: State = {
   threadLoaded: {},
   threadError: {},
   unreadMarker: {},
+  activitySeen: {},
   pending: [],
   toasts: [],
   drafts: typeof localStorage !== "undefined" ? readDrafts() : {},
@@ -144,12 +147,14 @@ export function useStore<T>(selector: (s: State) => T): T {
 // Snapshot: the inbox paints instantly on a cold open, offline or not.
 
 let persistTimer: number | undefined;
+let lastSnapshot = "";
 function persistSnapshot() {
   if (typeof localStorage === "undefined") return;
   window.clearTimeout(persistTimer);
   persistTimer = window.setTimeout(() => {
     try {
       if (!state.user) {
+        lastSnapshot = "";
         localStorage.removeItem(snapshotKey);
         return;
       }
@@ -168,7 +173,11 @@ function persistSnapshot() {
         pushEnabled: state.pushEnabled,
         attachmentsEnabled: state.attachmentsEnabled,
       };
-      localStorage.setItem(snapshotKey, JSON.stringify(snap));
+      const serialized = JSON.stringify(snap);
+      // Status lines churn the thread map without changing the snapshot.
+      if (serialized === lastSnapshot) return;
+      lastSnapshot = serialized;
+      localStorage.setItem(snapshotKey, serialized);
     } catch {
       // Storage full or blocked; the app works without it.
     }
@@ -243,34 +252,61 @@ export async function register(input: { email: string; password: string; display
   connect();
 }
 
-export async function signOut() {
-  disconnect();
-  await forgetPushSubscription();
+/** Signs out. Without a network the server session cannot be ended, so the
+ * app stays signed in and says so rather than pretending. */
+export async function signOut(): Promise<boolean> {
   try {
     await api.logout();
-  } finally {
-    set({
-      user: false,
-      fromSnapshot: false,
-      threads: {},
-      messages: {},
-      threadQuestions: {},
-      threadLoaded: {},
-      threadError: {},
-      unreadMarker: {},
-      pending: [],
-      inboxLoaded: false,
-      archivedLoaded: false,
-      searchHits: null,
-      counts: emptyCounts,
-    });
-    setBadge(0);
-    try {
-      localStorage.removeItem(snapshotKey);
-    } catch {
-      // ignore
+  } catch (err) {
+    if (isTransport(err)) {
+      set({ connection: "offline" });
+      toast("You're offline, so you're still signed in. Try again when you're back online.", "error", { label: "Retry", onClick: () => void signOut() });
+      return false;
     }
+    // Any HTTP answer means the cookie is gone or useless; wipe locally.
   }
+  disconnect();
+  await forgetPushSubscription();
+  set({
+    user: false,
+    fromSnapshot: false,
+    threads: {},
+    messages: {},
+    threadQuestions: {},
+    threadLoaded: {},
+    threadError: {},
+    hasOlder: {},
+    unreadMarker: {},
+    activitySeen: {},
+    drafts: {},
+    pending: [],
+    inboxLoaded: false,
+    archivedLoaded: false,
+    searchHits: null,
+    counts: emptyCounts,
+  });
+  setBadge(0);
+  try {
+    lastSnapshot = "";
+    localStorage.removeItem(snapshotKey);
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(draftPrefix)) keys.push(k);
+    }
+    keys.forEach((k) => localStorage.removeItem(k));
+  } catch {
+    // ignore
+  }
+  // Attachment bytes the service worker kept for offline reading belong to
+  // the account that just left.
+  try {
+    navigator.serviceWorker?.controller?.postMessage({ type: "clear-media" });
+    if ("caches" in window) await caches.delete("fc-media-v1");
+  } catch {
+    // ignore
+  }
+  return true;
 }
 
 export function setUser(user: User) {
@@ -286,10 +322,20 @@ function applyCounts(counts: Counts) {
   setBadge(counts.attention ?? counts.pending_questions + counts.unread_threads);
 }
 
+/** Stores threads, keeping the status line the app already knows to be newer
+ * than what a slower REST response carries. */
+function withKnownActivity(s: State, t: Thread): Thread {
+  const seen = s.activitySeen[t.id];
+  if (!seen) return t;
+  if (t.activity && new Date(t.activity.at).getTime() < seen) return { ...t, activity: s.threads[t.id]?.activity ?? null };
+  if (!t.activity && s.threads[t.id]?.activity && new Date(s.threads[t.id]!.activity!.at).getTime() > seen) return { ...t, activity: s.threads[t.id]!.activity };
+  return t;
+}
+
 function upsertThreads(list: Thread[]) {
   set((s) => {
     const threads = { ...s.threads };
-    for (const t of list) threads[t.id] = t;
+    for (const t of list) threads[t.id] = withKnownActivity(s, t);
     return { threads };
   });
 }
@@ -297,16 +343,24 @@ function upsertThreads(list: Thread[]) {
 export async function loadInbox(): Promise<void> {
   try {
     const [threads, pending, me] = await Promise.all([api.listThreads({ limit: 100 }), api.listPendingQuestions(), api.me()]);
+    const page = threads.threads;
+    const oldest = page.length ? page[page.length - 1]!.last_activity_at : "";
     set((s) => {
       const merged: Record<string, Thread> = {};
-      // Keep archived threads we already know about; refresh active ones.
-      for (const t of Object.values(s.threads)) if (t.archived_at) merged[t.id] = t;
-      for (const t of threads.threads) merged[t.id] = t;
+      for (const t of Object.values(s.threads)) {
+        // Keep archived threads we know, and active threads older than this
+        // page (paged in earlier; their absence here says nothing). Active
+        // threads inside the page's window that the page lacks were
+        // archived or deleted elsewhere and drop out.
+        if (t.archived_at || (oldest && t.last_activity_at < oldest)) merged[t.id] = t;
+      }
+      for (const t of page) merged[t.id] = withKnownActivity(s, t);
       return {
         threads: merged,
         inboxLoaded: true,
         fromSnapshot: false,
-        inboxCursor: threads.next_cursor ?? null,
+        // A refresh keeps the cursor from the deepest page already loaded.
+        inboxCursor: s.inboxLoaded && !s.fromSnapshot && s.inboxCursor !== null ? s.inboxCursor : (threads.next_cursor ?? null),
         pending: pending.questions,
         user: me.user,
         settings: me.user.settings,
@@ -316,13 +370,22 @@ export async function loadInbox(): Promise<void> {
       };
     });
     applyCounts(me.counts);
+    // A pending question whose thread is archived or past the first page
+    // still needs its thread for the card's name and link.
+    const missing = pending.questions.map((q) => q.thread_id).filter((id, i, all) => !state.threads[id] && all.indexOf(id) === i);
+    for (const id of missing.slice(0, 10)) {
+      api
+        .getThread(id)
+        .then((r) => upsertThreads([r.thread]))
+        .catch(() => {});
+    }
   } catch (err) {
     if (err instanceof APIError && err.status === 401) {
       set({ user: false, fromSnapshot: false });
       return;
     }
     if (isTransport(err)) {
-      set({ connection: state.connection === "online" ? "online" : "offline" });
+      set({ connection: "offline" });
       return;
     }
     toast(errorText(err), "error");
@@ -378,7 +441,7 @@ export async function loadThread(id: string): Promise<ThreadLoad> {
       const unreadMarker = { ...s.unreadMarker };
       if (!unreadMarker[id] && thread.thread.unread_count > 0) unreadMarker[id] = thread.thread.last_read_at;
       return {
-        threads: { ...s.threads, [id]: thread.thread },
+        threads: { ...s.threads, [id]: withKnownActivity(s, thread.thread) },
         messages: { ...s.messages, [id]: messages.messages },
         hasOlder: { ...s.hasOlder, [id]: messages.has_more },
         threadQuestions: { ...s.threadQuestions, [id]: questions.questions },
@@ -416,12 +479,15 @@ export async function refreshThread(id: string): Promise<void> {
     }
     set((s) => {
       const list = s.messages[id] ?? [];
+      // A catch-up page carries tombstones for messages deleted meanwhile.
+      const gone = new Set(newer.messages.filter((m) => m.deleted).map((m) => m.id));
+      const fresh = newer.messages.filter((m) => !m.deleted);
       const seen = new Set(list.map((m) => m.id));
-      const merged = last ? [...list, ...newer.messages.filter((m) => !seen.has(m.id))] : newer.messages;
+      const merged = last ? [...list.filter((m) => !gone.has(m.id)), ...fresh.filter((m) => !seen.has(m.id))] : fresh;
       const errors = { ...s.threadError };
       delete errors[id];
       return {
-        threads: { ...s.threads, [id]: thread.thread },
+        threads: { ...s.threads, [id]: withKnownActivity(s, thread.thread) },
         messages: { ...s.messages, [id]: merged },
         hasOlder: last ? s.hasOlder : { ...s.hasOlder, [id]: newer.has_more },
         threadQuestions: { ...s.threadQuestions, [id]: questions.questions },
@@ -463,10 +529,19 @@ export async function markRead(id: string): Promise<void> {
   }
 }
 
+export class AlreadyPostedError extends Error {
+  constructor() {
+    super("That reply was already posted; nothing new was sent.");
+  }
+}
+
 export async function sendMessage(threadId: string, body: string, attachments: string[] = [], clientKey?: string): Promise<void> {
   const res = await api.sendMessage(threadId, body, attachments, clientKey);
   appendMessage(res.message);
   upsertThreads([res.thread]);
+  // A replay of an earlier post: if what was typed differs, the server holds
+  // the old text and this send must not look like a success.
+  if (res.created === false && res.message.body !== body) throw new AlreadyPostedError();
 }
 
 function appendMessage(m: Message) {
@@ -507,8 +582,10 @@ function applyActivity(threadId: string, activity: Activity | null, at?: string)
     const t = s.threads[threadId];
     if (!t) return {};
     const held = t.activity;
-    if (held && at && new Date(at).getTime() < new Date(held.at).getTime()) return {};
-    return { threads: { ...s.threads, [threadId]: { ...t, activity } } };
+    const when = at ? new Date(at).getTime() : Date.now();
+    if (held && when < new Date(held.at).getTime()) return {};
+    if (s.activitySeen[threadId] && when < s.activitySeen[threadId]!) return {};
+    return { threads: { ...s.threads, [threadId]: { ...t, activity } }, activitySeen: { ...s.activitySeen, [threadId]: when } };
   });
 }
 
@@ -769,6 +846,9 @@ if (typeof document !== "undefined") {
   });
   window.addEventListener("online", () => {
     if (wantConnection && !source) scheduleReconnect(0);
+  });
+  window.addEventListener("offline", () => {
+    if (wantConnection) scheduleReconnect(2000);
   });
   window.addEventListener("focus", () => {
     if (wantConnection && !source) connect();

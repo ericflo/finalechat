@@ -107,7 +107,9 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 `Idempotency-Key` header (or a `client_key` body field, up to 200
 characters, scoped to the thread). A repeat with the same key returns the
 original object with HTTP 200 and `"created": false` instead of creating a
-duplicate, so a client may retry a post whose response was lost.
+duplicate, so a client may retry a post whose response was lost. A replayed
+message post still applies the `activity` it carries and reports
+`"applied"`; files sent with a replayed multipart post are discarded.
 
 ### Request ids
 
@@ -126,9 +128,10 @@ feature-detect with it.
 
 Wherever a path contains `{ref}` you may pass either the thread's UUID or
 `ext:` followed by the thread's `external_id`, for example
-`/threads/ext:claude-code:7f3a9c2e/messages`. `POST …/messages`,
-`POST …/questions` and `POST …/activity` create a missing `ext:` thread on
-demand; all other routes return `404 not_found` for an unknown reference.
+`/threads/ext:claude-code:7f3a9c2e/messages`. `POST …/messages` and
+`POST …/questions` create a missing `ext:` thread on demand; all other
+routes, including `POST …/activity` (a status belongs to a conversation
+that exists), return `404 not_found` for an unknown reference.
 
 ### Pagination
 
@@ -145,10 +148,12 @@ until something happens or the wait elapses, then responds normally:
 
 - `GET /threads/{ref}/messages?after=<id>&wait=N` returns as soon as a
   message newer than `after` exists. Without `after`, a wait watches for
-  anything created after the request started (by the server's clock) and
-  the response carries that instant as `waited_from`; pass it back as
-  `after_time=<RFC 3339>` on the next wait so nothing that lands between two
-  waits is missed.
+  anything created after the request started (by the server's clock); a
+  wait that returns nothing carries that instant as `waited_from`, and
+  passing it back as `after_time=<RFC 3339>` on the next wait keeps the
+  chain gapless. Once a wait returns messages, continue with
+  `after=<last message id>` instead (the response then carries no
+  `waited_from`). A deleted message remains a valid `after` anchor.
 - `POST /threads/{ref}/questions?wait=N` (or `"wait": N` in the body)
   returns when the question is answered, cancelled or expired.
 - `GET /questions/{id}?wait=N` likewise.
@@ -189,6 +194,11 @@ timed-out question wait returns the question with `"status": "pending"`.
 counts non-user messages since `last_read_at`. A muted thread never sends
 push notifications.
 
+`meta` is yours to fill, and the app renders a few reserved keys as chips
+under the thread title: `host` (or `hostname`), `cwd`, `branch`, `model`,
+`cost_usd` (number) and `tokens` (number). Everything else is stored,
+merged on later writes, returned, and otherwise ignored.
+
 `activity` is the agent's live status line, or `null` when there is none or
 the last one has lapsed. Archiving sticks: a plain agent message leaves an
 archived thread archived (its unread count still grows), while a message
@@ -216,6 +226,17 @@ lapses. See [POST /threads/{ref}/activity](#post-threadsrefactivity).
 `sender` is `agent`, `user` or `system`; `format` is `markdown` or `text`;
 `importance` is `normal` or `important`. `attachments` lists the files the
 message carries, in upload order; see [Attachment](#attachment).
+
+`origin` is `session` when the app posted the message and `token` when an
+agent did (empty on rows from before the field existed); `sender: "user"`
+alone does not mean the user typed it on the phone, since agents may mirror
+terminal input as the user. Two `meta` keys are reserved: `kind` (`answer`
+marks the transcript copy of an answered question, which the app folds into
+the question card; `notification` labels a message as needing attention)
+and `via` (a short source label shown under the bubble). A deleted message
+becomes a tombstone: it keeps its `id` and position, `body` is empty and
+`deleted` is `true`; tombstones appear only on catch-up pages
+(`after=<id>` without a `sender` filter) so a client can prune them.
 
 ### Attachment
 
@@ -265,7 +286,7 @@ fields. `url` and `thumb_url` are relative to the base URL. `message_id` is
 }
 ```
 
-`status` is `pending`, `answered`, `cancelled` or `expired`. `answer` is
+`status` is `pending`, `answered`, `cancelled`, `expired` or `dismissed` (the user declined; `answer` stays null and `answered_at` is set). `answer` is
 `null` until answered; `selected` lists chosen option labels in the order
 chosen and `text` is the free-form reply (absent when empty). `answered_at`
 is set whenever the question leaves `pending`, including on cancel or expiry.
@@ -538,7 +559,7 @@ that exists. `PUT` is accepted too.
 | `text` | string | One line, at most 200 characters; whitespace is collapsed. Empty clears the status. |
 | `kind` | string | `thinking`, `working` (default), `typing`, `waiting` or `tool` |
 | `ttl_seconds` | integer | 1 to 600, default 45. The status lapses when this runs out unless set again. |
-| `seq` | integer | Optional ordering for concurrent writers: a write whose `seq` is not above the live status's is ignored (`"applied": false`). Any `seq` is accepted once the status has lapsed or been cleared. |
+| `seq` | integer | Optional ordering for concurrent writers: a write whose `seq` is not above the live status's is ignored (`"applied": false`). Use one clock for every writer of a thread; a nanosecond timestamp (`time.Now().UnixNano()`, `time.time_ns()`) is the convention. Any `seq` is accepted once the status has lapsed, but a clear that carried a `seq` (`DELETE …/activity?seq=`) still rejects writes below it, so a slow write cannot resurrect a status the agent already cleared. |
 
 ```bash
 curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/activity \
@@ -822,6 +843,10 @@ Newest first.
 ```json
 {"questions": [{"id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4", "status": "pending", "...": "..."}]}
 ```
+
+Add `attention=true` to leave out questions in archived or muted threads;
+that is the app's "needs you" view and matches `counts.attention`. Agents
+listing their own questions should not pass it.
 
 ### GET /threads/{ref}/questions
 

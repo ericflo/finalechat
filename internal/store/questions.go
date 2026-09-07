@@ -119,9 +119,19 @@ func (s *Store) CreateQuestion(ctx context.Context, userID, threadID uuid.UUID, 
 				INSERT INTO questions (id, thread_id, user_id, prompt, options, allow_freeform, multi_select, expires_at, meta, client_key)
 				SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
 				WHERE EXISTS (SELECT 1 FROM threads WHERE id = $2 AND user_id = $3)
+				ON CONFLICT (thread_id, client_key) WHERE client_key IS NOT NULL DO NOTHING
 				RETURNING *
 			) SELECT `+questionColumns+` FROM q`,
 			NewID(), threadID, userID, in.Prompt, options, in.AllowFreeform, in.MultiSelect, in.ExpiresAt, in.Meta.value(), clientKey))
+		if err == ErrNotFound && clientKey != nil {
+			// A concurrent ask with the same key won; return it.
+			q, err = scanQuestion(tx.QueryRow(ctx, "SELECT "+questionColumns+" FROM questions q WHERE q.thread_id = $1 AND q.user_id = $2 AND q.client_key = $3", threadID, userID, in.ClientKey))
+			if err != nil {
+				return err
+			}
+			thread, err = scanThread(tx.QueryRow(ctx, "SELECT "+threadColumns+" FROM threads t WHERE t.id = $1 AND t.user_id = $2", threadID, userID))
+			return err
+		}
 		if err != nil {
 			return err
 		}
@@ -148,13 +158,18 @@ func (s *Store) GetQuestion(ctx context.Context, userID, id uuid.UUID) (*Questio
 }
 
 // ListQuestions lists questions, optionally filtered by thread and status,
-// newest first.
-func (s *Store) ListQuestions(ctx context.Context, userID uuid.UUID, threadID *uuid.UUID, status string, limit int) ([]*Question, error) {
+// newest first. With attention, questions in archived or muted threads are
+// left out (the app's "needs you" view); agents listing their own questions
+// pass false.
+func (s *Store) ListQuestions(ctx context.Context, userID uuid.UUID, threadID *uuid.UUID, status string, limit int, attention bool) ([]*Question, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
 	args := []any{userID, limit}
 	where := "q.user_id = $1"
+	if attention {
+		where += " AND EXISTS (SELECT 1 FROM threads t WHERE t.id = q.thread_id AND t.archived_at IS NULL AND NOT t.muted)"
+	}
 	if threadID != nil {
 		args = append(args, *threadID)
 		where += " AND q.thread_id = $" + itoa(len(args))

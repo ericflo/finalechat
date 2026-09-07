@@ -182,8 +182,22 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 			thread = t
 		}
 	}
+	// A retried multipart post must not upload its files again: look the key
+	// up first. (Two truly concurrent retries can both miss this; the
+	// created=false path below cleans up whatever they stored.)
+	if req.ClientKey != "" {
+		if existing, err := s.store.FindMessageByClientKey(r.Context(), p.user.ID, thread.ID, req.ClientKey); err == nil {
+			decorate(existing)
+			applied := s.replayActivity(r.Context(), p.user.ID, thread.ID, activity)
+			thread, _ = s.store.GetThread(r.Context(), p.user.ID, thread.ID)
+			writeJSON(w, http.StatusOK, map[string]any{"message": existing, "thread": thread, "created": false, "applied": applied})
+			return
+		}
+	}
+	var uploaded []*store.Attachment
 	if hasFiles {
-		uploaded, err := s.readUploads(r, thread.ID, form)
+		var err error
+		uploaded, err = s.readUploads(r, thread.ID, form)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -215,14 +229,44 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	decorate(msg)
 	if !created {
-		// A retry of a post that already landed: nothing new to announce.
-		writeJSON(w, http.StatusOK, map[string]any{"message": msg, "thread": thread, "created": false})
+		// A retry of a post that already landed: nothing new to announce,
+		// but the retry's status line still counts, and any files this
+		// request stored are orphans.
+		if len(uploaded) > 0 {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				for _, a := range uploaded {
+					_ = s.store.DeleteAttachment(ctx, a.ID)
+				}
+				s.deleteAttachmentObjects(ctx, uploaded)
+			}()
+		}
+		applied := s.replayActivity(r.Context(), p.user.ID, thread.ID, activity)
+		if applied {
+			thread, _ = s.store.GetThread(r.Context(), p.user.ID, thread.ID)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"message": msg, "thread": thread, "created": false, "applied": applied})
 		return
 	}
 	bg := context.WithoutCancel(r.Context())
 	s.bus.Publish(bg, bus.Event{Type: bus.MessageCreated, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), MessageID: msg.ID.String()})
 	s.notifyMessage(bg, p.user, thread, msg, req.Notify.ptr())
 	writeJSON(w, http.StatusCreated, map[string]any{"message": msg, "thread": thread, "created": true})
+}
+
+// replayActivity applies the status line carried by a post whose message
+// already existed (an idempotent replay), through the usual ordering gate.
+func (s *Server) replayActivity(ctx context.Context, userID, threadID uuid.UUID, in *store.ActivityInput) bool {
+	if in == nil {
+		return false
+	}
+	thread, applied, err := s.store.SetThreadActivity(ctx, userID, threadID, *in)
+	if err != nil || !applied {
+		return false
+	}
+	s.publishActivity(context.WithoutCancel(ctx), userID.String(), thread)
+	return true
 }
 
 // notifyMessage applies the notification policy for a new message.
@@ -369,7 +413,9 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		if len(msgs) > 0 || wait == 0 || time.Now().After(deadline) {
 			decorate(msgs...)
 			resp := map[string]any{"messages": msgs, "has_more": hasMore, "thread_id": thread.ID}
-			if page.AfterTime != nil {
+			if page.AfterTime != nil && len(msgs) == 0 {
+				// Only when nothing came back: once messages exist the caller
+				// continues from the last message id, not from this instant.
 				resp["waited_from"] = page.AfterTime.UTC()
 			}
 			writeJSON(w, http.StatusOK, resp)
@@ -432,6 +478,10 @@ func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
 	id, err := parseUUID(r.PathValue("id"))
 	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.limitWrite(p, s.messageLimiter); err != nil {
 		writeError(w, err)
 		return
 	}

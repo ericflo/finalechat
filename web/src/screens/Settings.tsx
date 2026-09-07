@@ -148,7 +148,7 @@ export function SettingsScreen() {
             type="button"
             className="setting link"
             onClick={() =>
-              signOut().then(() => navigate("/login", { replace: true }))
+              signOut().then((ok) => ok && navigate("/login", { replace: true }))
             }
           >
             <div>

@@ -178,21 +178,22 @@ func (s *Server) canonicalRedirect(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP is the address of the peer that reached the proxy. The proxy
-// appends it as the last X-Forwarded-For entry; anything before that was
-// supplied by the client and cannot be trusted (it is the key of the login
-// rate limiter).
+// clientIP is the address of the peer that reached the proxy. Each trusted
+// proxy appends one X-Forwarded-For entry, so the client is the Nth entry
+// from the right for N trusted hops; anything further left was supplied by
+// the client and cannot be trusted (it is the key of the login rate
+// limiter). A header with fewer entries than hops did not come through the
+// proxies, so the socket peer is used instead.
 func (s *Server) clientIP(r *http.Request) string {
-	if s.cfg.TrustProxy {
+	if s.cfg.TrustProxy && s.cfg.TrustedProxyHops > 0 {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if i := strings.LastIndexByte(xff, ','); i >= 0 {
-				xff = xff[i+1:]
+			parts := strings.Split(xff, ",")
+			if len(parts) >= s.cfg.TrustedProxyHops {
+				if ip := strings.TrimSpace(parts[len(parts)-s.cfg.TrustedProxyHops]); ip != "" {
+					return ip
+				}
 			}
-			if ip := strings.TrimSpace(xff); ip != "" {
-				return ip
-			}
-		}
-		if rip := strings.TrimSpace(r.Header.Get("X-Real-Ip")); rip != "" {
+		} else if rip := strings.TrimSpace(r.Header.Get("X-Real-Ip")); rip != "" && s.cfg.TrustedProxyHops == 1 {
 			return rip
 		}
 	}

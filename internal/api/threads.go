@@ -202,6 +202,10 @@ func (s *Server) handleDeleteThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if err := s.limitWrite(p, s.messageLimiter); err != nil {
+		writeError(w, err)
+		return
+	}
 	attachments, err := s.store.ListThreadAttachments(r.Context(), p.user.ID, thread.ID)
 	if err != nil {
 		writeError(w, err)

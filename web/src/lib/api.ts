@@ -25,13 +25,19 @@ export class APIError extends Error {
 async function request<T>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  const res = await fetch(path, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    credentials: "same-origin",
-    ...init,
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: "same-origin",
+      ...init,
+    });
+  } catch {
+    // fetch rejects only for transport failures; say so in plain words.
+    throw new APIError(0, "network", "You're offline.");
+  }
   if (res.status === 204) return undefined as T;
   let data: unknown = null;
   const text = await res.text();
@@ -91,7 +97,7 @@ export const api = {
     return request<{ messages: Message[]; has_more: boolean }>("GET", `${base}/threads/${threadId}/messages?${qs}`);
   },
   sendMessage: (threadId: string, body: string, attachments: string[] = [], clientKey?: string) =>
-    request<{ message: Message; thread: Thread }>("POST", `${base}/threads/${threadId}/messages`, {
+    request<{ message: Message; thread: Thread; created?: boolean }>("POST", `${base}/threads/${threadId}/messages`, {
       body,
       format: "markdown",
       sender: "user",
@@ -125,7 +131,7 @@ export const api = {
     }),
 
   listThreadQuestions: (threadId: string) => request<{ questions: Question[] }>("GET", `${base}/threads/${threadId}/questions`),
-  listPendingQuestions: () => request<{ questions: Question[] }>("GET", `${base}/questions?status=pending`),
+  listPendingQuestions: () => request<{ questions: Question[] }>("GET", `${base}/questions?status=pending&attention=true`),
   answerQuestion: (id: string, answer: { selected: string[]; text?: string }) =>
     request<{ question: Question; message: Message; thread: Thread }>("POST", `${base}/questions/${id}/answer`, answer),
   dismissQuestion: (id: string) => request<{ question: Question }>("POST", `${base}/questions/${id}/dismiss`, {}),

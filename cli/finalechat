@@ -26,6 +26,7 @@ import mimetypes
 import os
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -60,8 +61,10 @@ EXIT_API = 2
 EXIT_TIMEOUT = 3
 EXIT_RESOLVED = 4  # question cancelled, expired or dismissed
 
-# The API caps one long-poll at 600 seconds; we chain them.
+# The API caps one long-poll at 600 seconds; we chain them. Hooks poll in
+# shorter chunks so a remote-mode switch is noticed quickly.
 POLL_CHUNK = 600
+HOOK_WAIT_CHUNK = 30
 
 # Attachment limits mirror the server's.
 MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
@@ -152,6 +155,10 @@ class Client:
     def __init__(self, base_url: str, token: str | None):
         self.base_url = base_url.rstrip("/")
         self.token = token
+        # A wall-clock budget (time.monotonic()) after which requests stop
+        # retrying and shorten their timeouts; hooks that Claude Code kills
+        # after 30 seconds set it so a slow server cannot stall a prompt.
+        self.deadline: float | None = None
 
     # -- transport ---------------------------------------------------------
 
@@ -164,8 +171,14 @@ class Client:
             retries = 3 if method == "GET" or (body or {}).get("client_key") else 0
         delay = 1.0
         for attempt in range(retries + 1):
+            attempt_timeout = timeout
+            if self.deadline is not None:
+                left = self.deadline - time.monotonic()
+                if left <= 1.0:
+                    raise CLIError(f"Out of time talking to {self.base_url}", EXIT_API)
+                attempt_timeout = min(timeout, left)
             try:
-                return self._request_once(method, path, body, params, timeout)
+                return self._request_once(method, path, body, params, attempt_timeout)
             except NotSignedIn:
                 raise
             except (APIError, CLIError) as err:
@@ -178,6 +191,8 @@ class Client:
                 wait = delay
                 if isinstance(err, APIError) and err.retry_after:
                     wait = max(wait, min(30.0, err.retry_after))
+                if self.deadline is not None and time.monotonic() + wait + 1.0 > self.deadline:
+                    raise
                 time.sleep(wait)
                 delay = min(8.0, delay * 2)
         raise CLIError("request failed", EXIT_API)  # not reached
@@ -359,8 +374,9 @@ class Client:
             self.create_thread(ref[4:], title=title, agent=agent)
             return self.request("POST", path, body=body, timeout=10, retries=0)
 
-    def clear_activity(self, ref: str) -> dict:
-        return self.request("DELETE", f"/api/v1/threads/{self.ref_path(ref)}/activity", timeout=10)
+    def clear_activity(self, ref: str, seq: int | None = None) -> dict:
+        params = {"seq": seq} if seq else None
+        return self.request("DELETE", f"/api/v1/threads/{self.ref_path(ref)}/activity", params=params, timeout=10)
 
     def list_threads(self, archived: bool = False, limit: int = 50, query: str | None = None) -> list:
         params = {"limit": limit, "q": query}
@@ -471,19 +487,20 @@ def wait_for_reply(client: Client, ref: str, after: str | None, total: int, keep
         if keep_going is not None and not keep_going():
             return None
         # Shorter chunks while a hook is waiting so a remote-mode switch is noticed quickly.
-        chunk = 30 if keep_going is not None else 60
+        chunk = HOOK_WAIT_CHUNK if keep_going is not None else 60
         resp = client.list_messages(ref, after=after, after_time=None if after else after_time, sender="user",
                                     wait=min(chunk, remaining))
         if after is None and resp.get("waited_from"):
             after_time = str(resp["waited_from"])
         msgs = resp.get("messages") or []
         # A "user" message posted by an agent (a mirrored terminal prompt) is
-        # not the user replying from the app; keep waiting past it.
-        mirrored = [m for m in msgs if m.get("origin") == "token"]
-        if mirrored and len(mirrored) == len(msgs):
+        # not the user replying from the app, and a tombstone is nothing at
+        # all; keep waiting past both.
+        skip = [m for m in msgs if m.get("origin") == "token" or m.get("deleted")]
+        if skip and len(skip) == len(msgs):
             after = msgs[-1].get("id") or after
             continue
-        msgs = [m for m in msgs if m.get("origin") != "token"]
+        msgs = [m for m in msgs if m.get("origin") != "token" and not m.get("deleted")]
         if msgs:
             return msgs[0]
 
@@ -575,10 +592,11 @@ def attachment_hint(message: dict) -> str:
         name = a.get("filename") or a.get("id")
         descs.append(f"{name} ({a.get('content_type', '?')})")
     first = atts[0]
-    first_name = os.path.basename(first.get("filename") or "attachment")
+    first_name = os.path.basename(first.get("filename") or "attachment") or "attachment"
     noun = "attachment" if len(atts) == 1 else "attachments"
+    target = shlex.quote(os.path.join("/tmp", first_name))
     return (f" The reply includes {len(atts)} {noun}: " + ", ".join(descs) +
-            f" — download with `finalechat fetch {first.get('id')} -o /tmp/{first_name}`"
+            f" — download with `finalechat fetch {first.get('id')} -o {target}`"
             + (" (one fetch per id)" if len(atts) > 1 else "") + " and read the file to view it.")
 
 
@@ -650,43 +668,123 @@ def cwd_key(path: str) -> str:
     return hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()
 
 
-def read_by_cwd_pointer(path: str | None = None) -> dict | None:
-    """The thread the current Claude Code session in this directory is using."""
-    target = BY_CWD_DIR / f"{cwd_key(path or os.getcwd())}.json"
+def _load_sessions(target: Path) -> dict:
+    """The per-directory session map: {session_id: {external_id, pid, updated_at}}."""
     try:
         with target.open() as fh:
             data = json.load(fh)
-        updated = float(data.get("updated_at", 0))
-        if time.time() - updated > BY_CWD_MAX_AGE:
-            return None
-        if not data.get("external_id"):
-            return None
-        return data
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError):
+        return {}
+    sessions = data.get("sessions") if isinstance(data, dict) else None
+    if isinstance(sessions, dict):
+        return sessions
+    # An older single-session pointer file.
+    if isinstance(data, dict) and data.get("external_id") and data.get("session_id"):
+        return {str(data["session_id"]): {"external_id": data["external_id"], "pid": 0, "updated_at": data.get("updated_at", 0)}}
+    return {}
+
+
+def _save_sessions(target: Path, sessions: dict, cwd: str) -> None:
+    BY_CWD_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(".tmp")
+    with tmp.open("w") as fh:
+        json.dump({"cwd": os.path.abspath(cwd), "sessions": sessions}, fh)
+    tmp.replace(target)
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def _ancestor_pids() -> set:
+    """Every process above this one, so a CLI run from inside a Claude Code
+    session can tell which session it belongs to."""
+    pids: set = set()
+    pid = os.getppid()
+    for _ in range(64):
+        if pid <= 1 or pid in pids:
+            break
+        pids.add(pid)
+        parent = 0
+        try:
+            with open(f"/proc/{pid}/stat") as fh:
+                stat = fh.read()
+            parent = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            try:
+                out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=2).stdout
+                parent = int(out.strip() or 0)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                parent = 0
+        pid = parent
+    return pids
+
+
+def read_by_cwd_pointer(path: str | None = None) -> dict | None:
+    """The thread the Claude Code session that spawned this process is using,
+    or, when no ancestor is a known session, the most recently active live
+    session in this directory. Two sessions in one directory therefore stop
+    posting into each other's threads."""
+    target = BY_CWD_DIR / f"{cwd_key(path or os.getcwd())}.json"
+    sessions = _load_sessions(target)
+    if not sessions:
         return None
+    now = time.time()
+    live = {sid: s for sid, s in sessions.items()
+            if isinstance(s, dict) and s.get("external_id") and now - float(s.get("updated_at") or 0) <= BY_CWD_MAX_AGE
+            and (not s.get("pid") or _pid_alive(int(s.get("pid") or 0)))}
+    if len(live) != len(sessions):
+        try:
+            _save_sessions(target, live, path or os.getcwd())
+        except OSError:
+            pass
+    if not live:
+        return None
+    ancestors = _ancestor_pids()
+    for sid, s in live.items():
+        if s.get("pid") and int(s["pid"]) in ancestors:
+            return {"external_id": s["external_id"], "session_id": sid}
+    sid, s = max(live.items(), key=lambda kv: float(kv[1].get("updated_at") or 0))
+    return {"external_id": s["external_id"], "session_id": sid}
 
 
 def clear_by_cwd_pointer(cwd: str, session_id: str) -> None:
-    """Drop the pointer when the session that owns it ends."""
+    """Forget a session when it ends."""
     target = BY_CWD_DIR / f"{cwd_key(cwd)}.json"
-    try:
-        with target.open() as fh:
-            data = json.load(fh)
-        if data.get("session_id") == session_id:
-            target.unlink()
-    except (OSError, ValueError):
-        pass
+    sessions = _load_sessions(target)
+    if session_id in sessions:
+        sessions.pop(session_id, None)
+        try:
+            if sessions:
+                _save_sessions(target, sessions, cwd)
+            else:
+                target.unlink()
+        except OSError:
+            pass
 
 
 def write_by_cwd_pointer(cwd: str, external_id: str, session_id: str) -> None:
-    BY_CWD_DIR.mkdir(parents=True, exist_ok=True)
+    """Record (or refresh) a session for this directory. The hook's parent is
+    the Claude Code process, which is what later CLI runs find in their own
+    ancestry."""
     target = BY_CWD_DIR / f"{cwd_key(cwd)}.json"
-    payload = {"external_id": external_id, "session_id": session_id, "cwd": os.path.abspath(cwd),
-               "updated_at": time.time()}
-    tmp = target.with_suffix(".tmp")
-    with tmp.open("w") as fh:
-        json.dump(payload, fh)
-    tmp.replace(target)
+    sessions = _load_sessions(target)
+    entry = sessions.get(session_id) or {}
+    entry.update({"external_id": external_id, "updated_at": time.time()})
+    if not entry.get("pid"):
+        entry["pid"] = os.getppid()
+    sessions[session_id] = entry
+    _save_sessions(target, sessions, cwd)
 
 
 class ThreadTarget:
@@ -1378,33 +1476,75 @@ def clear_status(client: Client, ref: str) -> None:
     if not status_enabled():
         return
     try:
-        client.clear_activity(ref)
+        # Sequenced like the writes, so a status still in flight from an
+        # earlier hook cannot come back after this clear.
+        client.clear_activity(ref, seq=time.time_ns())
     except CLIError as err:
         hook_log(f"status clear failed: {err}")
 
 
+# Each pattern keeps what identifies the secret (the header or variable name
+# and its separator) and blanks the value. Names may carry the keyword
+# anywhere (AWS_SECRET_ACCESS_KEY, DB_PASSWORD, --api-key); a separator is
+# required so `grep secret path` and `kubectl get secret name` stay readable.
 SECRET_PATTERNS = [
-    re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}"),
-    re.compile(r"(?i)\b(authorization|token|api[_-]?key|secret|password|passwd|pwd)(\s*[=:]\s*|\s+)['\"]?(?!bearer\b)[^\s'\"]{4,}"),
-    re.compile(r"\b(fc|sk|ghp|gho|ghs|xox[abp]|AKIA|glpat)[-_][A-Za-z0-9_-]{6,}"),
-    re.compile(r"://[^/\s:@]+:[^/\s@]+@"),
-    re.compile(r"\b[A-Fa-f0-9]{32,}\b"),
+    (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}"), r"\1••••"),
+    (re.compile(r"(?i)(?<![A-Za-z0-9])([A-Za-z0-9_-]*(?:authorization|token|api[_-]?key|secret|passw(?:or)?d|pwd|credential)[A-Za-z0-9_-]*\s*[=:]\s*)['\"]?(?!bearer\b)[^\s'\"]{4,}"), r"\1••••"),
+    (re.compile(r"\b(?:fc|sk|ghp|gho|ghs|glpat)[-_][A-Za-z0-9_-]{6,}|\bxox[abp]-[A-Za-z0-9-]{6,}|\bAKIA[0-9A-Z]{16}\b"), "••••"),
+    (re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://••••@"),
+    (re.compile(r"(?<==)['\"]?[A-Fa-f0-9]{32,}\b"), "••••"),
 ]
 
 
 def redact_secrets(text: str) -> str:
     """Hide anything in a command line that looks like a credential before it
     is shown on the phone (and stored on the server)."""
-    def hide(m: "re.Match[str]") -> str:
-        whole = m.group(0)
-        if whole.startswith("://"):
-            return "://••••@"
-        keyword = m.group(1) if m.lastindex else ""
-        return f"{keyword} ••••" if keyword and not whole.startswith(keyword + "-") and not whole.startswith(keyword + "_") else "••••"
     out = text
-    for pat in SECRET_PATTERNS:
-        out = pat.sub(hide, out)
+    for pat, repl in SECRET_PATTERNS:
+        out = pat.sub(repl, out)
     return out
+
+
+REDACTION_CASES = [
+    ('curl -H "Authorization: Bearer fc_abcdefghijklmnop" https://x', 'curl -H "Authorization: Bearer ••••" https://x'),
+    ("export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "export AWS_SECRET_ACCESS_KEY=••••"),
+    ("export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE", "export AWS_ACCESS_KEY_ID=••••"),
+    ("DB_PASSWORD=hunter2sekrit psql -h db -c 'select 1'", "DB_PASSWORD=•••• psql -h db -c 'select 1'"),
+    ("MY_API_KEY=supersecretvalue ./deploy.sh", "MY_API_KEY=•••• ./deploy.sh"),
+    ("make test TOKEN=abcd", "make test TOKEN=••••"),
+    ("./tool --api-key=abcdef123 run", "./tool --api-key=•••• run"),
+    ("psql postgres://user:hunter2@db/x", "psql postgres://••••@db/x"),
+    ("echo password=SuperSecret123", "echo password=••••"),
+    ("VAULT_TOKEN=deadbeefcafebabe0123456789abcdef01234567 vault status", "VAULT_TOKEN=•••• vault status"),
+    ("ghp_abcdefghijklmnop123 something", "•••• something"),
+    ("git show abcdef1234567890abcdef1234567890abcdef12 --stat", "git show abcdef1234567890abcdef1234567890abcdef12 --stat"),
+    ("docker pull app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "docker pull app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+    ("grep -rn secret internal/", "grep -rn secret internal/"),
+    ("kubectl get secret my-app -o yaml", "kubectl get secret my-app -o yaml"),
+    ("echo 'the token expires tomorrow'", "echo 'the token expires tomorrow'"),
+    ("go test ./...", "go test ./..."),
+]
+
+
+def cmd_selftest(args) -> int:
+    """Checks that never need a server; run by `make test-cli`."""
+    failures = 0
+    for given, want in REDACTION_CASES:
+        got = redact_secrets(given)
+        if got != want:
+            failures += 1
+            print(f"redact_secrets({given!r})\n   got  {got!r}\n   want {want!r}", file=sys.stderr)
+    status = tool_status_text({"tool_name": "Bash", "cwd": "/x", "tool_input": {
+        "command": "ansible-playbook site.yml -e 'very_long_inventory_group=production-us-west-2a' -e VAULT_TOKEN=deadbeefcafebabe0123456789abcdef01234567"}})
+    if "deadbeef" in status or "••••" not in status:
+        failures += 1
+        print(f"tool_status_text leaked past the cut: {status!r}", file=sys.stderr)
+    hint = attachment_hint({"attachments": [{"id": "abc", "filename": "Screen Shot 2026.png", "content_type": "image/png"}]})
+    if "-o '/tmp/Screen Shot 2026.png'" not in hint:
+        failures += 1
+        print(f"attachment_hint is not shell-safe: {hint!r}", file=sys.stderr)
+    print("selftest: ok" if not failures else f"selftest: {failures} failure(s)")
+    return EXIT_OK if not failures else EXIT_USAGE
 
 
 def tool_status_text(payload: dict) -> str:
@@ -1424,7 +1564,7 @@ def tool_status_text(payload: dict) -> str:
     if name == "Bash":
         command = str(inp.get("command") or "").strip()
         first = command.splitlines()[0].strip() if command else ""
-        first = redact_secrets(truncate(first, 120))
+        first = truncate(redact_secrets(first), 120)
         return f"Running: {first}" if first else "Running a command"
     if name == "Read":
         return f"Reading {rel(inp.get('file_path'))}".rstrip()
@@ -1479,6 +1619,10 @@ def hook_claude_code() -> int:
             write_by_cwd_pointer(cwd, external_id, session_id)
     except OSError as err:
         hook_log(f"pointer write failed: {err}")
+
+    if event in ("SessionStart", "UserPromptSubmit", "Notification", "SessionEnd"):
+        # Claude Code gives these hooks 30 seconds; leave headroom.
+        client.deadline = time.monotonic() + 20
 
     if event == "SessionStart":
         meta = {"cwd": cwd, "hostname": hostname(), "source": payload.get("source") or ""}
@@ -1540,9 +1684,11 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
     if uuid and state.get("last_posted_uuid") == uuid:
         clear_status(client, ref)
         return EXIT_OK
-    # Posting the reply clears the status line on the server.
+    # Posting the reply clears the status line on the server. The key makes a
+    # retry (or a re-run after a lost cache) return the same message.
     resp = client.post_message(ref, text, meta={"via": "claude-code", "transcript_uuid": uuid or ""},
-                               title=title, agent=agent)
+                               title=title, agent=agent,
+                               client_key=f"stop:{session_id}:{uuid}" if uuid else None)
     message = resp.get("message") or {}
     thread = resp.get("thread") or {}
     state.update({"last_posted_uuid": uuid, "thread_id": thread.get("id"), "last_message_id": message.get("id")})
@@ -1555,9 +1701,12 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
         return EXIT_OK
 
     def waiting_status() -> None:
+        # Refreshed on every poll chunk, so the TTL is just over one chunk: a
+        # killed hook takes its status with it within a minute.
         if status_enabled():
             try:
-                client.set_activity(ref, "Waiting for your reply", kind="waiting", ttl=min(600, POLL_CHUNK + 30))
+                client.set_activity(ref, "Waiting for your reply", kind="waiting", ttl=HOOK_WAIT_CHUNK + 30,
+                                    seq=time.time_ns())
             except CLIError:
                 pass
 
@@ -1579,6 +1728,12 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
         body = "(no text)"
     state["last_reply_id"] = reply.get("id")
     save_session_state(session_id, state)
+    # Claude picks the reply up and starts working again.
+    if status_enabled():
+        try:
+            client.set_activity(ref, "Thinking…", kind="thinking", ttl=120, seq=time.time_ns())
+        except CLIError:
+            pass
     reason = f"The user replied from their phone via Finalechat: {body}" + attachment_hint(reply)
     output = {"decision": "block", "reason": reason}
     sys.stdout.write(json.dumps(output) + "\n")
@@ -1660,21 +1815,24 @@ def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, 
 
     deadline = time.monotonic() + total
     answers = []
-    all_answered = True
+    unanswered = []
     for item, question in created:
         remaining = int(deadline - time.monotonic())
         latest = wait_for_answer(client, question["id"], max(0, remaining), keep_going=client.remote_mode)
-        if latest.get("status") != "answered":
-            all_answered = False
-            break
-        answers.append((item, latest))
+        if latest.get("status") == "answered":
+            answers.append((item, latest))
+        else:
+            unanswered.append((item, latest))
 
-    if not all_answered:
-        for _, question in created:
+    # Withdraw only what is still open; an answer the user already gave is
+    # never thrown away.
+    for _, question in unanswered:
+        if question.get("status") == "pending":
             try:
                 client.cancel_question(question["id"])
             except CLIError:
                 pass
+    if not answers:
         return EXIT_OK
 
     parts = []
@@ -1683,6 +1841,9 @@ def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, 
         parts.append(f"{label}: {answer_summary(question)}")
     reason = ("The user answered from their phone via Finalechat instead of the terminal. Answers: "
               + "; ".join(parts) + ". Use these answers and do not ask again.")
+    if unanswered:
+        missing = ", ".join((item["header"] or item["question"]) for item, _ in unanswered)
+        reason += f" The user did not answer: {missing}; decide those yourself or ask again later."
     reason += answer_attachment_hints(client, ref, created)
     output = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                      "permissionDecisionReason": reason}}
@@ -1903,13 +2064,15 @@ def mcp_image_block(client: Client, att: dict) -> dict | None:
     return {"type": "image", "data": base64.b64encode(data).decode("ascii"), "mimeType": content_type}
 
 
-def mcp_attachment_content(client: Client, messages: list) -> tuple[list, list]:
-    """(text lines describing non-image files, image blocks) for a list of messages."""
+def mcp_attachment_content(client: Client, messages: list, budget: int = MCP_MAX_IMAGES) -> tuple[list, list]:
+    """(text lines describing non-image files, image blocks) for a list of
+    messages. At most `budget` images are downloaded; the rest are described
+    as fetchable files so the model is told exactly what it holds."""
     lines: list = []
     images: list = []
     for m in messages:
         for att in message_attachments(m):
-            if att.get("kind") == "image" and len(images) < MCP_MAX_IMAGES:
+            if att.get("kind") == "image" and len(images) < budget:
                 try:
                     block = mcp_image_block(client, att)
                 except CLIError as err:
@@ -2024,12 +2187,11 @@ def mcp_call(client: Client, name: str, arguments: dict):
         for m in msgs:
             stamp = (m.get("created_at") or "")[:19].replace("T", " ")
             lines.append(f"[{stamp}] {m.get('sender')}: {m.get('body', '')}")
-            extra, blocks = mcp_attachment_content(client, [m]) if message_attachments(m) else ([], [])
-            for line in extra:
-                lines.append("    " + line)
-            for block in blocks:
-                if len(images) < MCP_MAX_IMAGES:
-                    images.append(block)
+            if message_attachments(m):
+                extra, blocks = mcp_attachment_content(client, [m], budget=MCP_MAX_IMAGES - len(images))
+                for line in extra:
+                    lines.append("    " + line)
+                images.extend(blocks)
         return [{"type": "text", "text": "\n".join(lines)}] + images
 
     if name == "finalechat_view_attachment":
@@ -2326,6 +2488,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("hook", help="handle a harness hook event (reads JSON on stdin)", formatter_class=Formatter)
     p.add_argument("target", choices=["claude-code"])
     p.set_defaults(func=cmd_hook)
+
+    p = sub.add_parser("selftest", help=argparse.SUPPRESS, formatter_class=Formatter)
+    p.set_defaults(func=cmd_selftest)
 
     p = sub.add_parser("mcp", help="run the MCP server over stdio", formatter_class=Formatter,
                        description="Model Context Protocol server exposing finalechat_send, finalechat_status, "

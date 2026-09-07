@@ -59,6 +59,7 @@ test-web: web/node_modules
 test-cli:
 	python3 -m py_compile cli/finalechat
 	python3 cli/finalechat --help >/dev/null
+	python3 cli/finalechat selftest
 	sh -n cli/install.sh
 	python3 -c "import json; json.load(open('docs/openapi.json'))"
 

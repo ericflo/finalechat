@@ -5,12 +5,16 @@ import { compactTime, countdown, fullDateTime, useNow } from "../lib/time";
 import { IconCheck } from "./Icons";
 import { Avatar, Link } from "./Common";
 
+/** Options shown before an expander; a phone question is a 2-5 way choice. */
+const maxOptions = 5;
+
 export const QuestionCard = memo(function QuestionCard({ q, showThread, highlight }: { q: Question; showThread?: boolean; highlight?: boolean }) {
   const thread = useStore((s) => s.threads[q.thread_id]);
   const [selected, setSelected] = useState<string[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmDismiss, setConfirmDismiss] = useState(false);
+  const [allOptions, setAllOptions] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const expiresAt = q.expires_at ? new Date(q.expires_at).getTime() : 0;
   // Tick every second in the last ten minutes, every half minute otherwise.
@@ -31,7 +35,7 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
 
   useEffect(() => {
     if (!confirmDismiss) return;
-    const t = window.setTimeout(() => setConfirmDismiss(false), 4000);
+    const t = window.setTimeout(() => setConfirmDismiss(false), 6000);
     return () => window.clearTimeout(t);
   }, [confirmDismiss]);
 
@@ -100,7 +104,7 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
         <>
           {q.options.length > 0 && (
             <div className="q-options" role={q.multi_select ? "group" : "radiogroup"}>
-              {q.options.map((o) => {
+              {(allOptions || q.options.length <= maxOptions ? q.options : q.options.slice(0, maxOptions)).map((o) => {
                 const on = selected.includes(o.label);
                 return (
                   <button
@@ -120,6 +124,11 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
                   </button>
                 );
               })}
+              {!allOptions && q.options.length > maxOptions && (
+                <button type="button" className="btn small" onClick={() => setAllOptions(true)}>
+                  +{q.options.length - maxOptions} more option{q.options.length - maxOptions === 1 ? "" : "s"}
+                </button>
+              )}
             </div>
           )}
           {q.allow_freeform && (
@@ -150,16 +159,25 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
                 </span>
               )}
               <span className="spacer" />
-              {confirmDismiss ? (
-                <button type="button" className="btn small danger" disabled={busy} onClick={dismiss}>
-                  Dismiss without answering?
-                </button>
-              ) : (
+              {!confirmDismiss && (
                 <button type="button" className="btn ghost small" disabled={busy} onClick={() => setConfirmDismiss(true)}>
                   Dismiss
                 </button>
               )}
             </div>
+            {confirmDismiss && (
+              <div className="q-confirm" role="group" aria-label="Confirm dismissal">
+                <span>Dismiss without answering? The agent carries on without you.</span>
+                <div className="q-confirm-actions">
+                  <button type="button" className="btn small" onClick={() => setConfirmDismiss(false)}>
+                    Keep
+                  </button>
+                  <button type="button" className="btn small danger" disabled={busy} onClick={dismiss}>
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </>
       )}

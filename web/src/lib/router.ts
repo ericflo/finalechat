@@ -24,9 +24,16 @@ export function navigate(to: string, opts: { replace?: boolean } = {}) {
 /** Swaps screens inside a view transition where the browser has them, so a
  * tap on a thread does not replace the whole viewport in one frame. */
 function notify() {
-  const doc = document as Document & { startViewTransition?: (fn: () => void) => unknown };
+  type Transition = { ready: Promise<void>; finished: Promise<void>; updateCallbackDone: Promise<void> };
+  const doc = document as Document & { startViewTransition?: (fn: () => void) => Transition };
   if (typeof doc.startViewTransition === "function" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    doc.startViewTransition(() => flushSync(() => listeners.forEach((l) => l())));
+    // A second navigation skips the first transition; that rejection is
+    // routine, not an error.
+    const t = doc.startViewTransition(() => flushSync(() => listeners.forEach((l) => l())));
+    const quiet = () => {};
+    t.ready.catch(quiet);
+    t.finished.catch(quiet);
+    t.updateCallbackDone.catch(quiet);
   } else {
     listeners.forEach((l) => l());
   }

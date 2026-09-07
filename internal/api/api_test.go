@@ -1151,6 +1151,9 @@ func TestSearchAndAnchorlessWait(t *testing.T) {
 	if len(msgs) != 1 || str(msgs[0].(map[string]any), "body") != "slipped in between" {
 		t.Fatalf("a wait anchored at waited_from should return the in-between message, got %v", out)
 	}
+	if _, has := out["waited_from"]; has {
+		t.Fatalf("waited_from must not be echoed once messages are returned: %v", out)
+	}
 	if status, _ := a.do("GET", "/api/v1/threads/"+thread+"/messages?after_time=yesterday", nil); status != http.StatusUnprocessableEntity {
 		t.Fatalf("expected a validation error for a bad after_time, got %d", status)
 	}
@@ -1248,5 +1251,153 @@ func TestDeleteMessage(t *testing.T) {
 	}
 	if status, _ := a.do("DELETE", "/api/v1/messages/"+str(leaked, "id"), nil); status != http.StatusNotFound {
 		t.Fatalf("expected 404 on a second delete, got %d", status)
+	}
+
+	// The deleted id still works as an anchor, so a device or agent that
+	// held it keeps receiving what came after.
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "after the delete"})
+	b.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "user reply after the delete"})
+	page := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages?after="+str(leaked, "id"), nil)["messages"].([]any)
+	if len(page) != 2 || str(page[0].(map[string]any), "body") != "after the delete" {
+		t.Fatalf("anchor on a deleted message should still page forward, got %v", page)
+	}
+	agentView := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages?after="+str(leaked, "id")+"&sender=user", nil)["messages"].([]any)
+	if len(agentView) != 1 || str(agentView[0].(map[string]any), "body") != "user reply after the delete" {
+		t.Fatalf("an agent anchored on a deleted message should see the reply, got %v", agentView)
+	}
+	// A catch-up page from before the delete carries the tombstone so the
+	// client prunes it; filtered and normal pages never show it.
+	first := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages", nil)["messages"].([]any)[0].(map[string]any)
+	catchup := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages?after="+str(first, "id"), nil)["messages"].([]any)
+	var sawTombstone bool
+	for _, m := range catchup {
+		mm := m.(map[string]any)
+		if str(mm, "id") == str(leaked, "id") {
+			sawTombstone = true
+			if mm["deleted"] != true || str(mm, "body") != "" {
+				t.Fatalf("tombstone should be flagged and empty: %v", mm)
+			}
+		}
+	}
+	if !sawTombstone {
+		t.Fatalf("catch-up page should include the tombstone: %v", catchup)
+	}
+	for _, m := range a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages", nil)["messages"].([]any) {
+		if m.(map[string]any)["deleted"] == true {
+			t.Fatalf("a normal page must not show tombstones: %v", m)
+		}
+	}
+	// The stored preview is the cleaned survivor, never a raw body.
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "## Heading\n\n**bold** survivor"})
+	last := sub(a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "to be removed"}), "message")
+	out = a.must(http.StatusOK, "DELETE", "/api/v1/messages/"+str(last, "id"), nil)
+	if p := str(sub(out, "thread"), "preview"); p != "Heading bold survivor" {
+		t.Fatalf("preview should be the cleaned survivor, got %q", p)
+	}
+	if p := str(sub(b.must(http.StatusOK, "GET", "/api/v1/threads/"+thread, nil), "thread"), "preview"); p != "Heading bold survivor" {
+		t.Fatalf("stored preview should be cleaned too, got %q", p)
+	}
+}
+
+func TestConcurrentIdempotentPosts(t *testing.T) {
+	_, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "race:1"}), "thread"), "id")
+	type res struct {
+		status  int
+		id      string
+		created any
+	}
+	results := make(chan res, 6)
+	for i := 0; i < 6; i++ {
+		go func() {
+			c := &client{t: t, http: &http.Client{}, token: a.token}
+			status, out := c.do("POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "racing", "client_key": "same-key"})
+			results <- res{status, str(sub(out, "message"), "id"), out["created"]}
+		}()
+	}
+	var created, replayed int
+	ids := map[string]bool{}
+	for i := 0; i < 6; i++ {
+		r := <-results
+		switch r.status {
+		case http.StatusCreated:
+			created++
+		case http.StatusOK:
+			replayed++
+		default:
+			t.Fatalf("unexpected status %d for a racing idempotent post", r.status)
+		}
+		ids[r.id] = true
+	}
+	if created != 1 || replayed != 5 || len(ids) != 1 {
+		t.Fatalf("expected one create and five replays of one message, got created=%d replayed=%d ids=%d", created, replayed, len(ids))
+	}
+	// A replay carrying a status line still applies it.
+	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+thread+"/activity", nil)
+	out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "racing", "client_key": "same-key", "activity": map[string]any{"text": "still going"}})
+	if out["created"] != false || out["applied"] != true || str(sub(sub(out, "thread"), "activity"), "text") != "still going" {
+		t.Fatalf("a replayed post should apply its activity: %v", out)
+	}
+	// Questions race the same way.
+	qs := make(chan int, 4)
+	for i := 0; i < 4; i++ {
+		go func() {
+			c := &client{t: t, http: &http.Client{}, token: a.token}
+			status, _ := c.do("POST", "/api/v1/threads/"+thread+"/questions", map[string]any{"prompt": "race?", "client_key": "qk"})
+			qs <- status
+		}()
+	}
+	var q201, q200 int
+	for i := 0; i < 4; i++ {
+		switch <-qs {
+		case http.StatusCreated:
+			q201++
+		case http.StatusOK:
+			q200++
+		default:
+			t.Fatal("unexpected status for a racing question")
+		}
+	}
+	if q201 != 1 || q200 != 3 {
+		t.Fatalf("expected one created question and three replays, got %d/%d", q201, q200)
+	}
+}
+
+func TestAttentionAndClearedSeq(t *testing.T) {
+	b, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "att:1", "title": "attention"}), "thread"), "id")
+	q := sub(a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/questions", map[string]any{"prompt": "Still there?"}), "question")
+	b.must(http.StatusOK, "PATCH", "/api/v1/threads/"+thread, map[string]any{"archived": true, "muted": true})
+	has := func(list []any) bool {
+		for _, it := range list {
+			if str(it.(map[string]any), "id") == str(q, "id") {
+				return true
+			}
+		}
+		return false
+	}
+	if !has(a.must(http.StatusOK, "GET", "/api/v1/questions?status=pending", nil)["questions"].([]any)) {
+		t.Fatal("an agent listing its questions must still see one in an archived thread")
+	}
+	if has(b.must(http.StatusOK, "GET", "/api/v1/questions?status=pending&attention=true", nil)["questions"].([]any)) {
+		t.Fatal("the attention view must leave out questions in archived or muted threads")
+	}
+	b.must(http.StatusOK, "PATCH", "/api/v1/threads/"+thread, map[string]any{"archived": false, "muted": false})
+
+	// A clear with a sequence beats a straggling write with a lower one.
+	a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "Running tests", "seq": 100})
+	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+thread+"/activity?seq=200", nil)
+	out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "Thinking…", "seq": 150})
+	if out["applied"] != false || sub(out, "thread")["activity"] != nil {
+		t.Fatalf("a write older than the clear must be ignored: %v", out)
+	}
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "Next step", "seq": 300})
+	if out["applied"] != true {
+		t.Fatalf("a write newer than the clear must apply: %v", out)
+	}
+	// Unsequenced callers are unaffected by the clear guard.
+	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+thread+"/activity?seq=400", nil)
+	if out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "plain"}); out["applied"] != true {
+		t.Fatalf("an unsequenced write should still apply: %v", out)
 	}
 }

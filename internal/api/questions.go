@@ -290,7 +290,8 @@ func (s *Server) handleListQuestions(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	questions, err := s.store.ListQuestions(r.Context(), p.user.ID, threadID, status, limit)
+	attention := qs.Get("attention") == "true" || qs.Get("attention") == "1"
+	questions, err := s.store.ListQuestions(r.Context(), p.user.ID, threadID, status, limit, attention)
 	if err != nil {
 		writeError(w, err)
 		return

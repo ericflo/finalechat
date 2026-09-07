@@ -66,7 +66,7 @@ func (t *Thread) Archived() bool { return t.ArchivedAt != nil }
 
 const threadColumns = `t.id, t.user_id, t.external_id, t.title, t.agent, t.meta, t.created_at, t.updated_at,
 	t.last_activity_at, t.last_read_at, t.archived_at, t.muted, t.preview, t.preview_sender,
-	(SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND m.sender <> 'user' AND m.created_at > t.last_read_at)::int,
+	(SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND m.sender <> 'user' AND m.deleted_at IS NULL AND m.created_at > t.last_read_at)::int,
 	(SELECT count(*) FROM questions q WHERE q.thread_id = t.id AND q.status = 'pending')::int,
 	t.activity_text, t.activity_kind, t.activity_at, t.activity_since, t.activity_expires_at,
 	(t.activity_expires_at IS NOT NULL AND t.activity_expires_at > now())`
@@ -284,8 +284,11 @@ func activitySet(text, kind, ttl, seq string) string {
 // when a newer status (by Seq) is already live, in which case the returned
 // thread carries that status.
 func (s *Store) SetThreadActivity(ctx context.Context, userID, id uuid.UUID, in ActivityInput) (thread *Thread, applied bool, err error) {
+	// A write is ignored when a newer status is live, or when a clear with a
+	// higher sequence already happened (a straggler must not resurrect it).
 	thread, err = scanThread(s.pool.QueryRow(ctx, `UPDATE threads t SET `+activitySet("$3", "$4", "$5", "$6")+`
 		WHERE t.id = $1 AND t.user_id = $2
+			AND ($6::bigint = 0 OR $6::bigint > t.activity_cleared_seq)
 			AND ($6::bigint = 0 OR t.activity_seq < $6::bigint OR t.activity_expires_at IS NULL OR t.activity_expires_at <= now())
 		RETURNING `+threadColumns, id, userID, in.Text, in.Kind, in.TTL, in.Seq))
 	if err == nil {
@@ -298,9 +301,10 @@ func (s *Store) SetThreadActivity(ctx context.Context, userID, id uuid.UUID, in 
 	return thread, false, err
 }
 
-// ClearThreadActivity drops the status line.
-func (s *Store) ClearThreadActivity(ctx context.Context, userID, id uuid.UUID) (*Thread, error) {
-	return scanThread(s.pool.QueryRow(ctx, "UPDATE threads t SET "+activityCleared+" WHERE t.id = $1 AND t.user_id = $2 RETURNING "+threadColumns, id, userID))
+// ClearThreadActivity drops the status line. seq, when non-zero, records
+// the clear's position so a later-arriving write with a lower seq is ignored.
+func (s *Store) ClearThreadActivity(ctx context.Context, userID, id uuid.UUID, seq int64) (*Thread, error) {
+	return scanThread(s.pool.QueryRow(ctx, "UPDATE threads t SET "+activityCleared+", activity_cleared_seq = GREATEST(t.activity_cleared_seq, $3::bigint) WHERE t.id = $1 AND t.user_id = $2 RETURNING "+threadColumns, id, userID, seq))
 }
 
 // MarkThreadRead records that the user has seen everything up to now.
@@ -336,7 +340,7 @@ func (s *Store) GetCounts(ctx context.Context, userID uuid.UUID) (Counts, error)
 	var c Counts
 	err := s.pool.QueryRow(ctx, `WITH unread AS (
 			SELECT t.id FROM threads t WHERE t.user_id = $1 AND t.archived_at IS NULL AND NOT t.muted AND EXISTS (
-				SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.sender <> 'user' AND m.created_at > t.last_read_at)
+				SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.sender <> 'user' AND m.deleted_at IS NULL AND m.created_at > t.last_read_at)
 		), asked AS (
 			SELECT DISTINCT q.thread_id AS id FROM questions q JOIN threads t ON t.id = q.thread_id
 			WHERE q.user_id = $1 AND q.status = 'pending' AND t.archived_at IS NULL AND NOT t.muted

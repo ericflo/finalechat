@@ -57,6 +57,8 @@ export function renderMarkdown(source: string): string {
   const clean = DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ["style", "form", "input", "button", "iframe", "object", "embed"],
+    // An inline style could paint over the whole app (a fake login, say).
+    FORBID_ATTR: ["style"],
     ADD_ATTR: ["target"],
   });
   return remember(source, decorateCode(clean));

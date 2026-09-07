@@ -1469,6 +1469,14 @@
                 "value": "ext:claude-code:7f3a9c2e"
               }
             }
+          },
+          {
+            "name": "seq",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Ordering for concurrent writers: status writes with a lower seq than this clear are ignored afterwards. Use the same clock as the writes (nanosecond timestamps)."
           }
         ],
         "responses": {
@@ -1889,6 +1897,10 @@
                     "created": {
                       "type": "boolean",
                       "description": "False when an idempotency key matched an earlier post (then the status is 200)."
+                    },
+                    "applied": {
+                      "type": "boolean",
+                      "description": "On an idempotent replay: whether the activity carried by the request was applied."
                     }
                   },
                   "required": [
@@ -2395,6 +2407,14 @@
               "maximum": 500,
               "default": 100
             }
+          },
+          {
+            "name": "attention",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "true leaves out questions in archived or muted threads (the app's needs-you view). Agents listing their own questions should omit it."
           }
         ],
         "responses": {
@@ -4059,6 +4079,15 @@
               "token"
             ],
             "description": "session when the app posted it, token when an agent did; empty on rows from before this field existed."
+          },
+          "deleted": {
+            "type": "boolean",
+            "description": "True on a tombstone: the message was deleted; id and position are kept so anchors resolve. Only present on catch-up pages (after=<id> without a sender filter)."
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When a tombstone was deleted."
           }
         },
         "example": {
@@ -4962,7 +4991,7 @@
           },
           "seq": {
             "type": "integer",
-            "description": "Optional ordering for concurrent writers; a write whose seq is not above the live status's is ignored (applied=false)."
+            "description": "Optional ordering for concurrent writers; a write whose seq is not above the live status's, or below a sequenced clear, is ignored (applied=false). Convention: a nanosecond timestamp, one clock per thread."
           }
         },
         "example": {

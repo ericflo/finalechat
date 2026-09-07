@@ -50,6 +50,7 @@ export function Inbox({ filter }: { filter: string | null }) {
     const hits = searchHits && searchHits.query === query.trim() ? new Set(searchHits.ids) : null;
     return Object.values(threads)
       .filter((t) => (q ? true : tab === "archived" ? !!t.archived_at : !t.archived_at))
+      .filter((t) => !needsYou || t.pending_questions > 0)
       .filter((t) => !q || hits?.has(t.id) || t.title.toLowerCase().includes(q) || t.agent.toLowerCase().includes(q) || t.preview.toLowerCase().includes(q) || (t.external_id ?? "").toLowerCase().includes(q))
       .sort((a, b) => {
         // Threads with a question waiting come first; then by activity.
@@ -58,7 +59,7 @@ export function Inbox({ filter }: { filter: string | null }) {
         if (na !== nb) return nb - na;
         return a.last_activity_at < b.last_activity_at ? 1 : -1;
       });
-  }, [threads, tab, query, searchHits]);
+  }, [threads, tab, query, searchHits, needsYou]);
 
   const summary = useMemo(() => {
     const parts: string[] = [];
@@ -81,7 +82,7 @@ export function Inbox({ filter }: { filter: string | null }) {
       <TopBar
         big
         title="Finalechat"
-        subtitle={summary || undefined}
+        subtitle={summary && !(inboxLoaded && tab === "active" && list.length === 0 && !searching) ? summary : undefined}
         right={
           <>
             <button
@@ -106,7 +107,7 @@ export function Inbox({ filter }: { filter: string | null }) {
         {needsYou && (
           <div className="filter-row">
             <span className="filter-chip">
-              Needs you · {pending.length}
+              Needs you · {list.length}
               <button type="button" aria-label="Show everything" onClick={() => navigate("/", { replace: true })}>
                 <IconClose />
               </button>
@@ -195,8 +196,17 @@ function ThreadRow({ t, showArchived, onMenu }: { t: Thread; showArchived: boole
   const pressTimer = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false);
 
-  // Long-press (or right-click) opens the row's actions.
+  // Long-press (or right-click) opens the row's actions. The click that the
+  // finger's lift produces is swallowed once; any later pointer resets that.
+  useEffect(() => {
+    const reset = () => {
+      suppressClick.current = false;
+    };
+    window.addEventListener("pointerdown", reset, true);
+    return () => window.removeEventListener("pointerdown", reset, true);
+  }, []);
   const startPress = useCallback(() => {
+    suppressClick.current = false;
     window.clearTimeout(pressTimer.current);
     pressTimer.current = window.setTimeout(() => {
       suppressClick.current = true;

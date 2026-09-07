@@ -1,4 +1,4 @@
-import { Component, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from "react";
+import { Component, useEffect, useRef, useState, type ErrorInfo, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { onLinkClick } from "../lib/router";
 import { dismissToast, useStore } from "../lib/store";
 import { IconCheck, IconClose, IconCopy } from "./Icons";
@@ -109,11 +109,14 @@ export function Avatar({ name, small }: { name: string; small?: boolean }) {
     .slice(0, 2)
     .map((w) => w[0]?.toUpperCase() ?? "")
     .join("");
-  // Yellow-green and cyan bands are too bright for white text; use ink there.
-  const light = (hue >= 40 && hue <= 100) || (hue >= 160 && hue <= 200);
+  // Ink is chosen from the brighter gradient stop's luminance, so initials
+  // stay readable on every hue.
+  const a1 = { h: hue, s: 60, l: 50 };
+  const a2 = { h: (hue + 30) % 360, s: 68, l: 56 };
+  const light = luminance(a2) > 0.32 || luminance(a1) > 0.32;
   const style = {
-    "--a1": `hsl(${hue} 60% ${light ? 60 : 50}%)`,
-    "--a2": `hsl(${(hue + 30) % 360} 68% ${light ? 66 : 56}%)`,
+    "--a1": `hsl(${a1.h} ${a1.s}% ${a1.l}%)`,
+    "--a2": `hsl(${a2.h} ${a2.s}% ${a2.l}%)`,
     color: light ? "#16161a" : "#fff",
   } as React.CSSProperties;
   return (
@@ -123,21 +126,74 @@ export function Avatar({ name, small }: { name: string; small?: boolean }) {
   );
 }
 
-/** Bottom sheet: locks the page behind it, traps focus, restores it on close. */
+/** Relative luminance of an HSL colour, for picking readable text. */
+function luminance({ h, s, l }: { h: number; s: number; l: number }): number {
+  const sat = s / 100;
+  const lig = l / 100;
+  const c = (1 - Math.abs(2 * lig - 1)) * sat;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = lig - c / 2;
+  const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  const lin = (v: number) => {
+    const s = v + m;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+}
+
+/** How many sheets hold the page still; the thread's scroll tracking ignores
+ * scroll events while one is open. */
+export let sheetsOpen = 0;
+
+/** Bottom sheet: locks the page behind it, traps focus, restores it on close.
+ * A sheet opened by a long press ignores the click that the finger's lift
+ * produces, so the gesture can neither dismiss it nor pick an item. */
 export function Sheet({ onClose, children, label }: { onClose: () => void; children: ReactNode; label?: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    // Arm shortly after the pointer that may have opened us is released.
+    let timer: number | undefined;
+    const arm = () => {
+      timer = window.setTimeout(() => setArmed(true), 120);
+    };
+    window.addEventListener("pointerup", arm, { once: true, capture: true });
+    const fallback = window.setTimeout(() => setArmed(true), 500);
+    return () => {
+      window.removeEventListener("pointerup", arm, true);
+      window.clearTimeout(timer);
+      window.clearTimeout(fallback);
+    };
+  }, []);
+
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const scrollY = window.scrollY;
     const { overflow, position, top, width } = document.body.style;
+    sheetsOpen++;
     document.body.style.overflow = "hidden";
     document.body.style.position = "fixed";
     document.body.style.top = `-${scrollY}px`;
     document.body.style.width = "100%";
     const first = ref.current?.querySelector<HTMLElement>("input, textarea, button, [href], [tabindex]:not([tabindex='-1'])");
     first?.focus({ preventScroll: true });
+    return () => {
+      sheetsOpen--;
+      document.body.style.overflow = overflow;
+      document.body.style.position = position;
+      document.body.style.top = top;
+      document.body.style.width = width;
+      window.scrollTo(0, scrollY);
+      previous?.focus?.({ preventScroll: true });
+    };
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
       if (e.key === "Tab" && ref.current) {
         const items = Array.from(ref.current.querySelectorAll<HTMLElement>("input, textarea, button, [href], [tabindex]:not([tabindex='-1'])")).filter((el) => !el.hasAttribute("disabled"));
         if (items.length === 0) return;
@@ -153,18 +209,23 @@ export function Sheet({ onClose, children, label }: { onClose: () => void; child
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      document.body.style.overflow = overflow;
-      document.body.style.position = position;
-      document.body.style.top = top;
-      document.body.style.width = width;
-      window.scrollTo(0, scrollY);
-      previous?.focus?.({ preventScroll: true });
-    };
-  }, [onClose]);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const swallowUnarmed = (e: ReactPointerEvent | React.MouseEvent) => {
+    if (!armed) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  };
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
+    <div
+      className="sheet-backdrop"
+      onClickCapture={swallowUnarmed}
+      onPointerDown={(e) => {
+        if (armed && e.target === e.currentTarget) onClose();
+      }}
+    >
       <div ref={ref} className="sheet" role="dialog" aria-modal="true" aria-label={label} onClick={(e) => e.stopPropagation()}>
         <div className="grabber" />
         {children}

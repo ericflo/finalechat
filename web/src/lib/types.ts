@@ -77,6 +77,8 @@ export interface Message {
   meta: Record<string, unknown>;
   /** "session" when posted from the app, "token" when an agent posted it. */
   origin: "session" | "token" | "";
+  /** Set on catch-up pages for a message removed since: drop it locally. */
+  deleted?: boolean;
   created_at: string;
   attachments: Attachment[];
 }

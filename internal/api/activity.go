@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -96,7 +97,7 @@ func (s *Server) handleSetActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	if in == nil {
 		had := thread.Activity != nil
-		thread, err = s.store.ClearThreadActivity(r.Context(), p.user.ID, thread.ID)
+		thread, err = s.store.ClearThreadActivity(r.Context(), p.user.ID, thread.ID, req.Seq)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -132,8 +133,20 @@ func (s *Server) handleClearActivity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	// A clear may carry the same monotonic seq as writes (?seq=), so a status
+	// write that was already in flight when the clear happened cannot land
+	// afterwards and resurrect it.
+	var seq int64
+	if v := r.URL.Query().Get("seq"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n < 0 {
+			writeError(w, errValidation("seq must be a non-negative integer."))
+			return
+		}
+		seq = n
+	}
 	had := thread.Activity != nil
-	thread, err = s.store.ClearThreadActivity(r.Context(), p.user.ID, thread.ID)
+	thread, err = s.store.ClearThreadActivity(r.Context(), p.user.ID, thread.ID, seq)
 	if err != nil {
 		writeError(w, err)
 		return
