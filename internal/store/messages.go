@@ -101,14 +101,18 @@ func (s *Store) CreateMessage(ctx context.Context, userID, threadID uuid.UUID, i
 			return err
 		}
 		lastRead := "t.last_read_at"
+		// A message from the agent is the outcome its status line announced,
+		// so the status goes with it; the user's reply leaves it alone.
+		activity := activityCleared
 		if in.Sender == SenderUser {
 			// The user's own reply implies they have read everything before it.
 			lastRead = "GREATEST(t.last_read_at, m.created_at)"
+			activity = "activity_text = t.activity_text"
 		}
 		thread, err = scanThread(tx.QueryRow(ctx, `WITH m AS (SELECT $3::timestamptz AS created_at)
 			UPDATE threads t SET preview = $4, preview_sender = $5, last_activity_at = m.created_at, updated_at = now(),
 				last_read_at = `+lastRead+`,
-				archived_at = NULL
+				archived_at = NULL, `+activity+`
 			FROM m WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns,
 			threadID, userID, msg.CreatedAt, previewFor(in.Body, len(in.AttachmentIDs)), in.Sender))
 		return err

@@ -19,6 +19,7 @@ import (
 //	event: message.created  data: {"message": {...}, "thread": {...}}
 //	event: question.*       data: {"question": {...}, "thread": {...}}
 //	event: thread.*         data: {"thread": {...}} or {"thread_id": "..."} when deleted
+//	event: thread.activity  data: {"thread": {...}} (thread.activity is the status, or null)
 //	event: ready            data: {"counts": {...}}
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
@@ -117,6 +118,10 @@ func (s *Server) expandEvent(r *http.Request, ev bus.Event) (map[string]any, err
 		return nil, err
 	}
 	out["thread"] = thread
+	if ev.Type == bus.ThreadActivity {
+		// Status lines are frequent and never change the badge counts.
+		return out, nil
+	}
 	switch ev.Type {
 	case bus.MessageCreated:
 		id, err := uuid.Parse(ev.MessageID)

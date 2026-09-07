@@ -75,6 +75,22 @@ finalechat wait --timeout 900
 
 Prints the reply body. Then act on it and keep going.
 
+## Say what you are doing
+
+Between messages the user sees silence. Before a step that takes more than
+a few seconds, set a status line; the app shows it as a typing indicator
+with a timer, and it lapses on its own (default 45 seconds, `--ttl` up to
+600) or as soon as you post the next message:
+
+```bash
+finalechat status "Running the test suite…" --ttl 120
+finalechat status "Reading the migration files" --kind tool
+finalechat status --clear
+```
+
+It never notifies and is not part of the transcript, so send one for every
+step change.
+
 ## Screenshots
 
 Attach files to a message with `-f` (repeatable, up to 8, 10 MiB each);

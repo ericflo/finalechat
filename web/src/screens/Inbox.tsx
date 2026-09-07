@@ -9,6 +9,7 @@ import { loadArchived, loadMoreThreads, toast, updateSettings, useStore } from "
 import { relativeTime } from "../lib/time";
 import type { Thread } from "../lib/types";
 import { api } from "../lib/api";
+import { useLiveActivity } from "../lib/activity";
 
 export function Inbox({ filter }: { filter: string | null }) {
   const threads = useStore((s) => s.threads);
@@ -126,16 +127,26 @@ function ThreadRow({ t }: { t: Thread }) {
   const unread = t.unread_count > 0;
   const needs = t.pending_questions > 0;
   const name = t.agent || t.title || "Agent";
+  const activity = useLiveActivity(t.activity);
   return (
-    <Link href={`/t/${t.id}`} className={`thread-row ${unread ? "unread" : ""} ${needs ? "needs-you" : ""}`}>
+    <Link href={`/t/${t.id}`} className={`thread-row ${unread ? "unread" : ""} ${needs ? "needs-you" : ""} ${activity ? "live" : ""}`}>
       <Avatar name={name} />
       <div className="thread-main">
         <div className="thread-title">{t.title || t.agent || "Untitled thread"}</div>
         {t.title && t.agent && <div className="thread-agent">{t.agent}</div>}
         <div className="thread-preview">
-          {t.preview_sender === "user" && <span style={{ color: "var(--text-3)" }}>You: </span>}
-          {t.preview_sender === "question" && <span style={{ color: "var(--amber)", fontWeight: 600 }}>Asked: </span>}
-          {t.preview || <em style={{ color: "var(--text-3)" }}>No messages yet</em>}
+          {activity ? (
+            <span className={`live-line ${activity.kind}`}>
+              <span className="live-dot" aria-hidden />
+              {activity.text}
+            </span>
+          ) : (
+            <>
+              {t.preview_sender === "user" && <span style={{ color: "var(--text-3)" }}>You: </span>}
+              {t.preview_sender === "question" && <span style={{ color: "var(--amber)", fontWeight: 600 }}>Asked: </span>}
+              {t.preview || <em style={{ color: "var(--text-3)" }}>No messages yet</em>}
+            </>
+          )}
         </div>
       </div>
       <div className="thread-side">

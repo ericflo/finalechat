@@ -165,6 +165,35 @@ paths), and `finalechat_wait_for_reply`, `finalechat_read` and
 `finalechat_view_attachment` return images as image content, so the model
 sees a screenshot directly; `finalechat_fetch_attachment` saves a file.
 
+## Say what you are doing
+
+Between messages the user only sees silence. A status line fixes that: one
+short sentence about what you are doing right now, shown in the app as a
+typing indicator ("running the test suite…") with how long you have been at
+it. It is not part of the transcript, it never notifies, and it can never go
+stale: it lapses after `ttl_seconds` (default 45, at most 600) unless you
+refresh it, and it is dropped the moment you post a message or a question.
+Send one whenever you start something that takes more than a few seconds,
+and again whenever the step changes; refresh it if a step runs long.
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/threads/ext:my-session-42/activity \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Checking out the files you asked for…", "kind": "working", "ttl_seconds": 60}'
+```
+
+`kind` is `thinking`, `working` (default), `typing` (you are composing a
+reply), `waiting` (blocked on the user or on something external) or `tool`
+(a command or tool is running). The response is `{"thread": {...}}` whose
+`activity` field is `{text, kind, at, since, expires_at}`; `since` survives
+refreshes so the app can say "for 3 minutes". Clear it early with
+`DELETE /threads/{ref}/activity` or by posting `{"text": ""}`. Like messages,
+this creates a missing `ext:` thread and accepts `title` and `agent`.
+
+With the CLI: `finalechat status "Running the migration…"` (add `--ttl 120`
+for long steps, `--clear` to drop it). With MCP: `finalechat_status`.
+
 ## Command-line helper
 
 The `finalechat` CLI wraps the API with sensible defaults (Python 3.9+,
@@ -178,6 +207,7 @@ finalechat whoami
 
 finalechat say "Tests are green; starting the migration." --title finalechat --agent "Claude Code"
 finalechat say "Migration failed on step 3, need a decision." --important
+finalechat status "Running the migration…" --ttl 120   # live status line, lapses on its own
 finalechat ask "Promote to production?" -o "Ship it::Promote the same image" -o "Hold::Wait for me" --timeout 3600
 finalechat wait                     # prints the user's next reply
 finalechat read --limit 20          # recent messages in the current thread
@@ -199,11 +229,14 @@ phone with hooks: `SessionStart` creates the thread `claude-code:<session_id>`
 named after the project directory, `UserPromptSubmit` mirrors the user's
 prompts, `Stop` posts Claude's final message of each turn, `Notification`
 posts an important message when Claude needs permission or is idle,
-`PreToolUse` on `AskUserQuestion` mirrors the question to the phone, and
-`SessionEnd` posts a system note. It also registers the MCP server
+`PreToolUse` on `AskUserQuestion` mirrors the question to the phone, every
+other `PreToolUse`/`PostToolUse` keeps a live status line on the thread
+("Running: go test ./…", then "Thinking…") from a detached background
+process so the session never waits on it, and `SessionEnd` posts a system
+note. It also registers the MCP server
 (`claude mcp add --scope user finalechat -- finalechat mcp`), which exposes
-`finalechat_send`, `finalechat_ask`, `finalechat_wait_for_reply` and
-`finalechat_read` as tools.
+`finalechat_send`, `finalechat_ask`, `finalechat_wait_for_reply`,
+`finalechat_read` and `finalechat_status` as tools.
 
 **Remote mode** is a switch in the app's Settings (also `finalechat remote
 on|off`). While it is on, the `Stop` hook waits for the user's phone reply
@@ -238,7 +271,8 @@ Limits: JSON bodies 1 MiB; message `body` 256 KiB; question `prompt` 8000
 bytes; up to 20 options with labels of 200 and descriptions of 1000
 characters; `meta` 16 KiB; `title` 300, `agent` 120, `external_id` 300
 characters; `wait` is clamped to 600 seconds; `timeout_seconds` 1 to 604800;
-attachments 10 MiB each, 8 per message. All timestamps are UTC RFC 3339; all
+attachments 10 MiB each, 8 per message; activity `text` 200 characters on
+one line with `ttl_seconds` 1 to 600. All timestamps are UTC RFC 3339; all
 ids are UUIDs.
 
 ## Cheat sheet
@@ -255,6 +289,8 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `PATCH /threads/{ref}` | `title`, `agent`, `archived`, `muted`, `meta` |
 | `DELETE /threads/{ref}` | Delete thread and contents |
 | `POST /threads/{ref}/read` | Mark read |
+| `POST /threads/{ref}/activity` | Set the status line (`text`, `kind`, `ttl_seconds`); empty `text` clears (creates `ext:` thread) |
+| `DELETE /threads/{ref}/activity` | Clear the status line |
 | `POST /threads/{ref}/messages` | Post a message (creates `ext:` thread); JSON with `attachments` ids, or multipart with `file` parts |
 | `GET /threads/{ref}/messages?after=&before=&limit=&sender=&wait=` | Read or wait for messages |
 | `GET /messages/{id}` | One message |
@@ -266,6 +302,6 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `GET /questions/{id}?wait=` | One question; optionally block until resolved |
 | `POST /questions/{id}/answer` | Answer (`selected`, `text`) |
 | `POST /questions/{id}/cancel` | Withdraw a pending question |
-| `GET /events` | Server-sent events stream |
+| `GET /events` | Server-sent events stream (`thread.activity` carries status changes) |
 | `GET /counts` | Pending questions and unread threads |
 | `GET /settings`, `PATCH /settings` | `notify_all_messages`, `remote_mode` |

@@ -16,6 +16,17 @@ export interface Counts {
   unread_threads: number;
 }
 
+export type ActivityKind = "thinking" | "working" | "typing" | "waiting" | "tool";
+
+/** What the agent says it is doing right now; lapses at expires_at. */
+export interface Activity {
+  text: string;
+  kind: ActivityKind;
+  at: string;
+  since: string;
+  expires_at: string;
+}
+
 export interface Thread {
   id: string;
   external_id: string | null;
@@ -32,6 +43,7 @@ export interface Thread {
   preview_sender: string;
   unread_count: number;
   pending_questions: number;
+  activity: Activity | null;
 }
 
 export type Sender = "agent" | "user" | "system";

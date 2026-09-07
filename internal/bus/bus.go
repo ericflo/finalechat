@@ -33,6 +33,7 @@ const (
 	ThreadCreated     = "thread.created"
 	ThreadUpdated     = "thread.updated"
 	ThreadDeleted     = "thread.deleted"
+	ThreadActivity    = "thread.activity"
 	MessageCreated    = "message.created"
 	QuestionCreated   = "question.created"
 	QuestionAnswered  = "question.answered"

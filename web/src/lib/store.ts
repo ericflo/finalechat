@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { api, APIError } from "./api";
 import { setBadge } from "./push";
+import { syncServerTime } from "./time";
 import type { Counts, Message, Question, Settings, Thread, User } from "./types";
 
 export type Connection = "idle" | "connecting" | "online" | "offline";
@@ -342,7 +343,8 @@ export function connect() {
     reconnectDelay = 1000;
     set({ connection: "online" });
     try {
-      const data = JSON.parse((ev as MessageEvent).data) as { counts: Counts };
+      const data = JSON.parse((ev as MessageEvent).data) as { counts: Counts; at?: string };
+      syncServerTime(data.at);
       applyCounts(data.counts);
     } catch {
       // ignore
@@ -357,6 +359,7 @@ export function connect() {
     es.addEventListener(name, (ev) => {
       try {
         const data = JSON.parse((ev as MessageEvent).data) as EventPayload;
+        syncServerTime(data.at);
         fn(data);
         if (data.counts) applyCounts(data.counts);
       } catch {
@@ -367,6 +370,7 @@ export function connect() {
 
   withPayload("thread.created", (d) => d.thread && upsertThreads([d.thread]));
   withPayload("thread.updated", (d) => d.thread && upsertThreads([d.thread]));
+  withPayload("thread.activity", (d) => d.thread && upsertThreads([d.thread]));
   withPayload("thread.deleted", (d) => {
     if (!d.thread_id) return;
     const id = d.thread_id;
@@ -397,6 +401,7 @@ export function connect() {
 }
 
 interface EventPayload {
+  at?: string;
   thread?: Thread;
   thread_id?: string;
   message?: Message;

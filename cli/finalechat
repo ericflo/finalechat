@@ -7,6 +7,7 @@ Python 3.9+, standard library only. It is also the Claude Code hook handler
 
     finalechat login                      # paste an API token from Settings → Agents
     finalechat say "Deployed v2 to staging"
+    finalechat status "Running the test suite…"   # live status line, lapses on its own
     finalechat ask "Ship to prod?" -o Yes -o No
     finalechat wait                       # block until the human replies
     finalechat say "Look at this" -f /tmp/screenshot.png
@@ -295,6 +296,23 @@ class Client:
 
     def get_thread(self, ref: str) -> dict:
         return self.request("GET", f"/api/v1/threads/{self.ref_path(ref)}").get("thread", {})
+
+    def set_activity(self, ref: str, text: str, *, kind: str | None = None, ttl: int | None = None,
+                     title: str = "", agent: str = "") -> dict:
+        """Set the thread's live status line; an empty text clears it."""
+        body: dict = {"text": text}
+        if kind:
+            body["kind"] = kind
+        if ttl:
+            body["ttl_seconds"] = int(ttl)
+        if title:
+            body["title"] = title
+        if agent:
+            body["agent"] = agent
+        return self.request("POST", f"/api/v1/threads/{self.ref_path(ref)}/activity", body=body, timeout=10)
+
+    def clear_activity(self, ref: str) -> dict:
+        return self.request("DELETE", f"/api/v1/threads/{self.ref_path(ref)}/activity", timeout=10)
 
     def list_threads(self, archived: bool = False, limit: int = 50, query: str | None = None) -> list:
         params = {"limit": limit, "q": query}
@@ -866,6 +884,44 @@ def cmd_fetch(args) -> int:
     return EXIT_OK
 
 
+def describe_activity(activity: dict | None) -> str:
+    if not activity:
+        return "no status"
+    text = str(activity.get("text") or "")
+    kind = str(activity.get("kind") or "working")
+    since = relative_time(activity.get("since"))
+    return f"{kind}: {text} (since {since})"
+
+
+def cmd_status(args) -> int:
+    client = client_from_args(args)
+    target = resolve_target(args.thread, args.title, args.agent)
+    text = " ".join(args.text or []).strip()
+    if args.clear:
+        resp = client.clear_activity(target.ref)
+    elif text:
+        resp = client.set_activity(target.ref, text, kind=args.kind, ttl=args.ttl, title=target.title, agent=target.agent)
+    else:
+        thread = client.get_thread(target.ref)
+        if args.json:
+            print_json(thread)
+        else:
+            print(describe_activity(thread.get("activity")))
+        return EXIT_OK
+    if args.json:
+        print_json(resp)
+        return EXIT_OK
+    thread = resp.get("thread") or {}
+    activity = thread.get("activity")
+    if activity:
+        expires = parse_time(activity.get("expires_at"))
+        left = max(0, int((expires - datetime.now(timezone.utc)).total_seconds())) if expires else 0
+        print(f"status set · thread {thread.get('id')} · lapses in {left}s or at your next message")
+    else:
+        print(f"status cleared · thread {thread.get('id')}")
+    return EXIT_OK
+
+
 def parse_options(raw: list[str] | None) -> list[dict]:
     options = []
     for item in raw or []:
@@ -994,7 +1050,10 @@ def hook_spec(command: str) -> dict:
         "UserPromptSubmit": entry(30),
         "Stop": entry(1800),
         "Notification": entry(30),
-        "PreToolUse": entry(1800, matcher="AskUserQuestion"),
+        # Every tool: AskUserQuestion is mirrored as a question (and may block
+        # for the answer); any other tool just updates the live status line.
+        "PreToolUse": entry(1800),
+        "PostToolUse": entry(30),
         "SessionEnd": entry(30),
     }
 
@@ -1055,7 +1114,7 @@ def cmd_install(args) -> int:
     print(f"Installed Finalechat hooks into {settings_path}")
     if backup:
         print(f"  previous settings backed up to {backup.name}")
-    print("  events: SessionStart, UserPromptSubmit, Stop, Notification, PreToolUse(AskUserQuestion), SessionEnd")
+    print("  events: SessionStart, UserPromptSubmit, Stop, Notification, PreToolUse, PostToolUse, SessionEnd")
     if not args.no_mcp:
         install_mcp(command.replace(" hook claude-code", ""))
     print()
@@ -1203,6 +1262,81 @@ def env_seconds(name: str, default: int) -> int:
         return default
 
 
+def status_enabled() -> bool:
+    return os.environ.get("FINALECHAT_STATUS", "").strip().lower() not in ("0", "off", "false", "no")
+
+
+def spawn_status(ref: str, text: str, kind: str, ttl: int, title: str, agent: str) -> None:
+    """Set the thread's status line from a detached process, so a hook
+    returns to Claude Code at once instead of waiting on the network."""
+    text = truncate(" ".join(text.split()), 200)
+    if not text or not status_enabled():
+        return
+    argv = [sys.executable, cli_path(), "status", text, "--kind", kind, "--ttl", str(ttl), "-t", ref]
+    if title:
+        argv += ["--title", title]
+    if agent:
+        argv += ["--agent", agent]
+    try:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True, close_fds=True)
+    except OSError as err:
+        hook_log(f"status spawn failed: {err}")
+
+
+def clear_status(client: Client, ref: str) -> None:
+    if not status_enabled():
+        return
+    try:
+        client.clear_activity(ref)
+    except CLIError as err:
+        hook_log(f"status clear failed: {err}")
+
+
+def tool_status_text(payload: dict) -> str:
+    """One readable line for a tool call: "Running: go test ./..."."""
+    name = str(payload.get("tool_name") or "a tool")
+    inp = payload.get("tool_input")
+    if not isinstance(inp, dict):
+        inp = {}
+    cwd = str(payload.get("cwd") or "").rstrip("/")
+
+    def rel(value) -> str:
+        path = str(value or "")
+        if cwd and path.startswith(cwd + "/"):
+            path = path[len(cwd) + 1:]
+        return path
+
+    if name == "Bash":
+        command = str(inp.get("command") or "").strip()
+        first = command.splitlines()[0].strip() if command else ""
+        return f"Running: {first}" if first else "Running a command"
+    if name == "Read":
+        return f"Reading {rel(inp.get('file_path'))}".rstrip()
+    if name == "Write":
+        return f"Writing {rel(inp.get('file_path'))}".rstrip()
+    if name in ("Edit", "MultiEdit", "NotebookEdit"):
+        return f"Editing {rel(inp.get('file_path') or inp.get('notebook_path'))}".rstrip()
+    if name in ("Grep", "Glob"):
+        pattern = str(inp.get("pattern") or "")
+        return f"Searching for {pattern}" if pattern else "Searching the code"
+    if name in ("Agent", "Task"):
+        desc = str(inp.get("description") or "")
+        return f"Delegating: {desc}" if desc else "Delegating to a subagent"
+    if name == "WebFetch":
+        url = str(inp.get("url") or "")
+        host = urllib.parse.urlparse(url).netloc if url else ""
+        return f"Fetching {host or url}".rstrip()
+    if name == "WebSearch":
+        query = str(inp.get("query") or "")
+        return f"Searching the web: {query}" if query else "Searching the web"
+    if name in ("TodoWrite", "TaskCreate", "TaskUpdate"):
+        return "Updating the plan"
+    if name.startswith("mcp__"):
+        return f"Using {name.split('__')[-1]}"
+    return f"Using {name}"
+
+
 def hook_claude_code() -> int:
     try:
         raw = sys.stdin.read()
@@ -1241,6 +1375,7 @@ def hook_claude_code() -> int:
         if not prompt or prompt.startswith("/"):
             return EXIT_OK
         client.post_message(ref, prompt, sender="user", meta={"via": "claude-code"}, title=title, agent=agent)
+        spawn_status(ref, "Thinking…", "thinking", 120, title, agent)
         return EXIT_OK
 
     if event == "Stop":
@@ -1254,12 +1389,18 @@ def hook_claude_code() -> int:
         body = f"**Claude Code needs you** — {message}"
         meta = {"kind": "notification", "notification_type": kind}
         client.post_message(ref, body, important=True, notify=True, meta=meta, title=title, agent=agent)
+        spawn_status(ref, "Waiting for you in the terminal", "waiting", 300, title, agent)
         return EXIT_OK
 
     if event == "PreToolUse":
-        if payload.get("tool_name") != "AskUserQuestion":
-            return EXIT_OK
-        return hook_ask_user_question(client, payload, ref, title, agent)
+        if payload.get("tool_name") == "AskUserQuestion":
+            return hook_ask_user_question(client, payload, ref, title, agent)
+        spawn_status(ref, tool_status_text(payload), "tool", 120, title, agent)
+        return EXIT_OK
+
+    if event == "PostToolUse":
+        spawn_status(ref, "Thinking…", "thinking", 120, title, agent)
+        return EXIT_OK
 
     if event == "SessionEnd":
         reason = str(payload.get("reason") or "").strip()
@@ -1274,13 +1415,17 @@ def hook_claude_code() -> int:
 def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: str, agent: str) -> int:
     transcript = str(payload.get("transcript_path") or "")
     if not transcript:
+        clear_status(client, ref)
         return EXIT_OK
     uuid, text = last_assistant_text(transcript)
     if not text:
+        clear_status(client, ref)
         return EXIT_OK
     state = load_session_state(session_id)
     if uuid and state.get("last_posted_uuid") == uuid:
+        clear_status(client, ref)
         return EXIT_OK
+    # Posting the reply clears the status line on the server.
     resp = client.post_message(ref, text, meta={"via": "claude-code", "transcript_uuid": uuid or ""},
                                title=title, agent=agent)
     message = resp.get("message") or {}
@@ -1293,8 +1438,24 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
     total = env_seconds("FINALECHAT_REPLY_WAIT", 1500)
     if total <= 0:
         return EXIT_OK
-    reply = wait_for_reply(client, ref, message.get("id"), total, keep_going=client.remote_mode)
+
+    def waiting_status() -> None:
+        if status_enabled():
+            try:
+                client.set_activity(ref, "Waiting for your reply", kind="waiting", ttl=min(600, POLL_CHUNK + 30))
+            except CLIError:
+                pass
+
+    def keep_going() -> bool:
+        if not client.remote_mode():
+            return False
+        waiting_status()
+        return True
+
+    waiting_status()
+    reply = wait_for_reply(client, ref, message.get("id"), total, keep_going=keep_going)
     if reply is None:
+        clear_status(client, ref)
         return EXIT_OK
     body = str(reply.get("body") or "").strip()
     if not body and not message_attachments(reply):
@@ -1441,7 +1602,9 @@ MCP_INSTRUCTIONS = (
     "until they answer), and finalechat_wait_for_reply to wait for their next "
     "message. Replies can carry screenshots: image attachments arrive as image "
     "content you can look at directly; other files can be saved with "
-    "finalechat_fetch_attachment."
+    "finalechat_fetch_attachment. Call finalechat_status before any step that "
+    "takes more than a few seconds so the phone shows what you are doing; it "
+    "is instant, never notifies, and lapses on its own."
 )
 
 
@@ -1510,6 +1673,28 @@ def mcp_tools() -> list[dict]:
                     "thread": thread_prop,
                 },
                 "required": ["prompt"],
+            },
+        },
+        {
+            "name": "finalechat_status",
+            "description": (
+                "Show the human what you are doing right now as a one-line status under the thread "
+                "(\"Running the test suite…\"), like a typing indicator with a timer. Instant and cheap: "
+                "it never notifies, is not part of the transcript, lapses on its own after ttl_seconds "
+                "(default 45) and is replaced by your next message. Call it before any step that takes "
+                "more than a few seconds and again whenever the step changes. An empty text clears it."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "One short line, e.g. \"Running the migration…\" (max 200 characters)."},
+                    "kind": {"type": "string", "enum": ["thinking", "working", "typing", "waiting", "tool"],
+                             "default": "working", "description": "What sort of activity it is."},
+                    "ttl_seconds": {"type": "integer", "default": 45, "minimum": 1, "maximum": 600,
+                                    "description": "Seconds until the status lapses unless set again."},
+                    "thread": thread_prop,
+                },
+                "required": ["text"],
             },
         },
         {
@@ -1665,6 +1850,21 @@ def mcp_call(client: Client, name: str, arguments: dict):
         if status == "pending":
             return f"No answer within {timeout} seconds; question {question.get('id')} still pending."
         return f"The question was {status} before it was answered."
+
+    if name == "finalechat_status":
+        text = " ".join(str(arguments.get("text") or "").split())
+        target = mcp_target(arguments)
+        if not text:
+            try:
+                client.clear_activity(target.ref)
+            except APIError as err:
+                if err.status != 404:
+                    raise
+            return "Status cleared."
+        kind = str(arguments.get("kind") or "working")
+        ttl = max(1, min(600, int(arguments.get("ttl_seconds") or 45)))
+        client.set_activity(target.ref, text, kind=kind, ttl=ttl, title=target.title, agent=target.agent)
+        return f"Status shown: {text} (lapses in {ttl}s or at your next message)"
 
     if name == "finalechat_wait_for_reply":
         timeout = int(arguments.get("timeout_seconds") or 1800)
@@ -1837,6 +2037,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  finalechat say \"Tests are green\"        post a message to this directory's thread\n"
             "  finalechat say --important \"Found it!\"  post and push a notification\n"
             "  finalechat say -f shot.png             attach a screenshot\n"
+            "  finalechat status \"Running tests…\"      live status line; lapses on its own\n"
             "  finalechat fetch <id> -o /tmp/x.png    download a file the human sent\n"
             "  finalechat ask \"Deploy?\" -o Yes -o No   ask, block until answered, print the answer\n"
             "  finalechat wait                        block until the human replies\n"
@@ -1901,6 +2102,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--text", action="store_true", help="send as plain text instead of markdown")
     p.add_argument("--json", action="store_true", help="print the created message as JSON")
     p.set_defaults(func=cmd_say)
+
+    p = sub.add_parser("status", help="show what you are doing (a live status line)", formatter_class=Formatter,
+                       description="Set the thread's live status line: what you are doing right now. The app "
+                                   "shows it as a typing indicator with a timer. It never notifies, is not part "
+                                   "of the transcript, lapses after --ttl seconds (default 45) unless set again, "
+                                   "and is dropped by your next message. With no TEXT, prints the current status.",
+                       epilog="examples:\n  finalechat status \"Running the test suite…\" --ttl 120\n"
+                              "  finalechat status \"Reading the migration files\" --kind tool\n"
+                              "  finalechat status --clear")
+    p.add_argument("text", nargs="*", metavar="TEXT", help="the status line (joined with spaces)")
+    add_thread_args(p)
+    p.add_argument("--kind", choices=["thinking", "working", "typing", "waiting", "tool"],
+                   help="what sort of activity (default working)")
+    p.add_argument("--ttl", type=int, metavar="SECS", help="seconds until it lapses unless set again (default 45, max 600)")
+    p.add_argument("--clear", action="store_true", help="drop the status now")
+    p.add_argument("--json", action="store_true", help="print the thread as JSON")
+    p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("ask", help="ask a question and wait for the answer", formatter_class=Formatter,
                        description="Ask the human a question (multiple choice, free-form, or both) and block "
@@ -1968,9 +2186,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_hook)
 
     p = sub.add_parser("mcp", help="run the MCP server over stdio", formatter_class=Formatter,
-                       description="Model Context Protocol server exposing finalechat_send, finalechat_ask, "
-                                   "finalechat_wait_for_reply, finalechat_read, finalechat_view_attachment "
-                                   "and finalechat_fetch_attachment.")
+                       description="Model Context Protocol server exposing finalechat_send, finalechat_status, "
+                                   "finalechat_ask, finalechat_wait_for_reply, finalechat_read, "
+                                   "finalechat_view_attachment and finalechat_fetch_attachment.")
     p.set_defaults(func=cmd_mcp)
 
     return parser

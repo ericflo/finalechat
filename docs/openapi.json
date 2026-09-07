@@ -499,7 +499,7 @@
           "Events"
         ],
         "summary": "Server-sent events stream",
-        "description": "text/event-stream of `ready`, `thread.created`, `thread.updated`, `thread.deleted`, `message.created`, `question.created`, `question.answered`, `question.cancelled`, `question.expired`, `settings.updated` and `reconnect` events. Each data payload carries the full current objects (`thread`, `message`, `question`, `settings`) plus `counts` and `at`. A `: ping` comment is sent every 20 seconds.",
+        "description": "text/event-stream of `ready`, `thread.created`, `thread.updated`, `thread.deleted, thread.activity ({at, thread}; no counts)`, `message.created`, `question.created`, `question.answered`, `question.cancelled`, `question.expired`, `settings.updated` and `reconnect` events. Each data payload carries the full current objects (`thread`, `message`, `question`, `settings`) plus `counts` and `at`. A `: ping` comment is sent every 20 seconds.",
         "responses": {
           "200": {
             "description": "Event stream.",
@@ -818,7 +818,8 @@
                       "preview": "Staging looks good. Promote to production?",
                       "preview_sender": "question",
                       "unread_count": 1,
-                      "pending_questions": 1
+                      "pending_questions": 1,
+                      "activity": null
                     }
                   ],
                   "next_cursor": "MTc4ODc1OTUzNTA0Mzc5OXwwMWEwN2E2MC02ZGFiLTc4MGEtYmY0ZC0yMGVmMTVjMGQ3ZDc"
@@ -903,7 +904,8 @@
                     "preview": "Staging looks good. Promote to production?",
                     "preview_sender": "question",
                     "unread_count": 1,
-                    "pending_questions": 1
+                    "pending_questions": 1,
+                    "activity": null
                   }
                 }
               }
@@ -947,7 +949,8 @@
                     "preview": "Staging looks good. Promote to production?",
                     "preview_sender": "question",
                     "unread_count": 1,
-                    "pending_questions": 1
+                    "pending_questions": 1,
+                    "activity": null
                   }
                 }
               }
@@ -1045,7 +1048,8 @@
                     "preview": "Staging looks good. Promote to production?",
                     "preview_sender": "question",
                     "unread_count": 1,
-                    "pending_questions": 1
+                    "pending_questions": 1,
+                    "activity": null
                   }
                 }
               }
@@ -1141,7 +1145,8 @@
                     "preview": "Staging looks good. Promote to production?",
                     "preview_sender": "question",
                     "unread_count": 1,
-                    "pending_questions": 1
+                    "pending_questions": 1,
+                    "activity": null
                   }
                 }
               }
@@ -1311,8 +1316,163 @@
                     "preview": "Staging looks good. Promote to production?",
                     "preview_sender": "question",
                     "unread_count": 1,
-                    "pending_questions": 1
+                    "pending_questions": 1,
+                    "activity": null
                   }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{ref}/activity": {
+      "post": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Set the agent's status line (creates a missing ext: thread)",
+        "description": "What the agent is doing right now, shown in the app as a typing indicator with a timer. Lapses after ttl_seconds unless set again and is dropped when the agent posts a message or question. Never notifies and does not bump last_activity_at. Emits thread.activity. PUT is accepted as an alias.",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivityRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The thread; `thread.activity` is the new status or null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    }
+                  },
+                  "required": [
+                    "thread"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Clear the agent's status line",
+        "description": "Drops the status now. Emits thread.activity when there was one. Never creates a thread.",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The thread; `thread.activity` is the new status or null.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    }
+                  },
+                  "required": [
+                    "thread"
+                  ]
                 }
               }
             }
@@ -1595,7 +1755,8 @@
                     "preview": "Staging looks good. Promote to production?",
                     "preview_sender": "question",
                     "unread_count": 1,
-                    "pending_questions": 1
+                    "pending_questions": 1,
+                    "activity": null
                   }
                 }
               }
@@ -1880,7 +2041,8 @@
                     "preview": "Staging looks good. Promote to production?",
                     "preview_sender": "question",
                     "unread_count": 1,
-                    "pending_questions": 1
+                    "pending_questions": 1,
+                    "activity": null
                   }
                 }
               }
@@ -2340,7 +2502,8 @@
                     "preview": "Staging looks good. Promote to production?",
                     "preview_sender": "question",
                     "unread_count": 1,
-                    "pending_questions": 1
+                    "pending_questions": 1,
+                    "activity": null
                   }
                 }
               }
@@ -3410,7 +3573,8 @@
           "preview",
           "preview_sender",
           "unread_count",
-          "pending_questions"
+          "pending_questions",
+          "activity"
         ],
         "properties": {
           "id": {
@@ -3488,6 +3652,17 @@
           },
           "pending_questions": {
             "type": "integer"
+          },
+          "activity": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Activity"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The agent's live status line, or null when there is none or it has lapsed."
           }
         },
         "example": {
@@ -3507,7 +3682,14 @@
           "preview": "Staging looks good. Promote to production?",
           "preview_sender": "question",
           "unread_count": 1,
-          "pending_questions": 1
+          "pending_questions": 1,
+          "activity": {
+            "text": "Running the test suite…",
+            "kind": "tool",
+            "at": "2026-09-07T05:40:02.114532Z",
+            "since": "2026-09-07T05:38:57.301176Z",
+            "expires_at": "2026-09-07T05:40:47.114532Z"
+          }
         }
       },
       "Message": {
@@ -4351,6 +4533,102 @@
             "maxItems": 8,
             "description": "File parts (any field name works). At most 10 MiB each, 8 per message including pending ids."
           }
+        }
+      },
+      "Activity": {
+        "type": "object",
+        "description": "The agent's live status line for a thread. Lapses at expires_at unless set again; dropped when the agent posts a message or question.",
+        "required": [
+          "text",
+          "kind",
+          "at",
+          "since",
+          "expires_at"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "One line: what the agent is doing right now."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "thinking",
+              "working",
+              "typing",
+              "waiting",
+              "tool"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the status was last set or refreshed."
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the agent became continuously busy; kept across refreshes while the previous status was still live."
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the status lapses unless set again."
+          }
+        },
+        "example": {
+          "text": "Running the test suite…",
+          "kind": "tool",
+          "at": "2026-09-07T05:40:02.114532Z",
+          "since": "2026-09-07T05:38:57.301176Z",
+          "expires_at": "2026-09-07T05:40:47.114532Z"
+        }
+      },
+      "ActivityRequest": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "One short line; whitespace is collapsed. Empty clears the status."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "thinking",
+              "working",
+              "typing",
+              "waiting",
+              "tool"
+            ],
+            "default": "working"
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 600,
+            "default": 45,
+            "description": "Seconds until the status lapses unless set again."
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "Title for a freshly created ext: thread."
+          },
+          "agent": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Agent name for a freshly created ext: thread."
+          }
+        },
+        "example": {
+          "text": "Running the test suite…",
+          "kind": "tool",
+          "ttl_seconds": 120
         }
       }
     }

@@ -99,14 +99,15 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | `timeout_seconds` | 1 to 604800 (7 days) |
 | `limit` | threads 1 to 200 (default 50); messages and questions 1 to 500 (default 100) |
 | Attachment | 10 MiB per file, 8 per message or upload request; `filename` 200 characters |
+| Activity `text` / `ttl_seconds` | 200 characters on one line / 1 to 600 seconds (default 45) |
 
 ### Thread references
 
 Wherever a path contains `{ref}` you may pass either the thread's UUID or
 `ext:` followed by the thread's `external_id`, for example
-`/threads/ext:claude-code:7f3a9c2e/messages`. `POST …/messages` and
-`POST …/questions` create a missing `ext:` thread on demand; all other routes
-return `404 not_found` for an unknown reference.
+`/threads/ext:claude-code:7f3a9c2e/messages`. `POST …/messages`,
+`POST …/questions` and `POST …/activity` create a missing `ext:` thread on
+demand; all other routes return `404 not_found` for an unknown reference.
 
 ### Pagination
 
@@ -152,7 +153,10 @@ timed-out question wait returns the question with `"status": "pending"`.
   "preview": "Staging looks good. Promote to production?",
   "preview_sender": "question",
   "unread_count": 1,
-  "pending_questions": 1
+  "pending_questions": 1,
+  "activity": {"text": "Running the test suite…", "kind": "tool",
+               "at": "2026-09-07T05:40:02.114532Z", "since": "2026-09-07T05:38:57.301176Z",
+               "expires_at": "2026-09-07T05:40:47.114532Z"}
 }
 ```
 
@@ -160,6 +164,12 @@ timed-out question wait returns the question with `"status": "pending"`.
 `preview_sender` is `agent`, `user`, `system` or `question`. `unread_count`
 counts non-user messages since `last_read_at`. A muted thread never sends
 push notifications.
+
+`activity` is the agent's live status line, or `null` when there is none or
+the last one has lapsed. `kind` is `thinking`, `working`, `typing`, `waiting`
+or `tool`; `at` is when it was last set or refreshed, `since` when the agent
+became continuously busy (kept across refreshes), and `expires_at` when it
+lapses. See [POST /threads/{ref}/activity](#post-threadsrefactivity).
 
 ### Message
 
@@ -434,7 +444,7 @@ curl -sS https://www.finalechat.com/api/v1/threads \
   "created_at": "2026-09-07T05:38:55.019126Z", "updated_at": "2026-09-07T05:38:55.019126Z",
   "last_activity_at": "2026-09-07T05:38:55.019126Z", "last_read_at": "2026-09-07T05:38:55.019126Z",
   "archived_at": null, "muted": false, "preview": "", "preview_sender": "",
-  "unread_count": 0, "pending_questions": 0}}
+  "unread_count": 0, "pending_questions": 0, "activity": null}}
 ```
 
 Status is `201` with `"created": true` for a new thread and `200` with
@@ -489,6 +499,44 @@ and emits `thread.deleted`.
 Marks everything in the thread as read (`last_read_at` becomes now). Returns
 `{"thread": {...}}` and emits `thread.updated`. The app calls this; agents
 rarely need it.
+
+### POST /threads/{ref}/activity
+
+Sets the agent's status line: what it is doing right now, shown in the app
+as a typing indicator with a timer. Creates a missing `ext:` thread on
+demand (with `title` and `agent`, as on messages). `PUT` is accepted too.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `text` | string | One line, at most 200 characters; whitespace is collapsed. Empty clears the status. |
+| `kind` | string | `thinking`, `working` (default), `typing`, `waiting` or `tool` |
+| `ttl_seconds` | integer | 1 to 600, default 45. The status lapses when this runs out unless set again. |
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/activity \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"text": "Running the test suite…", "kind": "tool", "ttl_seconds": 120}'
+```
+
+```json
+{"thread": {"id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7", "...": "...",
+  "activity": {"text": "Running the test suite…", "kind": "tool",
+               "at": "2026-09-07T05:40:02.114532Z", "since": "2026-09-07T05:38:57.301176Z",
+               "expires_at": "2026-09-07T05:42:02.114532Z"}}}
+```
+
+Setting a status while the previous one is still live keeps `since`, so a
+sequence of statuses reads as one stretch of work. Posting a message or a
+question from the agent clears the status (the message is what the status
+announced); a message from the user leaves it alone. Emits `thread.activity`;
+never pushes a notification and does not bump `last_activity_at` or the
+thread's position in the inbox.
+
+### DELETE /threads/{ref}/activity
+
+Clears the status line. Returns `{"thread": {...}}` and emits
+`thread.activity` when there was one to clear. Unknown threads are `404`;
+this route never creates one.
 
 ## Messages
 
@@ -809,6 +857,7 @@ data: {"at":"…","thread":{…},"message":{…},"counts":{…}}
 | `ready` | `{at, counts}` once on connect |
 | `thread.created`, `thread.updated` | `{at, thread, counts}` |
 | `thread.deleted` | `{at, thread_id, counts}` |
+| `thread.activity` | `{at, thread}`; `thread.activity` is the new status or `null`. No counts: statuses never change badges. |
 | `message.created` | `{at, thread, message, counts}` |
 | `question.created`, `question.answered`, `question.cancelled`, `question.expired` | `{at, thread, question, counts}` |
 | `settings.updated` | `{at, settings}` |

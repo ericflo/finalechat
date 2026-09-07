@@ -256,6 +256,25 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .send-btn svg { width: 20px; height: 20px; }
 .jump-pill { position: sticky; bottom: 76px; align-self: center; z-index: 5; }
 
+/* Agent activity ---------------------------------------------------------- */
+.msg.activity-msg { margin-top: 2px; }
+.bubble.activity { display: inline-flex; align-items: center; gap: 9px; padding: 9px 14px; color: var(--text-2); font-size: 14.5px; line-height: 1.4; }
+.act-dots { display: inline-flex; gap: 3px; flex: none; }
+.act-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: bounce 1.2s infinite; }
+.act-dots i:nth-child(2) { animation-delay: 0.15s; }
+.act-dots i:nth-child(3) { animation-delay: 0.3s; }
+.bubble.activity.waiting .act-dots i { animation: none; opacity: 0.55; background: var(--amber); }
+.bubble.activity.thinking .act-dots i { animation-duration: 1.8s; }
+.act-text { overflow-wrap: anywhere; }
+.act-time { font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: 2px; }
+@keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.4; } 40% { transform: translateY(-4px); opacity: 1; } }
+.live-line { display: inline-flex; align-items: flex-start; gap: 7px; color: var(--accent); font-weight: 500; max-width: 100%; }
+.live-line .live-dot { margin-top: 6px; }
+.live-line.waiting { color: var(--amber); }
+.live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 25%, transparent); animation: pulse 1.6s infinite; flex: none; }
+.live-line.waiting .live-dot { background: var(--amber); box-shadow: 0 0 0 3px color-mix(in srgb, var(--amber) 25%, transparent); animation: none; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
 /* Question card ----------------------------------------------------------- */
 .question {
   background: var(--surface); border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--border)); border-radius: var(--radius-lg);

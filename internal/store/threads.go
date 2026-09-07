@@ -27,7 +27,39 @@ type Thread struct {
 	PreviewSender    string     `json:"preview_sender"`
 	UnreadCount      int        `json:"unread_count"`
 	PendingQuestions int        `json:"pending_questions"`
+	// Activity is what the agent says it is doing right now, or nil when it
+	// has said nothing or the last status has expired.
+	Activity *Activity `json:"activity"`
 }
+
+// Activity is an agent's ephemeral status line for a thread.
+type Activity struct {
+	Text string `json:"text"`
+	// Kind is one of thinking, working, typing, waiting or tool.
+	Kind string `json:"kind"`
+	// At is when the status was last set or refreshed.
+	At time.Time `json:"at"`
+	// Since is when the agent became continuously busy: it survives refreshes
+	// and resets only after the status lapsed or was cleared.
+	Since time.Time `json:"since"`
+	// ExpiresAt is when the status lapses unless refreshed.
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// Activity kinds.
+const (
+	ActivityThinking = "thinking"
+	ActivityWorking  = "working"
+	ActivityTyping   = "typing"
+	ActivityWaiting  = "waiting"
+	ActivityTool     = "tool"
+)
+
+// ActivityKinds lists the accepted kinds.
+var ActivityKinds = []string{ActivityThinking, ActivityWorking, ActivityTyping, ActivityWaiting, ActivityTool}
+
+// MaxActivityTextRunes bounds a status line.
+const MaxActivityTextRunes = 200
 
 // Archived reports whether the thread is archived.
 func (t *Thread) Archived() bool { return t.ArchivedAt != nil }
@@ -35,17 +67,35 @@ func (t *Thread) Archived() bool { return t.ArchivedAt != nil }
 const threadColumns = `t.id, t.user_id, t.external_id, t.title, t.agent, t.meta, t.created_at, t.updated_at,
 	t.last_activity_at, t.last_read_at, t.archived_at, t.muted, t.preview, t.preview_sender,
 	(SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND m.sender <> 'user' AND m.created_at > t.last_read_at)::int,
-	(SELECT count(*) FROM questions q WHERE q.thread_id = t.id AND q.status = 'pending')::int`
+	(SELECT count(*) FROM questions q WHERE q.thread_id = t.id AND q.status = 'pending')::int,
+	t.activity_text, t.activity_kind, t.activity_at, t.activity_since, t.activity_expires_at,
+	(t.activity_expires_at IS NOT NULL AND t.activity_expires_at > now())`
+
+// activityCleared is the SET fragment that drops a thread's status; used when
+// the agent posts, since the message is the outcome the status announced.
+const activityCleared = "activity_text = '', activity_kind = '', activity_at = NULL, activity_since = NULL, activity_expires_at = NULL"
 
 func scanThread(row pgx.Row) (*Thread, error) {
 	var t Thread
 	var meta []byte
+	var a Activity
+	var at, since, expires *time.Time
+	var live bool
 	if err := row.Scan(&t.ID, &t.UserID, &t.ExternalID, &t.Title, &t.Agent, &meta, &t.CreatedAt, &t.UpdatedAt,
 		&t.LastActivityAt, &t.LastReadAt, &t.ArchivedAt, &t.Muted, &t.Preview, &t.PreviewSender,
-		&t.UnreadCount, &t.PendingQuestions); err != nil {
+		&t.UnreadCount, &t.PendingQuestions,
+		&a.Text, &a.Kind, &at, &since, &expires, &live); err != nil {
 		return nil, translate(err)
 	}
 	scanJSON(meta, &t.Meta)
+	if live && at != nil && expires != nil {
+		a.At, a.ExpiresAt = *at, *expires
+		a.Since = a.At
+		if since != nil {
+			a.Since = *since
+		}
+		t.Activity = &a
+	}
 	return &t, nil
 }
 
@@ -207,6 +257,23 @@ func (s *Store) UpdateThread(ctx context.Context, userID, id uuid.UUID, p Thread
 	}
 	sql := "UPDATE threads t SET " + strings.Join(sets, ", ") + " WHERE t.id = $1 AND t.user_id = $2 RETURNING " + threadColumns
 	return scanThread(s.pool.QueryRow(ctx, sql, args...))
+}
+
+// SetThreadActivity records what the agent is doing. A status set while the
+// previous one is still live keeps its start time, so the app can say how
+// long the agent has been busy.
+func (s *Store) SetThreadActivity(ctx context.Context, userID, id uuid.UUID, text, kind string, ttl time.Duration) (*Thread, error) {
+	return scanThread(s.pool.QueryRow(ctx, `UPDATE threads t SET
+			activity_text = $3, activity_kind = $4, activity_at = now(),
+			activity_since = CASE WHEN t.activity_expires_at IS NOT NULL AND t.activity_expires_at > now() AND t.activity_since IS NOT NULL
+				THEN t.activity_since ELSE now() END,
+			activity_expires_at = now() + $5
+		WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns, id, userID, text, kind, ttl))
+}
+
+// ClearThreadActivity drops the status line.
+func (s *Store) ClearThreadActivity(ctx context.Context, userID, id uuid.UUID) (*Thread, error) {
+	return scanThread(s.pool.QueryRow(ctx, "UPDATE threads t SET "+activityCleared+" WHERE t.id = $1 AND t.user_id = $2 RETURNING "+threadColumns, id, userID))
 }
 
 // MarkThreadRead records that the user has seen everything up to now.

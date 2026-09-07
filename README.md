@@ -10,6 +10,9 @@ Questions and important messages arrive as push notifications.
 - Markdown messages, `important` flag, per-thread mute, archive.
 - Questions with options, descriptions, multi-select and free text; the agent
   long-polls for the answer.
+- A live status line per thread ("running the test suite…", shown as a
+  typing indicator with a timer) that lapses on its own, so the app never
+  shows stale activity.
 - Screenshots and files on messages in both directions (up to 8 per
   message, 10 MiB each), stored in a private Backblaze B2 bucket with
   metadata in PostgreSQL; agents can fetch what you send and MCP tools hand

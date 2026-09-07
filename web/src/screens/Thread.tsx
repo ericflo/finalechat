@@ -3,13 +3,14 @@ import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../
 import { Avatar, Sheet } from "../components/Common";
 import { IconArchive, IconAttach, IconBell, IconBellOff, IconCopy, IconDown, IconEdit, IconMore, IconSend, IconTrash } from "../components/Icons";
 import { api } from "../lib/api";
+import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
 import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
 import { renderMarkdown, renderText } from "../lib/markdown";
 import { navigate } from "../lib/router";
 import { deleteThread, loadOlderMessages, loadThread, markRead, sendMessage, setCurrentThread, toast, updateThread, useStore } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
-import type { Attachment, Message, Question } from "../lib/types";
+import type { Activity, Attachment, Message, Question } from "../lib/types";
 
 type Item = { kind: "message"; at: string; m: Message } | { kind: "question"; at: string; q: Question };
 
@@ -28,6 +29,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   const [atBottom, setAtBottom] = useState(true);
   const [unseen, setUnseen] = useState(0);
   const lastCount = useRef(0);
+  const activity = useLiveActivity(thread?.activity);
 
   useEffect(() => {
     setCurrentThread(id);
@@ -65,6 +67,12 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items.length, loaded]);
+
+  // Keep the agent's status bubble in view while the user is at the bottom.
+  useLayoutEffect(() => {
+    if (activity && atBottom) bottomRef.current?.scrollIntoView({ block: "end" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activity?.text, !!activity]);
 
   useEffect(() => {
     if (loaded && !highlightQuestion) {
@@ -151,6 +159,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
             </div>
           );
         })}
+        {activity && <ActivityBubble a={activity} />}
         <div ref={bottomRef} />
       </div>
       {unseen > 0 && !atBottom && (
@@ -292,6 +301,28 @@ function MessageBubble({ m, grouped, onOpen }: { m: Message; grouped: boolean; o
         {kind === "notification" && <span>needs attention</span>}
         {via && <span>via {via}</span>}
         <span>{shortTime(m.created_at)}</span>
+      </div>
+    </div>
+  );
+}
+
+/** The agent's live status: "running tests…" with a timer once it has taken a while. */
+function ActivityBubble({ a }: { a: Activity }) {
+  const elapsed = useElapsed(a.since);
+  return (
+    <div className="msg agent activity-msg" role="status" aria-live="polite">
+      <div className={`bubble activity ${a.kind}`}>
+        <span className="act-dots" aria-hidden>
+          <i />
+          <i />
+          <i />
+        </span>
+        <span className="act-text">{a.text}</span>
+        {elapsed >= 15 && (
+          <span className="act-time" title="How long the agent has been busy">
+            {formatElapsed(elapsed)}
+          </span>
+        )}
       </div>
     </div>
   );

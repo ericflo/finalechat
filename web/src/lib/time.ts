@@ -1,3 +1,17 @@
+let clockOffset = 0;
+
+/** Records the server's idea of "now" so expiries are judged on its clock, not the phone's. */
+export function syncServerTime(iso: string | undefined) {
+  if (!iso) return;
+  const t = new Date(iso).getTime();
+  if (Number.isFinite(t)) clockOffset = t - Date.now();
+}
+
+/** Milliseconds since the epoch on the server's clock. */
+export function serverNow(): number {
+  return Date.now() + clockOffset;
+}
+
 const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 
 export function relativeTime(iso: string, now = Date.now()): string {

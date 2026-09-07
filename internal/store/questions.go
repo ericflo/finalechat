@@ -104,7 +104,7 @@ func (s *Store) CreateQuestion(ctx context.Context, userID, threadID uuid.UUID, 
 		if err != nil {
 			return err
 		}
-		thread, err = scanThread(tx.QueryRow(ctx, `UPDATE threads t SET preview = $3, preview_sender = 'question', last_activity_at = $4, updated_at = now(), archived_at = NULL
+		thread, err = scanThread(tx.QueryRow(ctx, `UPDATE threads t SET preview = $3, preview_sender = 'question', last_activity_at = $4, updated_at = now(), archived_at = NULL, `+activityCleared+`
 			WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns,
 			threadID, userID, Preview(in.Prompt), q.CreatedAt))
 		return err

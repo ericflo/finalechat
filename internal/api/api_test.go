@@ -765,3 +765,153 @@ func makePNG(t *testing.T, w, h int) []byte {
 	}
 	return buf.Bytes()
 }
+
+func TestAgentActivity(t *testing.T) {
+	b, a := setup(t)
+
+	// Watch the stream so the activity event can be asserted on.
+	req, _ := http.NewRequest("GET", testSrv.URL+"/api/v1/events", nil)
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := http.DefaultClient.Do(req.WithContext(ctx))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	events := make(chan string, 32)
+	go func() {
+		sc := bufio.NewScanner(res.Body)
+		sc.Buffer(make([]byte, 1<<20), 1<<20)
+		var name string
+		for sc.Scan() {
+			line := sc.Text()
+			if strings.HasPrefix(line, "event: ") {
+				name = strings.TrimPrefix(line, "event: ")
+			} else if strings.HasPrefix(line, "data: ") && name != "" {
+				events <- name + " " + strings.TrimPrefix(line, "data: ")
+				name = ""
+			}
+		}
+		close(events)
+	}()
+	waitEvent := func(want string) map[string]any {
+		t.Helper()
+		timeout := time.After(3 * time.Second)
+		for {
+			select {
+			case ev, ok := <-events:
+				if !ok {
+					t.Fatal("event stream closed early")
+				}
+				name, data, _ := strings.Cut(ev, " ")
+				if name == want {
+					var payload map[string]any
+					_ = json.Unmarshal([]byte(data), &payload)
+					return payload
+				}
+			case <-timeout:
+				t.Fatalf("did not see %s on the event stream", want)
+			}
+		}
+	}
+	waitEvent("ready")
+
+	// Setting a status on a fresh ext: thread creates the thread, names it, and
+	// carries the status back.
+	out := a.must(http.StatusOK, "POST", "/api/v1/threads/ext:act-1/activity", map[string]any{
+		"text": "  checking out\nthe files you asked for…  ", "kind": "tool", "ttl_seconds": 30, "title": "activity", "agent": "eagent",
+	})
+	thread := sub(out, "thread")
+	act := sub(thread, "activity")
+	if str(thread, "title") != "activity" || str(thread, "agent") != "eagent" {
+		t.Fatalf("thread was not named from the activity request: %v", thread)
+	}
+	if str(act, "text") != "checking out the files you asked for…" || str(act, "kind") != "tool" {
+		t.Fatalf("unexpected activity: %v", act)
+	}
+	if act["expires_at"] == nil || act["since"] == nil || act["at"] == nil {
+		t.Fatalf("activity is missing timestamps: %v", act)
+	}
+	ev := waitEvent("thread.activity")
+	if str(sub(sub(ev, "thread"), "activity"), "text") != "checking out the files you asked for…" {
+		t.Fatalf("event did not carry the status: %v", ev)
+	}
+	if _, has := ev["counts"]; has {
+		t.Fatalf("activity events should not carry counts: %v", ev)
+	}
+	threadID := str(thread, "id")
+	since := str(act, "since")
+
+	// A refresh keeps `since` so the app can say how long the agent has been at it.
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "running tests"})
+	act = sub(sub(out, "thread"), "activity")
+	if str(act, "since") != since || str(act, "kind") != "working" || str(act, "text") != "running tests" {
+		t.Fatalf("refresh changed since or defaults: %v (want since %s)", act, since)
+	}
+	// The app sees it on the thread and in the inbox.
+	if got := sub(sub(b.must(http.StatusOK, "GET", "/api/v1/threads/"+threadID, nil), "thread"), "activity"); str(got, "text") != "running tests" {
+		t.Fatalf("thread does not show the status: %v", got)
+	}
+
+	// Validation.
+	if status, out := a.do("POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "x", "kind": "dancing"}); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected a validation error for a bad kind, got %d %v", status, out)
+	}
+	if status, _ := a.do("POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "x", "ttl_seconds": 0}); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected a validation error for ttl 0, got %d", status)
+	}
+	if status, _ := a.do("POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": strings.Repeat("x", 201)}); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected a validation error for a long status, got %d", status)
+	}
+
+	// The user's reply leaves the status alone; the agent's message clears it.
+	out = b.must(http.StatusCreated, "POST", "/api/v1/threads/"+threadID+"/messages", map[string]any{"body": "take your time"})
+	if sub(sub(out, "thread"), "activity") == nil {
+		t.Fatalf("a user message should not clear the agent's status: %v", out)
+	}
+	out = a.must(http.StatusCreated, "POST", "/api/v1/threads/"+threadID+"/messages", map[string]any{"body": "tests pass"})
+	if sub(out, "thread")["activity"] != nil {
+		t.Fatalf("an agent message should clear the status: %v", out)
+	}
+	if got := sub(b.must(http.StatusOK, "GET", "/api/v1/threads/"+threadID, nil), "thread"); got["activity"] != nil {
+		t.Fatalf("status still present after the agent posted: %v", got)
+	}
+
+	// A question clears it too.
+	a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "deciding", "kind": "thinking"})
+	out = a.must(http.StatusCreated, "POST", "/api/v1/threads/"+threadID+"/questions", map[string]any{"prompt": "Ship?", "options": []map[string]any{{"label": "Yes"}}})
+	if sub(out, "thread")["activity"] != nil {
+		t.Fatalf("a question should clear the status: %v", out)
+	}
+
+	// Explicit clear, twice (the second is a no-op).
+	a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "typing", "kind": "typing"})
+	if got := sub(a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+threadID+"/activity", nil), "thread"); got["activity"] != nil {
+		t.Fatalf("DELETE did not clear the status: %v", got)
+	}
+	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+threadID+"/activity", nil)
+	// Empty text clears as well.
+	a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "typing"})
+	if got := sub(a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": ""}), "thread"); got["activity"] != nil {
+		t.Fatalf("empty text did not clear the status: %v", got)
+	}
+
+	// Expiry: a one-second status is gone after a second, and a later status
+	// starts a fresh `since`.
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "blink", "ttl_seconds": 1})
+	first := str(sub(sub(out, "thread"), "activity"), "since")
+	time.Sleep(1200 * time.Millisecond)
+	if got := sub(b.must(http.StatusOK, "GET", "/api/v1/threads/"+threadID, nil), "thread"); got["activity"] != nil {
+		t.Fatalf("expired status still shown: %v", got)
+	}
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "again"})
+	if got := str(sub(sub(out, "thread"), "activity"), "since"); got == first {
+		t.Fatalf("since should restart after a lapse: %s", got)
+	}
+
+	// Unknown threads are not created by DELETE.
+	if status, _ := a.do("DELETE", "/api/v1/threads/ext:never-made/activity", nil); status != http.StatusNotFound {
+		t.Fatalf("expected 404 for an unknown thread, got %d", status)
+	}
+}
