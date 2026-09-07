@@ -8,7 +8,12 @@ steps:
     commands:
       - export HOME=/tmp/finalechat-home GOCACHE=/tmp/finalechat-go-build GOMODCACHE=/tmp/finalechat-go-mod GOFLAGS=-buildvcs=false
       - mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE"
-      - test -z "$(gofmt -l cmd internal assets.go)" || { gofmt -l cmd internal assets.go; echo 'gofmt: files need formatting' >&2; exit 1; }
+      - |
+        if [ -n "$(gofmt -l cmd internal assets.go)" ]; then
+          gofmt -l cmd internal assets.go
+          echo "gofmt reported unformatted files" >&2
+          exit 1
+        fi
       - go vet ./...
       - go build ./...
       # Database-free unit tests here; the integration suite against PostgreSQL
