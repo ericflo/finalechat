@@ -75,3 +75,15 @@ export const IconBook = (p: P) => (
 export const IconRefresh = (p: P) => (
   <svg {...base} {...p}><path d="M23 4v6h-6" /><path d="M1 20v-6h6" /><path d="M3.5 9a9 9 0 0 1 14.9-3.4L23 10" /><path d="M1 14l4.6 4.4A9 9 0 0 0 20.5 15" /></svg>
 );
+export const IconAttach = (p: P) => (
+  <svg {...base} {...p}><path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5" /></svg>
+);
+export const IconClose = (p: P) => (
+  <svg {...base} {...p}><path d="M18 6L6 18M6 6l12 12" /></svg>
+);
+export const IconFile = (p: P) => (
+  <svg {...base} {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+);
+export const IconDownload = (p: P) => (
+  <svg {...base} {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5" /><path d="M12 15V3" /></svg>
+);

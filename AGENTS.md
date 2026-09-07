@@ -119,6 +119,52 @@ cap keeps proxies happy; loop if you need longer.
   records the choice, so polling messages alone is enough to see everything.
 - Do not post secrets, tokens or credentials.
 
+## Screenshots and files
+
+Messages can carry up to 8 attachments of up to 10 MiB each: screenshots,
+logs, diffs, PDFs, anything. Images (`png`, `jpeg`, `gif`, `webp`) get a
+thumbnail in the app and are shown inline. One multipart request uploads and
+posts at the same time; `body` is optional when files are present:
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/threads/ext:my-session-42/messages \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" \
+  -F body="Staging after the deploy. Note the empty sidebar." \
+  -F importance=important \
+  -F file=@staging.png \
+  -F file=@deploy.log
+```
+
+The user can also send you files. They arrive as messages whose
+`attachments` list has the metadata and a relative `url`; fetch it with the
+same bearer token (images also have a `thumb_url`):
+
+```bash
+curl -sS "https://www.finalechat.com/api/v1/threads/ext:my-session-42/messages?after=$LAST_ID&sender=user&wait=600" \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN"
+# ... "attachments": [{"id": "01a07ab9-…", "kind": "image", "content_type": "image/png",
+#                      "filename": "IMG_0421.png", "size": 168591, "width": 900, "height": 300,
+#                      "url": "/api/v1/attachments/01a07ab9-…", "thumb_url": "/api/v1/attachments/01a07ab9-…/thumb"}]
+
+curl -sS -o /tmp/IMG_0421.png https://www.finalechat.com/api/v1/attachments/01a07ab9-… \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN"
+```
+
+Then look at the file with whatever your harness uses to read images. To
+upload first and attach later (for example, several files from different
+steps), `POST /threads/{ref}/attachments` with `-F file=@…` parts or a raw
+body whose `Content-Type` is the file type (name it with `X-Filename`), then
+pass the returned ids in the message's `attachments` field. Uploads not
+attached within 24 hours are discarded.
+
+With the CLI: `finalechat say "Staging after the deploy" -f staging.png`
+(repeat `-f` for more files), `finalechat fetch <id or url> -o /tmp/x.png`
+to download, and `read`/`wait` print a `📎 filename (type, size) url` line
+under each message. With MCP, `finalechat_send` takes `attachments` (file
+paths), and `finalechat_wait_for_reply`, `finalechat_read` and
+`finalechat_view_attachment` return images as image content, so the model
+sees a screenshot directly; `finalechat_fetch_attachment` saves a file.
+
 ## Command-line helper
 
 The `finalechat` CLI wraps the API with sensible defaults (Python 3.9+,
@@ -184,14 +230,16 @@ Errors are JSON with a stable `code` and a human `message`:
 | 413 | `too_large` |
 | 422 | `validation_failed` |
 | 429 | `rate_limited` |
-| 503 | `push_disabled` |
+| 502 | `storage_unavailable` |
+| 503 | `push_disabled`, `attachments_disabled` |
 | 500 | `internal_error` |
 
 Limits: JSON bodies 1 MiB; message `body` 256 KiB; question `prompt` 8000
 bytes; up to 20 options with labels of 200 and descriptions of 1000
 characters; `meta` 16 KiB; `title` 300, `agent` 120, `external_id` 300
-characters; `wait` is clamped to 600 seconds; `timeout_seconds` 1 to 604800.
-All timestamps are UTC RFC 3339; all ids are UUIDs.
+characters; `wait` is clamped to 600 seconds; `timeout_seconds` 1 to 604800;
+attachments 10 MiB each, 8 per message. All timestamps are UTC RFC 3339; all
+ids are UUIDs.
 
 ## Cheat sheet
 
@@ -207,9 +255,11 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `PATCH /threads/{ref}` | `title`, `agent`, `archived`, `muted`, `meta` |
 | `DELETE /threads/{ref}` | Delete thread and contents |
 | `POST /threads/{ref}/read` | Mark read |
-| `POST /threads/{ref}/messages` | Post a message (creates `ext:` thread) |
+| `POST /threads/{ref}/messages` | Post a message (creates `ext:` thread); JSON with `attachments` ids, or multipart with `file` parts |
 | `GET /threads/{ref}/messages?after=&before=&limit=&sender=&wait=` | Read or wait for messages |
 | `GET /messages/{id}` | One message |
+| `POST /threads/{ref}/attachments` | Upload files (multipart `file` parts or a raw body) to attach later |
+| `GET /attachments/{id}`, `GET /attachments/{id}/thumb` | Download a file, or an image's JPEG thumbnail |
 | `POST /threads/{ref}/questions?wait=` | Ask; optionally block for the answer |
 | `GET /threads/{ref}/questions` | Questions in a thread, oldest first |
 | `GET /questions?status=&thread_id=&limit=` | Questions across threads, newest first |

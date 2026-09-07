@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ericflo/finalechat/internal/api"
+	"github.com/ericflo/finalechat/internal/blob"
 	"github.com/ericflo/finalechat/internal/bus"
 	"github.com/ericflo/finalechat/internal/config"
 	"github.com/ericflo/finalechat/internal/db"
@@ -79,7 +80,26 @@ func run() error {
 	b := bus.New(pool, log)
 	go b.Run(ctx)
 	sender := push.New(st, log, cfg.VAPIDPublicKey, cfg.VAPIDPrivateKey, cfg.VAPIDSubject)
-	srv := api.New(cfg, st, b, sender, log)
+	var blobs blob.Store
+	switch cfg.BlobStore {
+	case "b2":
+		b2 := blob.NewB2(cfg.B2KeyID, cfg.B2Key, cfg.B2Bucket)
+		pingCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		err := b2.Ping(pingCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("attachment storage: %w", err)
+		}
+		blobs = b2
+	case "memory":
+		blobs = blob.NewMemory()
+	}
+	if blobs != nil {
+		log.Info("attachments enabled", "store", blobs.Name())
+	} else {
+		log.Info("attachments disabled")
+	}
+	srv := api.New(cfg, st, b, sender, blobs, log)
 	go srv.RunMaintenance(ctx)
 
 	httpServer := &http.Server{

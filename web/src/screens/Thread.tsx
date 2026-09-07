@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../components/Attachments";
 import { Avatar, Sheet } from "../components/Common";
-import { IconArchive, IconBell, IconBellOff, IconCopy, IconDown, IconEdit, IconMore, IconSend, IconTrash } from "../components/Icons";
+import { IconArchive, IconAttach, IconBell, IconBellOff, IconCopy, IconDown, IconEdit, IconMore, IconSend, IconTrash } from "../components/Icons";
+import { api } from "../lib/api";
 import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
 import { renderMarkdown, renderText } from "../lib/markdown";
 import { navigate } from "../lib/router";
 import { deleteThread, loadOlderMessages, loadThread, markRead, sendMessage, setCurrentThread, toast, updateThread, useStore } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
-import type { Message, Question } from "../lib/types";
+import type { Attachment, Message, Question } from "../lib/types";
 
 type Item = { kind: "message"; at: string; m: Message } | { kind: "question"; at: string; q: Question };
 
@@ -20,6 +22,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   const [missing, setMissing] = useState(false);
   const [menu, setMenu] = useState(false);
   const [renaming, setRenaming] = useState(false);
+  const [viewing, setViewing] = useState<Attachment | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -144,7 +147,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
           return (
             <div key={it.kind === "message" ? it.m.id : it.q.id} style={{ display: "contents" }}>
               {showDay && <div className="day-divider">{dayLabel(it.at)}</div>}
-              {it.kind === "message" ? <MessageBubble m={it.m} grouped={!!grouped} /> : <QuestionCard q={it.q} highlight={highlightQuestion === it.q.id} />}
+              {it.kind === "message" ? <MessageBubble m={it.m} grouped={!!grouped} onOpen={setViewing} /> : <QuestionCard q={it.q} highlight={highlightQuestion === it.q.id} />}
             </div>
           );
         })}
@@ -163,6 +166,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
         </button>
       )}
       <Composer threadId={id} />
+      {viewing && <ImageViewer item={viewing} onClose={() => setViewing(null)} />}
 
       {menu && thread && (
         <Sheet onClose={() => setMenu(false)}>
@@ -269,13 +273,19 @@ function RenameSheet({ initial, onClose, onSave }: { initial: string; onClose: (
   );
 }
 
-function MessageBubble({ m, grouped }: { m: Message; grouped: boolean }) {
+function MessageBubble({ m, grouped, onOpen }: { m: Message; grouped: boolean; onOpen: (a: Attachment) => void }) {
   const html = m.format === "markdown" ? renderMarkdown(m.body) : renderText(m.body);
   const kind = typeof m.meta.kind === "string" ? m.meta.kind : "";
   const via = typeof m.meta.via === "string" ? m.meta.via : "";
+  const attachments = m.attachments ?? [];
+  const hasMedia = attachments.some((a) => a.kind === "image");
+  const hasBody = m.body.trim().length > 0;
   return (
     <div className={`msg ${m.sender} ${m.importance === "important" ? "important" : ""} ${grouped ? "grouped" : ""}`}>
-      <div className={`bubble ${m.sender === "system" ? "" : "md"}`} dangerouslySetInnerHTML={{ __html: html }} />
+      <div className={`bubble ${m.sender === "system" ? "" : "md"} ${hasMedia ? "has-media" : ""}`}>
+        {hasBody && <div className={m.sender === "system" ? "" : "md"} dangerouslySetInnerHTML={{ __html: html }} />}
+        {attachments.length > 0 && <AttachmentList items={attachments} onOpen={onOpen} />}
+      </div>
       <div className="msg-meta" title={fullDateTime(m.created_at)}>
         {m.importance === "important" && <span className="important-tag">Important</span>}
         {kind === "answer" && <span>answer</span>}
@@ -288,9 +298,13 @@ function MessageBubble({ m, grouped }: { m: Message; grouped: boolean }) {
 }
 
 function Composer({ threadId }: { threadId: string }) {
+  const attachmentsEnabled = useStore((s) => s.attachmentsEnabled);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [uploads, setUploads] = useState<PendingUpload[]>([]);
+  const [dragging, setDragging] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const resize = () => {
     const el = ref.current;
@@ -299,13 +313,59 @@ function Composer({ threadId }: { threadId: string }) {
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   };
 
+  const addFiles = (files: FileList | File[]) => {
+    const list = Array.from(files).filter((f) => f.size > 0);
+    if (list.length === 0) return;
+    if (!attachmentsEnabled) {
+      toast("Attachments are not enabled on this server.", "error");
+      return;
+    }
+    const room = 8 - uploads.length;
+    if (list.length > room) toast(`You can attach up to 8 files per message.`, "error");
+    for (const file of list.slice(0, Math.max(0, room))) {
+      if (file.size > 10 * 1024 * 1024) {
+        toast(`${file.name} is larger than 10 MB.`, "error");
+        continue;
+      }
+      const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const previewURL = file.type.startsWith("image/") ? URL.createObjectURL(file) : null;
+      setUploads((cur) => [...cur, { key, file, previewURL, progress: 0, attachment: null, error: null }]);
+      api
+        .uploadAttachment(threadId, file, (fraction) => setUploads((cur) => cur.map((u) => (u.key === key ? { ...u, progress: fraction } : u))))
+        .then((attachment) => setUploads((cur) => cur.map((u) => (u.key === key ? { ...u, attachment, progress: 1 } : u))))
+        .catch((e) => {
+          const message = e instanceof Error ? e.message : "Upload failed";
+          setUploads((cur) => cur.map((u) => (u.key === key ? { ...u, error: message } : u)));
+          toast(message, "error");
+        });
+    }
+  };
+
+  const removeUpload = (key: string) => {
+    setUploads((cur) => {
+      const gone = cur.find((u) => u.key === key);
+      if (gone?.previewURL) URL.revokeObjectURL(gone.previewURL);
+      return cur.filter((u) => u.key !== key);
+    });
+  };
+
+  const uploading = uploads.some((u) => !u.attachment && !u.error);
+  const ready = uploads.filter((u) => u.attachment);
+  const canSend = !busy && !uploading && (text.trim().length > 0 || ready.length > 0);
+
   const send = async () => {
     const body = text.trim();
-    if (!body || busy) return;
+    if (!canSend) return;
     setBusy(true);
     try {
-      await sendMessage(threadId, body);
+      await sendMessage(
+        threadId,
+        body,
+        ready.map((u) => (u.attachment as Attachment).id),
+      );
       setText("");
+      for (const u of uploads) if (u.previewURL) URL.revokeObjectURL(u.previewURL);
+      setUploads([]);
       requestAnimationFrame(resize);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Could not send", "error");
@@ -316,7 +376,22 @@ function Composer({ threadId }: { threadId: string }) {
   };
 
   return (
-    <div className="composer-wrap">
+    <div
+      className={`composer-wrap ${dragging ? "dragging" : ""}`}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes("Files")) {
+          e.preventDefault();
+          setDragging(true);
+        }
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        addFiles(e.dataTransfer.files);
+      }}
+    >
+      <UploadTray items={uploads} onRemove={removeUpload} />
       <form
         className="composer"
         onSubmit={(e) => {
@@ -324,6 +399,24 @@ function Composer({ threadId }: { threadId: string }) {
           void send();
         }}
       >
+        {attachmentsEnabled && (
+          <>
+            <input
+              ref={fileRef}
+              type="file"
+              multiple
+              hidden
+              accept="image/*,.pdf,.txt,.log,.md,.json,.csv,.zip"
+              onChange={(e) => {
+                if (e.target.files) addFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button type="button" className="attach-btn" aria-label="Attach a file" onClick={() => fileRef.current?.click()}>
+              <IconAttach />
+            </button>
+          </>
+        )}
         <textarea
           ref={ref}
           rows={1}
@@ -334,6 +427,13 @@ function Composer({ threadId }: { threadId: string }) {
             setText(e.target.value);
             resize();
           }}
+          onPaste={(e) => {
+            const files = Array.from(e.clipboardData.files ?? []);
+            if (files.length > 0) {
+              e.preventDefault();
+              addFiles(files);
+            }
+          }}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey || !isTouch())) {
               e.preventDefault();
@@ -341,8 +441,8 @@ function Composer({ threadId }: { threadId: string }) {
             }
           }}
         />
-        <button type="submit" className="send-btn" aria-label="Send" disabled={!text.trim() || busy}>
-          <IconSend />
+        <button type="submit" className="send-btn" aria-label="Send" disabled={!canSend}>
+          {uploading ? <span className="spinner" style={{ borderTopColor: "#fff", borderColor: "rgba(255,255,255,0.35)" }} /> : <IconSend />}
         </button>
       </form>
     </div>

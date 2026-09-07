@@ -98,7 +98,7 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 			// The app is a self-contained bundle: no third-party scripts, styles
 			// or connections. Inline style attributes come from React; images
 			// may come from markdown posted by agents.
-			h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
+			h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
 		}
 		if s.cfg.SecureCookies {
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")

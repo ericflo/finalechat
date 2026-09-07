@@ -36,6 +36,15 @@ type Config struct {
 	// InviteCode gates registration once the first account exists. When empty,
 	// registration closes after the first account.
 	InviteCode string
+	// B2KeyID, B2Key and B2Bucket configure attachment storage in Backblaze
+	// B2. Attachments are disabled unless all three are set, or BlobStore is
+	// "memory" for local development.
+	B2KeyID  string
+	B2Key    string
+	B2Bucket string
+	// BlobStore selects the attachment backend: "b2" (default when B2 keys
+	// are set), "memory", or "disabled".
+	BlobStore string
 	// SecureCookies controls the Secure attribute on session cookies.
 	SecureCookies bool
 	// TrustProxy controls whether X-Forwarded-* headers are honoured.
@@ -61,6 +70,10 @@ func Load(version string) (Config, error) {
 		VAPIDPrivateKey: os.Getenv("FINALECHAT_VAPID_PRIVATE_KEY"),
 		VAPIDSubject:    getenv("FINALECHAT_VAPID_SUBJECT", "mailto:hello@finalechat.com"),
 		InviteCode:      os.Getenv("FINALECHAT_INVITE_CODE"),
+		B2KeyID:         os.Getenv("FINALECHAT_B2_KEY_ID"),
+		B2Key:           os.Getenv("FINALECHAT_B2_KEY"),
+		B2Bucket:        os.Getenv("FINALECHAT_B2_BUCKET"),
+		BlobStore:       strings.ToLower(os.Getenv("FINALECHAT_BLOB_STORE")),
 		SecureCookies:   getenvBool("FINALECHAT_SECURE_COOKIES", true),
 		TrustProxy:      getenvBool("FINALECHAT_TRUST_PROXY", true),
 		SessionTTL:      getenvDuration("FINALECHAT_SESSION_TTL", 90*24*time.Hour),
@@ -83,6 +96,20 @@ func Load(version string) (Config, error) {
 	}
 	if (cfg.VAPIDPublicKey == "") != (cfg.VAPIDPrivateKey == "") {
 		return cfg, errors.New("FINALECHAT_VAPID_PUBLIC_KEY and FINALECHAT_VAPID_PRIVATE_KEY must be set together")
+	}
+	switch cfg.BlobStore {
+	case "":
+		if cfg.B2KeyID != "" || cfg.B2Key != "" || cfg.B2Bucket != "" {
+			cfg.BlobStore = "b2"
+		} else {
+			cfg.BlobStore = "disabled"
+		}
+	case "b2", "memory", "disabled":
+	default:
+		return cfg, errors.New("FINALECHAT_BLOB_STORE must be b2, memory or disabled")
+	}
+	if cfg.BlobStore == "b2" && (cfg.B2KeyID == "" || cfg.B2Key == "" || cfg.B2Bucket == "") {
+		return cfg, errors.New("FINALECHAT_B2_KEY_ID, FINALECHAT_B2_KEY and FINALECHAT_B2_BUCKET must all be set for B2 attachments")
 	}
 	if len(cfg.RedirectHosts) > 0 && cfg.CanonicalHost == "" {
 		return cfg, errors.New("FINALECHAT_CANONICAL_HOST is required when FINALECHAT_REDIRECT_HOSTS is set")

@@ -1,5 +1,6 @@
 import type {
   APIToken,
+  Attachment,
   AuthStatus,
   Counts,
   Me,
@@ -89,11 +90,37 @@ export const api = {
     qs.set("limit", String(params.limit ?? 100));
     return request<{ messages: Message[]; has_more: boolean }>("GET", `${base}/threads/${threadId}/messages?${qs}`);
   },
-  sendMessage: (threadId: string, body: string) =>
+  sendMessage: (threadId: string, body: string, attachments: string[] = []) =>
     request<{ message: Message; thread: Thread }>("POST", `${base}/threads/${threadId}/messages`, {
       body,
       format: "markdown",
       sender: "user",
+      attachments,
+    }),
+  /** Uploads one file as a pending attachment; progress is reported in 0..1. */
+  uploadAttachment: (threadId: string, file: File, onProgress?: (fraction: number) => void) =>
+    new Promise<Attachment>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${base}/threads/${threadId}/attachments`);
+      xhr.setRequestHeader("Accept", "application/json");
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total);
+      };
+      xhr.onerror = () => reject(new APIError(0, "network", "Upload failed. Check your connection."));
+      xhr.onload = () => {
+        let data: { attachments?: Attachment[]; error?: { code?: string; message?: string } } | null = null;
+        try {
+          data = JSON.parse(xhr.responseText);
+        } catch {
+          data = null;
+        }
+        if (xhr.status >= 200 && xhr.status < 300 && data?.attachments?.[0]) resolve(data.attachments[0]);
+        else reject(new APIError(xhr.status, data?.error?.code ?? "http_error", data?.error?.message ?? `Upload failed (${xhr.status})`));
+      };
+      const form = new FormData();
+      form.append("file", file, file.name || "upload");
+      xhr.send(form);
     }),
 
   listThreadQuestions: (threadId: string) => request<{ questions: Question[] }>("GET", `${base}/threads/${threadId}/questions`),

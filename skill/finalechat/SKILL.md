@@ -75,6 +75,23 @@ finalechat wait --timeout 900
 
 Prints the reply body. Then act on it and keep going.
 
+## Screenshots
+
+Attach files to a message with `-f` (repeatable, up to 8, 10 MiB each);
+the message text is optional when a file is present:
+
+```bash
+finalechat say "Staging after the deploy. Note the empty sidebar." -f /tmp/staging.png
+```
+
+When the user's reply carries a file, `wait` and `read` print a line like
+`📎 IMG_0421.png (image/png, 165 KB) https://www.finalechat.com/api/v1/attachments/<id>`
+under the message. Download it, then read the image file:
+
+```bash
+finalechat fetch <id> -o /tmp/IMG_0421.png
+```
+
 ## Exit codes
 
 - `0`: answered, or a reply arrived.

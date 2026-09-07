@@ -34,6 +34,8 @@ type Message struct {
 	Importance string    `json:"importance"`
 	Meta       JSON      `json:"meta"`
 	CreatedAt  time.Time `json:"created_at"`
+	// Attachments are the files carried by the message, in upload order.
+	Attachments []*Attachment `json:"attachments"`
 }
 
 const messageColumns = "m.id, m.thread_id, m.user_id, m.sender, m.body, m.format, m.importance, m.meta, m.created_at"
@@ -55,6 +57,8 @@ type MessageInput struct {
 	Format     string
 	Importance string
 	Meta       JSON
+	// AttachmentIDs are pending uploads in the same thread to bind.
+	AttachmentIDs []uuid.UUID
 }
 
 // MaxBodyBytes bounds a message body.
@@ -93,6 +97,9 @@ func (s *Store) CreateMessage(ctx context.Context, userID, threadID uuid.UUID, i
 		if err != nil {
 			return err
 		}
+		if err := attachToMessage(ctx, tx, userID, threadID, msg.ID, in.AttachmentIDs); err != nil {
+			return err
+		}
 		lastRead := "t.last_read_at"
 		if in.Sender == SenderUser {
 			// The user's own reply implies they have read everything before it.
@@ -103,18 +110,63 @@ func (s *Store) CreateMessage(ctx context.Context, userID, threadID uuid.UUID, i
 				last_read_at = `+lastRead+`,
 				archived_at = NULL
 			FROM m WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns,
-			threadID, userID, msg.CreatedAt, Preview(in.Body), in.Sender))
+			threadID, userID, msg.CreatedAt, previewFor(in.Body, len(in.AttachmentIDs)), in.Sender))
 		return err
 	})
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := s.hydrateAttachments(ctx, userID, []*Message{msg}); err != nil {
+		return nil, nil, err
+	}
 	return msg, thread, nil
+}
+
+// previewFor renders the inbox preview, noting attachments when present.
+func previewFor(body string, attachments int) string {
+	p := Preview(body)
+	if attachments == 0 {
+		return p
+	}
+	label := "📎 Attachment"
+	if attachments > 1 {
+		label = "📎 " + itoa(attachments) + " attachments"
+	}
+	if p == "" {
+		return label
+	}
+	return label + " · " + p
+}
+
+// hydrateAttachments fills Attachments on each message.
+func (s *Store) hydrateAttachments(ctx context.Context, userID uuid.UUID, msgs []*Message) error {
+	ids := make([]uuid.UUID, 0, len(msgs))
+	for _, m := range msgs {
+		m.Attachments = []*Attachment{}
+		ids = append(ids, m.ID)
+	}
+	byMessage, err := s.ListAttachmentsForMessages(ctx, userID, ids)
+	if err != nil {
+		return err
+	}
+	for _, m := range msgs {
+		if list, ok := byMessage[m.ID]; ok {
+			m.Attachments = list
+		}
+	}
+	return nil
 }
 
 // GetMessage loads a message the user owns.
 func (s *Store) GetMessage(ctx context.Context, userID, id uuid.UUID) (*Message, error) {
-	return scanMessage(s.pool.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.id = $1 AND m.user_id = $2", id, userID))
+	m, err := scanMessage(s.pool.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.id = $1 AND m.user_id = $2", id, userID))
+	if err != nil {
+		return nil, err
+	}
+	if err := s.hydrateAttachments(ctx, userID, []*Message{m}); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // MessagePage selects a window of a thread's messages.
@@ -186,6 +238,9 @@ func (s *Store) ListMessages(ctx context.Context, userID, threadID uuid.UUID, p 
 		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 			out[i], out[j] = out[j], out[i]
 		}
+	}
+	if err := s.hydrateAttachments(ctx, userID, out); err != nil {
+		return nil, false, err
 	}
 	return out, hasMore, nil
 }

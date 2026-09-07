@@ -6,8 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	pngenc "image/png"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -19,6 +23,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ericflo/finalechat/internal/blob"
 	"github.com/ericflo/finalechat/internal/bus"
 	"github.com/ericflo/finalechat/internal/config"
 	"github.com/ericflo/finalechat/internal/db"
@@ -66,7 +71,7 @@ func TestMain(m *testing.M) {
 	b := bus.New(pool, log)
 	go b.Run(ctx)
 	sender := push.New(st, log, "", "", cfg.VAPIDSubject)
-	testAPI = New(cfg, st, b, sender, log)
+	testAPI = New(cfg, st, b, sender, blob.NewMemory(), log)
 	testSrv = httptest.NewServer(testAPI.Handler())
 	// Give the LISTEN connection a moment to attach so events are not lost.
 	time.Sleep(200 * time.Millisecond)
@@ -574,4 +579,139 @@ func TestDocumentsAndStatic(t *testing.T) {
 	if res.Request.URL.Path != "/api/" {
 		t.Fatalf("expected /api to redirect to /api/, ended at %s", res.Request.URL.Path)
 	}
+}
+
+func TestAttachments(t *testing.T) {
+	b, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "att:1", "title": "attachments"}), "thread"), "id")
+
+	// A tiny PNG (2x2) generated in-process so the test needs no fixtures.
+	png := makePNG(t, 900, 300)
+
+	// Raw upload with a declared type and filename.
+	req, _ := http.NewRequest("POST", testSrv.URL+"/api/v1/threads/"+thread+"/attachments?filename=shot.png", bytes.NewReader(png))
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Content-Type", "image/png")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var up map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&up)
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: %d %v", res.StatusCode, up)
+	}
+	att := up["attachments"].([]any)[0].(map[string]any)
+	if att["kind"] != "image" || att["width"].(float64) != 900 || att["thumb_width"].(float64) != 640 || str(att, "thumb_url") == "" {
+		t.Fatalf("unexpected attachment metadata: %v", att)
+	}
+	attID := str(att, "id")
+
+	// Attach it to a message with no body.
+	msg := a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"attachments": []string{attID}})
+	m := sub(msg, "message")
+	if list := m["attachments"].([]any); len(list) != 1 || str(list[0].(map[string]any), "url") != "/api/v1/attachments/"+attID {
+		t.Fatalf("message did not carry the attachment: %v", m)
+	}
+	if !strings.HasPrefix(str(sub(msg, "thread"), "preview"), "📎") {
+		t.Fatalf("expected an attachment preview, got %q", str(sub(msg, "thread"), "preview"))
+	}
+	// Attaching again fails: it is no longer pending.
+	if status, _ := a.do("POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "again", "attachments": []string{attID}}); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected re-attach to be rejected, got %d", status)
+	}
+
+	// Download original and thumbnail as the app user.
+	for _, suffix := range []string{"", "/thumb"} {
+		r2, err := b.http.Get(testSrv.URL + "/api/v1/attachments/" + attID + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(r2.Body)
+		r2.Body.Close()
+		if r2.StatusCode != 200 || len(data) == 0 {
+			t.Fatalf("download%s: %d", suffix, r2.StatusCode)
+		}
+		want := "image/png"
+		if suffix == "/thumb" {
+			want = "image/jpeg"
+		}
+		if ct := r2.Header.Get("Content-Type"); ct != want {
+			t.Fatalf("download%s content type %q", suffix, ct)
+		}
+		if suffix == "" && !bytes.Equal(data, png) {
+			t.Fatal("original bytes differ")
+		}
+	}
+
+	// Multipart message: text plus two files, one image and one text file.
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("body", "here is the **screenshot**")
+	fw, _ := mw.CreateFormFile("file", "notes.txt")
+	_, _ = fw.Write([]byte("hello\n"))
+	fw2, _ := mw.CreateFormFile("file", "two.png")
+	_, _ = fw2.Write(makePNG(t, 40, 20))
+	mw.Close()
+	req, _ = http.NewRequest("POST", testSrv.URL+"/api/v1/threads/"+thread+"/messages", &buf)
+	req.Header.Set("Authorization", "Bearer "+a.token)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	res, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&out)
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("multipart message: %d %v", res.StatusCode, out)
+	}
+	list := sub(out, "message")["attachments"].([]any)
+	if len(list) != 2 {
+		t.Fatalf("expected 2 attachments, got %d", len(list))
+	}
+	kinds := map[string]string{}
+	for _, it := range list {
+		x := it.(map[string]any)
+		kinds[str(x, "filename")] = str(x, "kind") + ":" + str(x, "content_type")
+	}
+	if kinds["notes.txt"] != "file:text/plain; charset=utf-8" && kinds["notes.txt"] != "file:text/plain" {
+		t.Fatalf("unexpected text attachment classification: %v", kinds)
+	}
+	if kinds["two.png"] != "image:image/png" {
+		t.Fatalf("unexpected image classification: %v", kinds)
+	}
+
+	// Listing messages hydrates attachments; deleting the thread removes objects.
+	page := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages", nil)
+	total := 0
+	for _, it := range page["messages"].([]any) {
+		total += len(it.(map[string]any)["attachments"].([]any))
+	}
+	if total != 3 {
+		t.Fatalf("expected 3 attachments across messages, got %d", total)
+	}
+	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+thread, nil)
+	if status, _ := b.do("GET", "/api/v1/attachments/"+attID, nil); status != http.StatusNotFound {
+		t.Fatalf("expected deleted attachment to 404, got %d", status)
+	}
+	if _, _, _, err := testAPI.blobs.Get(context.Background(), "a/"+attID+"/shot.png"); err == nil {
+		t.Fatal("object should have been deleted from blob storage")
+	}
+}
+
+func makePNG(t *testing.T, w, h int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, color.RGBA{uint8(x), uint8(y), 128, 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := pngenc.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }

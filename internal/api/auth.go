@@ -173,7 +173,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	resp := map[string]any{"signup": mode, "authenticated": false, "push_enabled": s.push.Enabled(), "version": s.cfg.Version}
+	resp := map[string]any{"signup": mode, "authenticated": false, "push_enabled": s.push.Enabled(), "attachments_enabled": s.blobs != nil, "version": s.cfg.Version}
 	if p := principalFrom(r.Context()); p != nil {
 		resp["authenticated"] = true
 		resp["user"] = p.user
@@ -326,7 +326,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	resp := map[string]any{"user": p.user, "counts": counts, "push_enabled": s.push.Enabled(), "base_url": s.cfg.BaseURL, "version": s.cfg.Version}
+	resp := map[string]any{"user": p.user, "counts": counts, "push_enabled": s.push.Enabled(), "attachments_enabled": s.blobs != nil, "base_url": s.cfg.BaseURL, "version": s.cfg.Version}
 	if p.token != nil {
 		resp["token"] = p.token
 		resp["auth"] = "token"

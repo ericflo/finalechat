@@ -36,6 +36,23 @@ export interface Thread {
 
 export type Sender = "agent" | "user" | "system";
 
+export interface Attachment {
+  id: string;
+  thread_id: string;
+  message_id: string | null;
+  kind: "image" | "file";
+  content_type: string;
+  filename: string;
+  size: number;
+  width?: number;
+  height?: number;
+  thumb_width?: number;
+  thumb_height?: number;
+  created_at: string;
+  url: string;
+  thumb_url?: string;
+}
+
 export interface Message {
   id: string;
   thread_id: string;
@@ -45,6 +62,7 @@ export interface Message {
   importance: "normal" | "important";
   meta: Record<string, unknown>;
   created_at: string;
+  attachments: Attachment[];
 }
 
 export interface QuestionOption {
@@ -95,6 +113,7 @@ export interface AuthStatus {
   signup: "open" | "invite" | "closed";
   authenticated: boolean;
   push_enabled: boolean;
+  attachments_enabled: boolean;
   version: string;
   user?: User;
 }
@@ -103,6 +122,7 @@ export interface Me {
   user: User;
   counts: Counts;
   push_enabled: boolean;
+  attachments_enabled: boolean;
   base_url: string;
   version: string;
   auth: "session" | "token";

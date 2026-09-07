@@ -11,6 +11,7 @@ export interface State {
   settings: Settings;
   counts: Counts;
   pushEnabled: boolean;
+  attachmentsEnabled: boolean;
   version: string;
   signup: "open" | "invite" | "closed";
   connection: Connection;
@@ -33,6 +34,7 @@ let state: State = {
   settings: defaultSettings,
   counts: { pending_questions: 0, unread_threads: 0 },
   pushEnabled: false,
+  attachmentsEnabled: false,
   version: "",
   signup: "closed",
   connection: "idle",
@@ -98,7 +100,7 @@ function errorText(err: unknown): string {
 export async function bootstrap(): Promise<void> {
   try {
     const status = await api.authStatus();
-    set({ signup: status.signup, pushEnabled: status.push_enabled, version: status.version });
+    set({ signup: status.signup, pushEnabled: status.push_enabled, attachmentsEnabled: status.attachments_enabled, version: status.version });
     if (!status.authenticated || !status.user) {
       set({ user: false });
       return;
@@ -181,6 +183,7 @@ export async function loadInbox(): Promise<void> {
         user: me.user,
         settings: me.user.settings,
         pushEnabled: me.push_enabled,
+        attachmentsEnabled: me.attachments_enabled,
         version: me.version,
       };
     });
@@ -255,8 +258,8 @@ export async function markRead(id: string): Promise<void> {
   }
 }
 
-export async function sendMessage(threadId: string, body: string): Promise<void> {
-  const res = await api.sendMessage(threadId, body);
+export async function sendMessage(threadId: string, body: string, attachments: string[] = []): Promise<void> {
+  const res = await api.sendMessage(threadId, body, attachments);
   appendMessage(res.message);
   upsertThreads([res.thread]);
 }

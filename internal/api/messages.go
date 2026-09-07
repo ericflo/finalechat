@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -27,18 +29,51 @@ type messageRequest struct {
 	// external thread.
 	Title string `json:"title"`
 	Agent string `json:"agent"`
+	// Attachments are ids of pending uploads in the same thread.
+	Attachments []string `json:"attachments"`
 }
 
 // POST /api/v1/threads/{thread}/messages
+//
+// JSON: {body, format, importance, sender, notify, meta, title, agent,
+// attachments: [ids]}. Or multipart/form-data with the same fields as form
+// values plus file parts, which uploads and attaches in one request.
 func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
 	var req messageRequest
-	if err := decodeJSON(r, &req); err != nil {
+	var form *multipart.Form
+	if isMultipart(r) {
+		var err error
+		form, err = parseMultipart(r)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		defer form.RemoveAll()
+		v := func(name string) string { return strings.TrimSpace(r.FormValue(name)) }
+		req.Body, req.Format, req.Importance, req.Sender = v("body"), v("format"), v("importance"), v("sender")
+		req.Title, req.Agent = v("title"), v("agent")
+		if m := v("meta"); m != "" {
+			req.Meta = json.RawMessage(m)
+		}
+		if n := v("notify"); n != "" {
+			b, err := strconv.ParseBool(n)
+			if err != nil {
+				writeError(w, errValidation("notify must be true or false."))
+				return
+			}
+			req.Notify = optionalBool{Set: true, Value: b}
+		}
+		if ids := v("attachments"); ids != "" {
+			req.Attachments = strings.Split(ids, ",")
+		}
+	} else if err := decodeJSON(r, &req); err != nil {
 		writeError(w, err)
 		return
 	}
-	if strings.TrimSpace(req.Body) == "" {
-		writeError(w, errValidation("body is required."))
+	hasFiles := form != nil && len(form.File) > 0
+	if strings.TrimSpace(req.Body) == "" && len(req.Attachments) == 0 && !hasFiles {
+		writeError(w, errValidation("body is required unless the message carries attachments."))
 		return
 	}
 	if len(req.Body) > store.MaxBodyBytes {
@@ -82,6 +117,19 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	attachmentIDs := make([]uuid.UUID, 0, len(req.Attachments))
+	for _, raw := range req.Attachments {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			writeError(w, errValidation("attachments must be attachment ids."))
+			return
+		}
+		attachmentIDs = append(attachmentIDs, id)
+	}
 	thread, created, err := s.resolveThread(r, true)
 	if err != nil {
 		writeError(w, err)
@@ -99,13 +147,32 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 			thread = t
 		}
 	}
+	if hasFiles {
+		uploaded, err := s.readUploads(r, thread.ID, form)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		for _, a := range uploaded {
+			attachmentIDs = append(attachmentIDs, a.ID)
+		}
+	}
+	if len(attachmentIDs) > store.MaxAttachmentsPerMessage {
+		writeError(w, errValidation("At most %d attachments per message.", store.MaxAttachmentsPerMessage))
+		return
+	}
 	msg, thread, err := s.store.CreateMessage(r.Context(), p.user.ID, thread.ID, store.MessageInput{
-		Sender: req.Sender, Body: req.Body, Format: req.Format, Importance: req.Importance, Meta: meta,
+		Sender: req.Sender, Body: req.Body, Format: req.Format, Importance: req.Importance, Meta: meta, AttachmentIDs: attachmentIDs,
 	})
+	if errors.Is(err, store.ErrNotFound) && len(attachmentIDs) > 0 {
+		writeError(w, errValidation("One or more attachments are unknown, belong to another thread, or are already attached."))
+		return
+	}
 	if err != nil {
 		writeError(w, err)
 		return
 	}
+	decorate(msg)
 	s.bus.Publish(r.Context(), bus.Event{Type: bus.MessageCreated, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), MessageID: msg.ID.String()})
 	s.notifyMessage(r.Context(), p.user, thread, msg, req.Notify.ptr())
 	writeJSON(w, http.StatusCreated, map[string]any{"message": msg, "thread": thread})
@@ -124,10 +191,22 @@ func (s *Server) notifyMessage(ctx context.Context, user *store.User, thread *st
 		return
 	}
 	counts, _ := s.store.GetCounts(ctx, user.ID)
+	body := store.Preview(msg.Body)
+	if len(msg.Attachments) > 0 {
+		label := "📎 Attachment"
+		if msg.Attachments[0].Kind == store.AttachmentImage {
+			label = "📷 Image"
+		}
+		if body == "" {
+			body = label
+		} else {
+			body = label + " · " + body
+		}
+	}
 	s.push.Send(user.ID, push.Notification{
 		Type:      "message",
 		Title:     threadTitle(thread),
-		Body:      store.Preview(msg.Body),
+		Body:      body,
 		URL:       s.cfg.BaseURL + "/t/" + thread.ID.String(),
 		Tag:       "thread:" + thread.ID.String(),
 		ThreadID:  thread.ID.String(),
@@ -215,6 +294,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(msgs) > 0 || wait == 0 || time.Now().After(deadline) {
+			decorate(msgs...)
 			writeJSON(w, http.StatusOK, map[string]any{"messages": msgs, "has_more": hasMore, "thread_id": thread.ID})
 			return
 		}
@@ -262,5 +342,6 @@ func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	decorate(msg)
 	writeJSON(w, http.StatusOK, map[string]any{"message": msg})
 }

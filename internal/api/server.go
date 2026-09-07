@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ericflo/finalechat/internal/blob"
 	"github.com/ericflo/finalechat/internal/bus"
 	"github.com/ericflo/finalechat/internal/config"
 	"github.com/ericflo/finalechat/internal/push"
@@ -18,19 +19,21 @@ type Server struct {
 	store       *store.Store
 	bus         *bus.Bus
 	push        *push.Sender
+	blobs       blob.Store
 	log         *slog.Logger
 	authLimiter *rateLimiter
 	started     time.Time
 	shutdown    chan struct{}
 }
 
-// New wires a server.
-func New(cfg config.Config, st *store.Store, b *bus.Bus, p *push.Sender, log *slog.Logger) *Server {
+// New wires a server. blobs may be nil, which disables attachments.
+func New(cfg config.Config, st *store.Store, b *bus.Bus, p *push.Sender, blobs blob.Store, log *slog.Logger) *Server {
 	return &Server{
 		cfg:         cfg,
 		store:       st,
 		bus:         b,
 		push:        p,
+		blobs:       blobs,
 		log:         log,
 		authLimiter: newRateLimiter(20),
 		started:     time.Now().UTC().Truncate(time.Second),
@@ -113,6 +116,11 @@ func (s *Server) Handler() http.Handler {
 
 	authed.HandleFunc("GET /api/v1/messages/{id}", s.handleGetMessage)
 
+	authed.HandleFunc("POST /api/v1/threads/{thread}/attachments", s.handleUpload)
+	authed.HandleFunc("GET /api/v1/attachments/{id}", s.serveAttachment(false))
+	authed.HandleFunc("HEAD /api/v1/attachments/{id}", s.serveAttachment(false))
+	authed.HandleFunc("GET /api/v1/attachments/{id}/thumb", s.serveAttachment(true))
+
 	authed.HandleFunc("GET /api/v1/questions", s.handleListQuestions)
 	authed.HandleFunc("GET /api/v1/questions/{id}", s.handleGetQuestion)
 	authed.HandleFunc("POST /api/v1/questions/{id}/answer", s.handleAnswerQuestion)
@@ -168,5 +176,6 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 		if _, err := s.store.DeleteExpiredSessions(ctx); err != nil && ctx.Err() == nil {
 			s.log.Error("prune sessions", "err", err)
 		}
+		s.pruneOrphanAttachments(ctx)
 	}
 }

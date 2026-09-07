@@ -127,6 +127,7 @@ func (s *Server) expandEvent(r *http.Request, ev bus.Event) (map[string]any, err
 		if err != nil {
 			return nil, err
 		}
+		decorate(msg)
 		out["message"] = msg
 	case bus.QuestionCreated, bus.QuestionAnswered, bus.QuestionCancelled, bus.QuestionExpired:
 		id, err := uuid.Parse(ev.QuestionID)

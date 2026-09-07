@@ -201,10 +201,16 @@ func (s *Server) handleDeleteThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	attachments, err := s.store.ListThreadAttachments(r.Context(), p.user.ID, thread.ID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	if err := s.store.DeleteThread(r.Context(), p.user.ID, thread.ID); err != nil {
 		writeError(w, err)
 		return
 	}
+	s.deleteAttachmentObjects(r.Context(), attachments)
 	s.bus.Publish(r.Context(), bus.Event{Type: bus.ThreadDeleted, UserID: p.user.ID.String(), ThreadID: thread.ID.String()})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

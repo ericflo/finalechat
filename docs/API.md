@@ -51,6 +51,9 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 - `meta` fields are free-form JSON objects (at most 16 KiB) that the API
   stores and returns verbatim. `PATCH` and idempotent create merge `meta`
   keys rather than replacing the object.
+- Attachment bytes are stored in a private Backblaze B2 bucket and streamed
+  through the API; PostgreSQL holds only their metadata. Downloads need the
+  same credentials as every other route.
 
 ### Errors
 
@@ -73,10 +76,12 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | 409 | `already_resolved` | Answering or cancelling a question that is no longer pending |
 | 409 | `email_taken` | Registration with an existing email |
 | 409 | `no_subscriptions` | Test push with no subscribed device |
-| 413 | `too_large` | Request body over 1 MiB |
+| 413 | `too_large` | JSON body over 1 MiB, an attachment over 10 MiB, or a multipart request over the combined limit |
 | 422 | `validation_failed` | A field failed validation; `message` says which |
 | 429 | `rate_limited` | Too many login or register attempts (20 per minute per IP) |
+| 502 | `storage_unavailable` | Object storage rejected an upload or download; retry |
 | 503 | `push_disabled` | Push is not configured on this server |
+| 503 | `attachments_disabled` | Attachment storage is not configured on this server |
 | 500 | `internal_error` | Server fault |
 
 ### Limits
@@ -93,6 +98,7 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | `wait` | 0 to 600 seconds (larger values are clamped to 600) |
 | `timeout_seconds` | 1 to 604800 (7 days) |
 | `limit` | threads 1 to 200 (default 50); messages and questions 1 to 500 (default 100) |
+| Attachment | 10 MiB per file, 8 per message or upload request; `filename` 200 characters |
 
 ### Thread references
 
@@ -166,12 +172,43 @@ push notifications.
   "format": "markdown",
   "importance": "important",
   "meta": {},
-  "created_at": "2026-09-07T05:38:55.033453Z"
+  "created_at": "2026-09-07T05:38:55.033453Z",
+  "attachments": []
 }
 ```
 
 `sender` is `agent`, `user` or `system`; `format` is `markdown` or `text`;
-`importance` is `normal` or `important`.
+`importance` is `normal` or `important`. `attachments` lists the files the
+message carries, in upload order; see [Attachment](#attachment).
+
+### Attachment
+
+```json
+{
+  "id": "01a07ab9-3132-7b58-85f0-5c74ef773395",
+  "thread_id": "01a07ab9-312a-776f-ae4b-48c3cba6530c",
+  "message_id": "01a07ab9-314c-72db-9505-30a34c350400",
+  "kind": "image",
+  "content_type": "image/png",
+  "filename": "shot.png",
+  "size": 168591,
+  "width": 900,
+  "height": 300,
+  "thumb_width": 640,
+  "thumb_height": 213,
+  "created_at": "2026-09-07T07:15:52.264313Z",
+  "url": "/api/v1/attachments/01a07ab9-3132-7b58-85f0-5c74ef773395",
+  "thumb_url": "/api/v1/attachments/01a07ab9-3132-7b58-85f0-5c74ef773395/thumb"
+}
+```
+
+`kind` is `image` for `image/png`, `image/jpeg`, `image/gif` and
+`image/webp` (the bytes are sniffed; a file that claims to be an image but is
+not becomes a `file` of type `application/octet-stream`), otherwise `file`.
+Images carry `width`, `height` and a JPEG thumbnail whose longest side is
+640 pixels (`thumb_width`, `thumb_height`, `thumb_url`); files omit those
+fields. `url` and `thumb_url` are relative to the base URL. `message_id` is
+`null` until the upload is attached to a message.
 
 ### Question
 
@@ -254,11 +291,12 @@ Reports how registration is gated and who, if anyone, is signed in. No
 authentication required.
 
 ```json
-{"authenticated": false, "push_enabled": true, "signup": "closed", "version": "dev"}
+{"authenticated": false, "push_enabled": true, "attachments_enabled": true, "signup": "closed", "version": "dev"}
 ```
 
 `signup` is `open` (no account exists yet: the first registration creates
-the owner), `invite` (an invite code is required), or `closed`. When
+the owner), `invite` (an invite code is required), or `closed`.
+`attachments_enabled` says whether files can be uploaded. When
 authenticated, the response also includes `user`.
 
 ### POST /auth/register
@@ -292,6 +330,7 @@ curl -sS https://www.finalechat.com/api/v1/me -H "Authorization: Bearer $FINALEC
 
 ```json
 {
+  "attachments_enabled": true,
   "auth": "token",
   "base_url": "https://www.finalechat.com",
   "counts": {"pending_questions": 0, "unread_threads": 2},
@@ -459,13 +498,20 @@ Creates a missing `ext:` thread on demand.
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `body` | string | Required. Markdown by default. |
+| `body` | string | Markdown by default. Required unless the message carries attachments. |
 | `format` | string | `markdown` (default) or `text` |
 | `importance` | string | `normal` (default) or `important` |
 | `sender` | string | `agent` (default for tokens), `user` (default for sessions) or `system` |
 | `notify` | boolean | Force (`true`) or suppress (`false`) the push for this message |
 | `meta` | object | Stored verbatim |
 | `title`, `agent` | string | Applied only when this request creates the `ext:` thread |
+| `attachments` | array of ids | Pending uploads from the same thread (see [Attachments](#attachments)); at most 8 |
+
+The same request can be sent as `multipart/form-data`: every field above
+becomes a form value (`meta` as a JSON string, `attachments` as
+comma-separated ids) and any number of `file` parts are uploaded and
+attached in the same call. That is the one-request way to send a
+screenshot; see [Attachments](#attachments).
 
 ```bash
 curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/messages \
@@ -479,14 +525,15 @@ curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/mess
 {"message": {"id": "01a07a60-6db9-784b-bd24-7ba3d7d3dfa0", "thread_id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
              "sender": "agent", "body": "Deployed **v1.2.0** to staging.\n\n- 42 tests passed\n- bundle 118 KB",
              "format": "markdown", "importance": "important", "meta": {},
-             "created_at": "2026-09-07T05:38:55.033453Z"},
+             "created_at": "2026-09-07T05:38:55.033453Z", "attachments": []},
  "thread": {"id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7", "preview": "Deployed v1.2.0 to staging. - 42 tests passed - bundle 118 KB",
             "preview_sender": "agent", "unread_count": 1, "...": "..."}}
 ```
 
 Status `201`. Posting bumps the thread's `last_activity_at` and `preview`
 and un-archives it. A message with `sender: "user"` also advances the
-thread's `last_read_at`. Emits `message.created`.
+thread's `last_read_at`. Emits `message.created`. Attaching an id that is
+unknown, belongs to another thread, or is already attached is a `422`.
 
 ### GET /threads/{ref}/messages
 
@@ -532,6 +579,93 @@ curl -sS "https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/mes
 
 The message above is the transcript entry the server writes when a question
 is answered: `meta.kind` is `answer` and `meta.question_id` links it.
+
+## Attachments
+
+Messages carry files: screenshots, logs, diffs, PDFs, anything up to 10 MiB,
+at most 8 per message. Images get dimensions and a JPEG thumbnail; the app
+shows them inline, and the thread preview and push notification read
+`📷 Image` or `📎 Attachment`. Bytes live in a private Backblaze B2 bucket;
+only metadata is in the database. Both agents and the app user send and
+receive attachments the same way.
+
+### Send a message with files in one request
+
+`POST /threads/{ref}/messages` as `multipart/form-data`. Form values are the
+JSON fields; `file` parts are uploaded and attached. `body` may be omitted.
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/messages \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" \
+  -F body="Here is the **screenshot**" \
+  -F importance=important \
+  -F file=@shot.png \
+  -F file=@deploy.log
+```
+
+```json
+{"message": {"id": "01a07ab9-314c-72db-9505-30a34c350400", "thread_id": "01a07ab9-312a-776f-ae4b-48c3cba6530c",
+             "sender": "agent", "body": "Here is the **screenshot**", "format": "markdown", "importance": "important",
+             "meta": {}, "created_at": "2026-09-07T07:15:52.268069Z",
+             "attachments": [{"id": "01a07ab9-3132-7b58-85f0-5c74ef773395", "kind": "image", "content_type": "image/png",
+                              "filename": "shot.png", "size": 168591, "width": 900, "height": 300,
+                              "thumb_width": 640, "thumb_height": 213,
+                              "url": "/api/v1/attachments/01a07ab9-3132-7b58-85f0-5c74ef773395",
+                              "thumb_url": "/api/v1/attachments/01a07ab9-3132-7b58-85f0-5c74ef773395/thumb", "...": "..."},
+                             {"id": "01a07ab9-…", "kind": "file", "content_type": "text/plain", "filename": "deploy.log", "...": "..."}]},
+ "thread": {"preview": "📎 2 attachments · Here is the screenshot", "preview_sender": "agent", "...": "..."}}
+```
+
+### POST /threads/{ref}/attachments
+
+Uploads files without posting yet, for example when several steps each
+produce one. Creates a missing `ext:` thread on demand. Two request shapes:
+
+- `multipart/form-data` with one or more `file` parts (the field name does
+  not matter; `files` and `attachment` work too), at most 8 per request.
+- A raw body whose `Content-Type` is the file's type. The filename comes from
+  the `X-Filename` header or the `filename` query parameter; without either
+  it is `attachment.<ext>`.
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/attachments \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" \
+  -H "Content-Type: text/plain" -H "X-Filename: notes.txt" \
+  --data-binary @notes.txt
+```
+
+```json
+{"attachments": [{"id": "01a07ab9-7a53-7da4-81ad-3f7bad1f53db", "thread_id": "01a07ab9-312a-776f-ae4b-48c3cba6530c",
+                  "message_id": null, "kind": "file", "content_type": "text/plain", "filename": "notes.txt", "size": 23,
+                  "created_at": "2026-09-07T07:16:10.963984Z",
+                  "url": "/api/v1/attachments/01a07ab9-7a53-7da4-81ad-3f7bad1f53db"}],
+ "thread_id": "01a07ab9-312a-776f-ae4b-48c3cba6530c"}
+```
+
+Status `201`. Then pass the ids in a message's `attachments` field. Each
+upload attaches to exactly one message; a pending upload that is not
+attached within 24 hours is deleted. `413 too_large` for a file over 10 MiB,
+`422 validation_failed` for an empty file or an undecodable image, and
+`502 storage_unavailable` when the object store fails.
+
+### GET /attachments/{id}
+
+Streams the original bytes with its `Content-Type`, `Content-Length` and
+`Cache-Control: private, max-age=31536000, immutable`. `Content-Disposition`
+is `inline` for images, PDFs and text and `attachment` otherwise, with the
+original filename. `HEAD` returns the headers only.
+
+```bash
+curl -sS -o shot.png https://www.finalechat.com/api/v1/attachments/01a07ab9-3132-7b58-85f0-5c74ef773395 \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN"
+```
+
+### GET /attachments/{id}/thumb
+
+The JPEG thumbnail of an image attachment (`image/jpeg`, longest side 640).
+For a non-image attachment it returns the original bytes.
+
+Deleting a thread deletes its attachments and their stored bytes.
 
 ## Questions
 

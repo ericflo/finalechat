@@ -369,3 +369,41 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* Attachments ------------------------------------------------------------- */
+.att-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin: 6px 0 2px; max-width: 360px; }
+.att-grid.single { grid-template-columns: minmax(0, 1fr); max-width: 320px; }
+.att-image { display: block; width: 100%; border-radius: 12px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--border); padding: 0; }
+.att-image img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.att-image:active { transform: scale(0.99); }
+.att-file { display: grid; grid-template-columns: 20px 1fr auto 18px; align-items: center; gap: 10px; margin-top: 6px; padding: 9px 12px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); color: inherit; font-size: 14px; }
+.att-file:hover { text-decoration: none; border-color: var(--border-strong); }
+.att-file svg { width: 18px; height: 18px; color: var(--text-2); }
+.att-file .att-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.att-meta { color: var(--text-3); font-size: 12.5px; font-weight: 500; }
+.msg.user .att-file { background: rgba(255,255,255,0.14); border-color: transparent; color: inherit; }
+.msg.user .att-file svg, .msg.user .att-meta { color: rgba(255,255,255,0.8); }
+.bubble.has-media { padding: 6px; }
+.bubble.has-media .md { padding: 4px 8px 2px; }
+
+.viewer { position: fixed; inset: 0; z-index: 80; background: rgba(0,0,0,0.92); display: flex; flex-direction: column; animation: fade-in 0.15s; }
+.viewer-bar { display: flex; align-items: center; gap: 6px; padding: calc(8px + var(--sat)) 10px 8px; color: #fff; }
+.viewer-bar .icon-btn { color: #fff; }
+.viewer-title { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.viewer-title .att-meta { color: rgba(255,255,255,0.6); }
+.viewer-body { flex: 1; display: flex; align-items: center; justify-content: center; padding: 0 0 calc(12px + var(--sab)); overflow: auto; }
+.viewer-body img { max-width: 100%; max-height: 100%; object-fit: contain; transition: opacity 0.2s; }
+
+.upload-tray { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 8px; max-width: 760px; margin: 0 auto; }
+.upload-item { position: relative; flex: none; width: 64px; height: 64px; border-radius: 12px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--border-strong); display: flex; align-items: center; justify-content: center; color: var(--text-2); }
+.upload-item img { width: 100%; height: 100%; object-fit: cover; }
+.upload-item.error { border-color: var(--red); }
+.upload-item svg { width: 22px; height: 22px; }
+.upload-progress { position: absolute; left: 0; bottom: 0; height: 4px; background: var(--accent); transition: width 0.2s; }
+.upload-remove { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 50%; background: rgba(0,0,0,0.6); color: #fff; display: flex; align-items: center; justify-content: center; }
+.upload-remove svg { width: 12px; height: 12px; }
+.upload-name { position: absolute; left: 0; right: 0; bottom: 0; font-size: 9px; padding: 1px 4px; background: rgba(0,0,0,0.55); color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer .attach-btn { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--text-2); flex: none; }
+.composer .attach-btn:hover { background: var(--accent-soft); color: var(--accent); }
+.composer .attach-btn svg { width: 22px; height: 22px; }
+.composer-wrap.dragging { outline: 2px dashed var(--accent); outline-offset: -6px; }

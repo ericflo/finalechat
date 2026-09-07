@@ -9,16 +9,22 @@ Python 3.9+, standard library only. It is also the Claude Code hook handler
     finalechat say "Deployed v2 to staging"
     finalechat ask "Ship to prod?" -o Yes -o No
     finalechat wait                       # block until the human replies
+    finalechat say "Look at this" -f /tmp/screenshot.png
+    finalechat fetch <attachment id>      # download a file the human sent
     finalechat install claude-code        # mirror Claude Code sessions to your phone
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import getpass
 import hashlib
 import json
+import mimetypes
 import os
+import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -55,6 +61,13 @@ EXIT_RESOLVED = 4  # question cancelled or expired
 
 # The API caps one long-poll at 600 seconds; we chain them.
 POLL_CHUNK = 600
+
+# Attachment limits mirror the server's.
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_ATTACHMENTS = 8
+# Images larger than this are handed to MCP clients as thumbnails.
+MCP_IMAGE_INLINE_LIMIT = 4 * 1024 * 1024
+MCP_MAX_IMAGES = 4
 
 
 # --------------------------------------------------------------------------- #
@@ -182,6 +195,72 @@ class Client:
         except ValueError:
             raise CLIError(f"Unexpected non-JSON response from {url}", EXIT_API) from None
 
+    def request_bytes(self, method: str, path: str, *, data: bytes | None = None,
+                      content_type: str | None = None, timeout: float = 120.0) -> tuple[bytes, dict]:
+        """Send a request with a prepared body and return (body bytes, headers)."""
+        if not self.token:
+            raise NotSignedIn()
+        url = path if path.startswith("http") else self.base_url + path
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/json, */*",
+            "User-Agent": USER_AGENT,
+        }
+        if content_type:
+            headers["Content-Type"] = content_type
+        req = urllib.request.Request(url, data=data, method=method, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read(), {k.lower(): v for k, v in resp.headers.items()}
+        except urllib.error.HTTPError as err:
+            raw = err.read()
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+                info = payload.get("error") or {}
+                raise APIError(err.code, str(info.get("code") or "http_error"),
+                               str(info.get("message") or f"HTTP {err.code}")) from None
+            except ValueError:
+                raise APIError(err.code, "http_error", f"HTTP {err.code} from {url}") from None
+        except urllib.error.URLError as err:
+            raise CLIError(f"Could not reach {self.base_url}: {err.reason}", EXIT_API) from None
+        except socket.timeout:
+            raise CLIError(f"Timed out talking to {self.base_url}", EXIT_API) from None
+
+    def post_multipart(self, path: str, fields: dict, files: list) -> dict:
+        """POST multipart/form-data. `files` is a list of (filename, content_type, bytes)."""
+        boundary = "finalechat-" + secrets.token_hex(16)
+        chunks: list[bytes] = []
+        for name, value in fields.items():
+            if value is None or value == "":
+                continue
+            chunks.append((f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n").encode("utf-8"))
+            chunks.append(str(value).encode("utf-8"))
+            chunks.append(b"\r\n")
+        for filename, content_type, data in files:
+            safe_name = filename.replace("\\", "_").replace('"', "_").replace("\r", "").replace("\n", "")
+            chunks.append((f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+                           f"filename=\"{safe_name}\"\r\nContent-Type: {content_type}\r\n\r\n").encode("utf-8"))
+            chunks.append(data)
+            chunks.append(b"\r\n")
+        chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+        body = b"".join(chunks)
+        raw, _ = self.request_bytes("POST", path, data=body,
+                                    content_type=f"multipart/form-data; boundary={boundary}",
+                                    timeout=60 + len(body) / 100_000)
+        try:
+            return json.loads(raw.decode("utf-8")) if raw else {}
+        except ValueError:
+            raise CLIError("Unexpected non-JSON response from the server", EXIT_API) from None
+
+    def download_attachment(self, ref: str, thumb: bool = False) -> tuple[bytes, str, str]:
+        """Fetch an attachment by id or URL; returns (bytes, content type, filename)."""
+        aid = attachment_id(ref)
+        path = f"/api/v1/attachments/{aid}" + ("/thumb" if thumb else "")
+        raw, headers = self.request_bytes("GET", path, timeout=300)
+        content_type = (headers.get("content-type") or "application/octet-stream").split(";")[0].strip()
+        filename = filename_from_disposition(headers.get("content-disposition", "")) or aid
+        return raw, content_type, filename
+
     # -- helpers -----------------------------------------------------------
 
     @staticmethod
@@ -225,7 +304,8 @@ class Client:
 
     def post_message(self, ref: str, body: str, *, sender: str | None = None, important: bool = False,
                      notify: bool | None = None, fmt: str = "markdown", meta: dict | None = None,
-                     title: str = "", agent: str = "") -> dict:
+                     title: str = "", agent: str = "", files: list | None = None) -> dict:
+        """Post a message; with `files` (list of (filename, content_type, bytes)) it is one multipart request."""
         payload: dict = {"body": body, "format": fmt, "importance": "important" if important else "normal"}
         if sender:
             payload["sender"] = sender
@@ -237,7 +317,15 @@ class Client:
             payload["title"] = title
         if agent:
             payload["agent"] = agent
-        return self.request("POST", f"/api/v1/threads/{self.ref_path(ref)}/messages", body=payload)
+        path = f"/api/v1/threads/{self.ref_path(ref)}/messages"
+        if files:
+            fields = dict(payload)
+            if "meta" in fields:
+                fields["meta"] = json.dumps(fields["meta"])
+            if "notify" in fields:
+                fields["notify"] = "true" if fields["notify"] else "false"
+            return self.post_multipart(path, fields, files)
+        return self.request("POST", path, body=payload)
 
     def list_messages(self, ref: str, *, after: str | None = None, before: str | None = None,
                       limit: int | None = None, wait: int | None = None, sender: str | None = None) -> dict:
@@ -339,6 +427,124 @@ def answer_summary(question: dict) -> str:
     if text:
         parts.append(text)
     return " — ".join(parts) if parts else "(no answer)"
+
+
+# --------------------------------------------------------------------------- #
+# Attachments
+# --------------------------------------------------------------------------- #
+
+UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE)
+
+
+def attachment_id(ref: str) -> str:
+    """Accept an attachment id, a relative API path, or an absolute URL."""
+    ref = (ref or "").strip()
+    match = UUID_RE.search(ref)
+    if not match or ("/" in ref and "/attachments/" not in ref):
+        raise CLIError(f"Not an attachment id or URL: {ref!r}")
+    return match.group(0).lower()
+
+
+def filename_from_disposition(value: str) -> str:
+    match = re.search(r"filename\*=UTF-8\'\'([^;]+)", value)
+    if match:
+        return urllib.parse.unquote(match.group(1)).strip()
+    match = re.search(r'filename="((?:[^"\\]|\\.)*)"', value)
+    if match:
+        return match.group(1).replace('\\"', '"').strip()
+    match = re.search(r"filename=([^;]+)", value)
+    if match:
+        return match.group(1).strip().strip('"')
+    return ""
+
+
+def human_size(size) -> str:
+    try:
+        n = float(size)
+    except (TypeError, ValueError):
+        return "?"
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{int(n)} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} GB"
+
+
+def attachment_line(client: Client, att: dict) -> str:
+    url = att.get("url") or ""
+    if url.startswith("/"):
+        url = client.base_url + url
+    return f"📎 {att.get('filename') or att.get('id')} ({att.get('content_type', '?')}, {human_size(att.get('size'))}) {url}"
+
+
+def message_attachments(message: dict) -> list:
+    return [a for a in (message.get("attachments") or []) if isinstance(a, dict)]
+
+
+def attachment_hint(message: dict) -> str:
+    """Sentence telling an agent how to get at the files on a reply."""
+    atts = message_attachments(message)
+    if not atts:
+        return ""
+    descs = []
+    for a in atts:
+        name = a.get("filename") or a.get("id")
+        descs.append(f"{name} ({a.get('content_type', '?')})")
+    first = atts[0]
+    first_name = os.path.basename(first.get("filename") or "attachment")
+    noun = "attachment" if len(atts) == 1 else "attachments"
+    return (f" The reply includes {len(atts)} {noun}: " + ", ".join(descs) +
+            f" — download with `finalechat fetch {first.get('id')} -o /tmp/{first_name}`"
+            + (" (one fetch per id)" if len(atts) > 1 else "") + " and read the file to view it.")
+
+
+def read_local_files(paths: list) -> list:
+    """Load files for upload as (filename, content_type, bytes), enforcing limits up front."""
+    if len(paths) > MAX_ATTACHMENTS:
+        raise CLIError(f"At most {MAX_ATTACHMENTS} files per message.")
+    files = []
+    for raw in paths:
+        path = os.path.expanduser(str(raw))
+        if not os.path.isfile(path):
+            raise CLIError(f"No such file: {path}")
+        size = os.path.getsize(path)
+        if size > MAX_ATTACHMENT_BYTES:
+            raise CLIError(f"{path} is {human_size(size)} ({size} bytes); attachments must be at most 10 MB ({MAX_ATTACHMENT_BYTES} bytes).")
+        if size == 0:
+            raise CLIError(f"{path} is empty.")
+        content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        with open(path, "rb") as fh:
+            files.append((os.path.basename(path), content_type, fh.read()))
+    return files
+
+
+def unique_path(path: str) -> str:
+    """Return `path`, or a numbered variant if it already exists."""
+    if not os.path.exists(path):
+        return path
+    stem, ext = os.path.splitext(path)
+    for i in range(1, 10_000):
+        candidate = f"{stem}-{i}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+    raise CLIError(f"Could not find a free filename near {path}")
+
+
+def save_attachment(client: Client, ref: str, out: str | None) -> str:
+    data, _content_type, filename = client.download_attachment(ref)
+    if out:
+        target = os.path.expanduser(out)
+        if os.path.isdir(target):
+            target = os.path.join(target, filename)
+    else:
+        target = os.path.join(os.getcwd(), os.path.basename(filename) or attachment_id(ref))
+    target = unique_path(target)
+    parent = os.path.dirname(target)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(target, "wb") as fh:
+        fh.write(data)
+    return target
 
 
 # --------------------------------------------------------------------------- #
@@ -615,17 +821,24 @@ def cmd_read(args) -> int:
         pad = " " * len(prefix)
         for line in lines[1:]:
             print(pad + line)
+        for att in message_attachments(m):
+            print(pad + attachment_line(client, att))
     return EXIT_OK
 
 
 def cmd_say(args) -> int:
     client = client_from_args(args)
+    files = read_local_files(args.file or [])
     if args.message and args.message != ["-"]:
         body = " ".join(args.message)
-    else:
+    elif args.message == ["-"] or not files:
+        # No text given: read it from stdin, as before attachments existed.
         body = read_stdin_text()
-    if not body.strip():
-        raise CLIError("Nothing to send. Pass the message as arguments or on stdin.")
+    else:
+        # Files without text: the message is the attachments themselves.
+        body = ""
+    if not body.strip() and not files:
+        raise CLIError("Nothing to send. Pass the message as arguments, on stdin, or attach a file with -f.")
     target = resolve_target(args.thread, args.title, args.agent)
     notify = None
     if args.notify is True:
@@ -633,13 +846,23 @@ def cmd_say(args) -> int:
     elif args.notify is False:
         notify = False
     resp = client.post_message(target.ref, body, important=args.important, notify=notify,
-                               fmt="text" if args.text else "markdown", title=target.title, agent=target.agent)
+                               fmt="text" if args.text else "markdown", title=target.title, agent=target.agent,
+                               files=files)
     if args.json:
         print_json(resp)
         return EXIT_OK
     thread = resp.get("thread") or {}
     message = resp.get("message") or {}
     print(f"sent · thread {thread.get('id')} · message {message.get('id')}")
+    for att in message_attachments(message):
+        print("  " + attachment_line(client, att))
+    return EXIT_OK
+
+
+def cmd_fetch(args) -> int:
+    client = client_from_args(args)
+    target = save_attachment(client, args.attachment, args.output)
+    print(target)
     return EXIT_OK
 
 
@@ -717,7 +940,11 @@ def cmd_wait(args) -> int:
     if args.json:
         print_json(message)
     else:
-        print(message.get("body", ""))
+        body = message.get("body", "")
+        if body:
+            print(body)
+        for att in message_attachments(message):
+            print(attachment_line(client, att))
     return EXIT_OK
 
 
@@ -1070,14 +1297,32 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
     if reply is None:
         return EXIT_OK
     body = str(reply.get("body") or "").strip()
-    if not body:
+    if not body and not message_attachments(reply):
         return EXIT_OK
+    if not body:
+        body = "(no text)"
     state["last_reply_id"] = reply.get("id")
     save_session_state(session_id, state)
-    output = {"decision": "block", "reason": f"The user replied from their phone via Finalechat: {body}"}
+    reason = f"The user replied from their phone via Finalechat: {body}" + attachment_hint(reply)
+    output = {"decision": "block", "reason": reason}
     sys.stdout.write(json.dumps(output) + "\n")
     sys.stdout.flush()
     return EXIT_OK
+
+
+def answer_attachment_hints(client: Client, ref: str, created: list) -> str:
+    """Files the user sent in the thread while answering (screenshots, logs)."""
+    try:
+        since = min(str(q.get("created_at") or "") for _item, q in created if q.get("created_at")) if created else ""
+        msgs = client.list_messages(ref, limit=20, sender="user").get("messages") or []
+    except (CLIError, ValueError):
+        return ""
+    hints = ""
+    for m in msgs:
+        if since and str(m.get("created_at") or "") < since:
+            continue
+        hints += attachment_hint(m)
+    return hints
 
 
 def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, agent: str) -> int:
@@ -1162,6 +1407,7 @@ def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, 
         parts.append(f"{label}: {answer_summary(question)}")
     reason = ("The user answered from their phone via Finalechat instead of the terminal. Answers: "
               + "; ".join(parts) + ". Use these answers and do not ask again.")
+    reason += answer_attachment_hints(client, ref, created)
     output = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                      "permissionDecisionReason": reason}}
     sys.stdout.write(json.dumps(output) + "\n")
@@ -1190,9 +1436,12 @@ SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 MCP_INSTRUCTIONS = (
     "Finalechat delivers messages to the human's phone and lets you ask them "
     "questions while they are away from the terminal. Use finalechat_send for "
-    "progress and results worth reading on a phone, finalechat_ask when you need "
-    "a decision (it blocks until they answer), and finalechat_wait_for_reply to "
-    "wait for their next message."
+    "progress and results worth reading on a phone (attach screenshots or files "
+    "with `attachments`), finalechat_ask when you need a decision (it blocks "
+    "until they answer), and finalechat_wait_for_reply to wait for their next "
+    "message. Replies can carry screenshots: image attachments arrive as image "
+    "content you can look at directly; other files can be saved with "
+    "finalechat_fetch_attachment."
 )
 
 
@@ -1213,9 +1462,15 @@ def mcp_tools() -> list[dict]:
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "message": {"type": "string", "description": "Markdown message body."},
+                    "message": {"type": "string", "description": "Markdown message body (may be empty when attachments are given)."},
                     "important": {"type": "boolean", "description": "Push a notification to the phone.",
                                   "default": False},
+                    "attachments": {
+                        "type": "array",
+                        "description": "Absolute paths of local files to attach (screenshots, logs); up to 8, 10 MiB each.",
+                        "items": {"type": "string"},
+                        "maxItems": MAX_ATTACHMENTS,
+                    },
                     "thread": thread_prop,
                     "title": {"type": "string", "description": "Title to give the thread if it is created."},
                 },
@@ -1273,13 +1528,45 @@ def mcp_tools() -> list[dict]:
         },
         {
             "name": "finalechat_read",
-            "description": "Read the most recent messages in a Finalechat thread.",
+            "description": (
+                "Read the most recent messages in a Finalechat thread. Image attachments the user sent "
+                "are returned as images you can look at; other files are listed with their ids."
+            ),
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "thread": thread_prop,
                     "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 200},
                 },
+            },
+        },
+        {
+            "name": "finalechat_view_attachment",
+            "description": (
+                "Look at an image the user attached (a screenshot, a photo). Returns the image itself. "
+                "Use finalechat_fetch_attachment for non-image files."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "attachment": {"type": "string", "description": "Attachment id or its Finalechat URL."},
+                },
+                "required": ["attachment"],
+            },
+        },
+        {
+            "name": "finalechat_fetch_attachment",
+            "description": (
+                "Download an attachment the user sent to a local file and return its path, so you can "
+                "read it with your own tools."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "attachment": {"type": "string", "description": "Attachment id or its Finalechat URL."},
+                    "path": {"type": "string", "description": "Where to save it (default: /tmp/finalechat/<filename>)."},
+                },
+                "required": ["attachment"],
             },
         },
     ]
@@ -1293,16 +1580,56 @@ def mcp_target(arguments: dict) -> ThreadTarget:
                           fallback_agent="MCP agent", fallback_prefix="mcp")
 
 
-def mcp_call(client: Client, name: str, arguments: dict) -> str:
+def mcp_image_block(client: Client, att: dict) -> dict | None:
+    """An MCP image content block for an image attachment, thumbnail if the original is large."""
+    if att.get("kind") != "image" or not att.get("id"):
+        return None
+    use_thumb = int(att.get("size") or 0) > MCP_IMAGE_INLINE_LIMIT and bool(att.get("thumb_url"))
+    data, content_type, _name = client.download_attachment(str(att["id"]), thumb=use_thumb)
+    if not content_type.startswith("image/"):
+        return None
+    return {"type": "image", "data": base64.b64encode(data).decode("ascii"), "mimeType": content_type}
+
+
+def mcp_attachment_content(client: Client, messages: list) -> tuple[list, list]:
+    """(text lines describing non-image files, image blocks) for a list of messages."""
+    lines: list = []
+    images: list = []
+    for m in messages:
+        for att in message_attachments(m):
+            if att.get("kind") == "image" and len(images) < MCP_MAX_IMAGES:
+                try:
+                    block = mcp_image_block(client, att)
+                except CLIError as err:
+                    block = None
+                    lines.append(f"(could not load image {att.get('filename')}: {err})")
+                if block is not None:
+                    images.append(block)
+                    lines.append(f"[image attached: {att.get('filename')} {att.get('width')}x{att.get('height')}, id {att.get('id')}]")
+                    continue
+            lines.append(f"[attachment: {att.get('filename')} ({att.get('content_type')}, {human_size(att.get('size'))}), "
+                         f"id {att.get('id')} — use finalechat_fetch_attachment to save it]")
+    return lines, images
+
+
+def mcp_call(client: Client, name: str, arguments: dict):
+    """Return a string or a list of MCP content blocks."""
     if name == "finalechat_send":
         message = str(arguments.get("message") or "").strip()
-        if not message:
-            raise CLIError("message is required")
+        paths = arguments.get("attachments") or []
+        if not isinstance(paths, list):
+            raise CLIError("attachments must be a list of file paths")
+        files = read_local_files([str(p) for p in paths])
+        if not message and not files:
+            raise CLIError("message is required unless attachments are given")
         target = mcp_target(arguments)
         resp = client.post_message(target.ref, message, important=bool(arguments.get("important")),
-                                   title=target.title, agent=target.agent)
+                                   title=target.title, agent=target.agent, files=files)
         thread = resp.get("thread") or {}
-        return f"Sent to thread {thread.get('id')} ({thread.get('title') or 'untitled'})"
+        out = f"Sent to thread {thread.get('id')} ({thread.get('title') or 'untitled'})"
+        for att in message_attachments(resp.get("message") or {}):
+            out += "\n" + attachment_line(client, att)
+        return out
 
     if name == "finalechat_ask":
         prompt = str(arguments.get("prompt") or "").strip()
@@ -1346,7 +1673,11 @@ def mcp_call(client: Client, name: str, arguments: dict) -> str:
         reply = wait_for_reply(client, target.ref, after, timeout)
         if reply is None:
             return f"No reply within {timeout} seconds."
-        return f"Reply from the user: {reply.get('body', '')}"
+        text = f"Reply from the user: {reply.get('body', '') or '(no text)'}"
+        extra, images = mcp_attachment_content(client, [reply])
+        if extra:
+            text += "\n" + "\n".join(extra)
+        return [{"type": "text", "text": text}] + images
 
     if name == "finalechat_read":
         limit = int(arguments.get("limit") or 20)
@@ -1355,10 +1686,42 @@ def mcp_call(client: Client, name: str, arguments: dict) -> str:
         if not msgs:
             return "(no messages yet)"
         lines = []
+        images: list = []
         for m in msgs:
             stamp = (m.get("created_at") or "")[:19].replace("T", " ")
             lines.append(f"[{stamp}] {m.get('sender')}: {m.get('body', '')}")
-        return "\n".join(lines)
+            extra, blocks = mcp_attachment_content(client, [m]) if message_attachments(m) else ([], [])
+            for line in extra:
+                lines.append("    " + line)
+            for block in blocks:
+                if len(images) < MCP_MAX_IMAGES:
+                    images.append(block)
+        return [{"type": "text", "text": "\n".join(lines)}] + images
+
+    if name == "finalechat_view_attachment":
+        ref = str(arguments.get("attachment") or "").strip()
+        if not ref:
+            raise CLIError("attachment is required")
+        aid = attachment_id(ref)
+        # Try the original first; fall back to the thumbnail for large images.
+        data, content_type, filename = client.download_attachment(aid)
+        if not content_type.startswith("image/"):
+            raise CLIError(f"{filename} is {content_type}, not an image; use finalechat_fetch_attachment to save it")
+        if len(data) > MCP_IMAGE_INLINE_LIMIT:
+            data, content_type, _ = client.download_attachment(aid, thumb=True)
+        return [{"type": "text", "text": f"{filename} ({content_type}, {human_size(len(data))})"},
+                {"type": "image", "data": base64.b64encode(data).decode("ascii"), "mimeType": content_type}]
+
+    if name == "finalechat_fetch_attachment":
+        ref = str(arguments.get("attachment") or "").strip()
+        if not ref:
+            raise CLIError("attachment is required")
+        out = arguments.get("path")
+        if not out:
+            out = os.path.join("/tmp", "finalechat")
+            os.makedirs(out, exist_ok=True)
+        saved = save_attachment(client, ref, str(out))
+        return f"Saved to {saved}"
 
     raise CLIError(f"Unknown tool: {name}")
 
@@ -1420,8 +1783,9 @@ def mcp_serve() -> int:
                 if not isinstance(arguments, dict):
                     arguments = {}
                 try:
-                    text = mcp_call(client, name, arguments)
-                    reply(req_id, {"content": [{"type": "text", "text": text}], "isError": False})
+                    result = mcp_call(client, name, arguments)
+                    content = [{"type": "text", "text": result}] if isinstance(result, str) else result
+                    reply(req_id, {"content": content, "isError": False})
                 except CLIError as err:
                     reply(req_id, {"content": [{"type": "text", "text": f"Finalechat error: {err}"}],
                                    "isError": True})
@@ -1472,6 +1836,8 @@ def build_parser() -> argparse.ArgumentParser:
             "  finalechat login                       sign in with a token from Settings → Agents\n"
             "  finalechat say \"Tests are green\"        post a message to this directory's thread\n"
             "  finalechat say --important \"Found it!\"  post and push a notification\n"
+            "  finalechat say -f shot.png             attach a screenshot\n"
+            "  finalechat fetch <id> -o /tmp/x.png    download a file the human sent\n"
             "  finalechat ask \"Deploy?\" -o Yes -o No   ask, block until answered, print the answer\n"
             "  finalechat wait                        block until the human replies\n"
             "  finalechat install claude-code         mirror Claude Code sessions to your phone\n"
@@ -1516,11 +1882,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="print JSON")
     p.set_defaults(func=cmd_read)
 
-    p = sub.add_parser("say", help="send a message", formatter_class=Formatter,
+    p = sub.add_parser("say", help="send a message (optionally with files)", formatter_class=Formatter,
                        description="Send a message to the human. Markdown by default. Reads stdin when no "
-                                   "message is given (or when MESSAGE is -).")
+                                   "message is given (or when MESSAGE is -). Attach screenshots or files "
+                                   "with -f.",
+                       epilog="examples:\n  finalechat say \"Deployed v2\" --important\n"
+                              "  finalechat say \"Staging after the deploy\" -f /tmp/staging.png")
     p.add_argument("message", nargs="*", metavar="MESSAGE", help="message text (joined with spaces)")
     add_thread_args(p)
+    p.add_argument("-f", "--file", action="append", metavar="PATH",
+                   help="attach a file (repeatable, up to 8, 10 MB each); the message text becomes optional")
     p.add_argument("--important", action="store_true", help="mark important and push a notification")
     notify = p.add_mutually_exclusive_group()
     notify.add_argument("--notify", dest="notify", action="store_true", default=None,
@@ -1548,6 +1919,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_thread_args(p)
     p.add_argument("--json", action="store_true", help="print the question as JSON")
     p.set_defaults(func=cmd_ask)
+
+    p = sub.add_parser("fetch", help="download an attachment the human sent", formatter_class=Formatter,
+                       description="Download an attachment (by id or Finalechat URL) to a local file and print "
+                                   "the path. Existing files are never overwritten; a numbered name is used.")
+    p.add_argument("attachment", metavar="ATTACHMENT", help="attachment id or URL (as printed by read/wait)")
+    p.add_argument("-o", "--output", metavar="PATH", help="file or directory to save into (default: ./<filename>)")
+    p.set_defaults(func=cmd_fetch)
 
     p = sub.add_parser("wait-answer", help="resume waiting for a question's answer", formatter_class=Formatter)
     p.add_argument("question_id", metavar="QUESTION_ID")
@@ -1591,7 +1969,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mcp", help="run the MCP server over stdio", formatter_class=Formatter,
                        description="Model Context Protocol server exposing finalechat_send, finalechat_ask, "
-                                   "finalechat_wait_for_reply and finalechat_read.")
+                                   "finalechat_wait_for_reply, finalechat_read, finalechat_view_attachment "
+                                   "and finalechat_fetch_attachment.")
     p.set_defaults(func=cmd_mcp)
 
     return parser

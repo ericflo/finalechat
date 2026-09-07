@@ -39,6 +39,10 @@
       "description": "Markdown or text messages in a thread."
     },
     {
+      "name": "Attachments",
+      "description": "Files and screenshots carried by messages; bytes in object storage, metadata in the API."
+    },
+    {
       "name": "Questions",
       "description": "Multiple-choice and free-form questions the user answers on their phone."
     },
@@ -1457,7 +1461,8 @@
                       "format": "markdown",
                       "importance": "important",
                       "meta": {},
-                      "created_at": "2026-09-07T05:38:55.033453Z"
+                      "created_at": "2026-09-07T05:38:55.033453Z",
+                      "attachments": []
                     }
                   ]
                 }
@@ -1527,8 +1532,19 @@
               "schema": {
                 "$ref": "#/components/schemas/MessageCreateRequest"
               }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/MessageCreateForm"
+              },
+              "encoding": {
+                "file": {
+                  "contentType": "*/*"
+                }
+              }
             }
-          }
+          },
+          "description": "JSON, or multipart/form-data to upload and attach files in the same request."
         },
         "responses": {
           "201": {
@@ -1559,7 +1575,8 @@
                     "format": "markdown",
                     "importance": "important",
                     "meta": {},
-                    "created_at": "2026-09-07T05:38:55.033453Z"
+                    "created_at": "2026-09-07T05:38:55.033453Z",
+                    "attachments": []
                   },
                   "thread": {
                     "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
@@ -1626,6 +1643,26 @@
           },
           "422": {
             "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Object storage failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Attachments are not configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -1936,7 +1973,8 @@
                     "format": "markdown",
                     "importance": "important",
                     "meta": {},
-                    "created_at": "2026-09-07T05:38:55.033453Z"
+                    "created_at": "2026-09-07T05:38:55.033453Z",
+                    "attachments": []
                   }
                 }
               }
@@ -2282,7 +2320,8 @@
                       "kind": "answer",
                       "question_id": "01a07a60-6dc3-7cc4-ae8c-f32504d5a4b4"
                     },
-                    "created_at": "2026-09-07T05:41:12.104547Z"
+                    "created_at": "2026-09-07T05:41:12.104547Z",
+                    "attachments": []
                   },
                   "thread": {
                     "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
@@ -2752,6 +2791,404 @@
           }
         }
       }
+    },
+    "/threads/{ref}/attachments": {
+      "post": {
+        "tags": [
+          "Attachments"
+        ],
+        "summary": "Upload files to attach to a later message",
+        "description": "Creates a missing ext: thread on demand. Send multipart/form-data with one or more file parts (any field name; at most 8), or a raw body whose Content-Type is the file type with the filename in X-Filename or ?filename=. Images (png, jpeg, gif, webp) get dimensions and a JPEG thumbnail. Uploads not attached to a message within 24 hours are deleted.",
+        "parameters": [
+          {
+            "name": "ref",
+            "in": "path",
+            "required": true,
+            "description": "Thread UUID or `ext:<external_id>`.",
+            "schema": {
+              "type": "string"
+            },
+            "examples": {
+              "uuid": {
+                "value": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+              },
+              "external": {
+                "value": "ext:claude-code:7f3a9c2e"
+              }
+            }
+          },
+          {
+            "name": "filename",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filename for a raw-body upload (alternative to X-Filename)."
+          },
+          {
+            "name": "X-Filename",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filename for a raw-body upload."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "maxItems": 8
+                  }
+                }
+              }
+            },
+            "*/*": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              },
+              "example": "raw file bytes; Content-Type names the file type"
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The pending attachments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "attachments",
+                    "thread_id"
+                  ],
+                  "properties": {
+                    "attachments": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Attachment"
+                      }
+                    },
+                    "thread_id": {
+                      "type": "string",
+                      "format": "uuid",
+                      "description": "UUID."
+                    }
+                  }
+                },
+                "example": {
+                  "attachments": [
+                    {
+                      "id": "01a07ab9-7a53-7da4-81ad-3f7bad1f53db",
+                      "thread_id": "01a07ab9-312a-776f-ae4b-48c3cba6530c",
+                      "message_id": null,
+                      "kind": "file",
+                      "content_type": "text/plain",
+                      "filename": "notes.txt",
+                      "size": 23,
+                      "created_at": "2026-09-07T07:16:10.963984Z",
+                      "url": "/api/v1/attachments/01a07ab9-7a53-7da4-81ad-3f7bad1f53db"
+                    }
+                  ],
+                  "thread_id": "01a07ab9-312a-776f-ae4b-48c3cba6530c"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "A file is over 10 MiB or the request is too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Empty file, undecodable image, or too many files",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Object storage failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Attachments are not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/attachments/{id}": {
+      "get": {
+        "tags": [
+          "Attachments"
+        ],
+        "summary": "Download an attachment",
+        "description": "Streams the original bytes with the stored Content-Type. Bearer or session auth.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Attachment id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "inline for images, PDFs and text; attachment otherwise; carries the filename."
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "private, max-age=31536000, immutable"
+              }
+            },
+            "content": {
+              "*/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Object storage failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Attachments are not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "tags": [
+          "Attachments"
+        ],
+        "summary": "Attachment headers only",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Attachment id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Headers as for GET, no body."
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/attachments/{id}/thumb": {
+      "get": {
+        "tags": [
+          "Attachments"
+        ],
+        "summary": "Download an image's thumbnail",
+        "description": "JPEG thumbnail with the longest side at most 640 pixels. For a non-image attachment the original bytes are returned.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Attachment id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The thumbnail.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "inline for images, PDFs and text; attachment otherwise; carries the filename."
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "private, max-age=31536000, immutable"
+              }
+            },
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Object storage failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Attachments are not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2805,7 +3242,9 @@
                   "rate_limited",
                   "push_disabled",
                   "internal_error",
-                  "method_not_allowed"
+                  "method_not_allowed",
+                  "storage_unavailable",
+                  "attachments_disabled"
                 ]
               },
               "message": {
@@ -3081,7 +3520,8 @@
           "format",
           "importance",
           "meta",
-          "created_at"
+          "created_at",
+          "attachments"
         ],
         "properties": {
           "id": {
@@ -3126,6 +3566,13 @@
             "type": "string",
             "format": "date-time",
             "description": "UTC RFC 3339 timestamp."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            },
+            "description": "Files carried by the message, in upload order."
           }
         },
         "example": {
@@ -3136,7 +3583,8 @@
           "format": "markdown",
           "importance": "important",
           "meta": {},
-          "created_at": "2026-09-07T05:38:55.033453Z"
+          "created_at": "2026-09-07T05:38:55.033453Z",
+          "attachments": []
         }
       },
       "QuestionOption": {
@@ -3382,13 +3830,11 @@
       },
       "MessageCreateRequest": {
         "type": "object",
-        "required": [
-          "body"
-        ],
+        "required": [],
         "properties": {
           "body": {
             "type": "string",
-            "description": "Required, non-blank, valid UTF-8, at most 256 KiB."
+            "description": "Markdown by default; valid UTF-8, at most 256 KiB. Required unless attachments are present."
           },
           "format": {
             "type": "string",
@@ -3429,6 +3875,16 @@
           "agent": {
             "type": "string",
             "description": "Applied only when this request creates the ext: thread."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "maxItems": 8,
+            "description": "Ids of pending uploads from the same thread (POST /threads/{ref}/attachments). An unknown, foreign or already attached id fails with 422."
           }
         },
         "example": {
@@ -3436,7 +3892,8 @@
           "agent": "Claude Code",
           "body": "Deployed **v1.2.0** to staging.\n\n- 42 tests passed\n- bundle 118 KB",
           "importance": "important"
-        }
+        },
+        "description": "Send `body` and/or `attachments`. At least one is required."
       },
       "QuestionCreateRequest": {
         "type": "object",
@@ -3599,7 +4056,8 @@
           "authenticated",
           "signup",
           "push_enabled",
-          "version"
+          "version",
+          "attachments_enabled"
         ],
         "properties": {
           "authenticated": {
@@ -3621,13 +4079,18 @@
           },
           "user": {
             "$ref": "#/components/schemas/User"
+          },
+          "attachments_enabled": {
+            "type": "boolean",
+            "description": "Whether files can be uploaded."
           }
         },
         "example": {
           "authenticated": false,
           "push_enabled": true,
           "signup": "closed",
-          "version": "dev"
+          "version": "dev",
+          "attachments_enabled": true
         }
       },
       "Me": {
@@ -3638,7 +4101,8 @@
           "counts",
           "push_enabled",
           "user",
-          "version"
+          "version",
+          "attachments_enabled"
         ],
         "properties": {
           "auth": {
@@ -3666,6 +4130,10 @@
           },
           "version": {
             "type": "string"
+          },
+          "attachments_enabled": {
+            "type": "boolean",
+            "description": "Whether files can be uploaded."
           }
         },
         "example": {
@@ -3693,7 +4161,8 @@
             },
             "created_at": "2026-09-07T05:32:42.438822Z"
           },
-          "version": "dev"
+          "version": "dev",
+          "attachments_enabled": true
         }
       },
       "PushSubscriptionRequest": {
@@ -3724,6 +4193,165 @@
           }
         },
         "description": "A browser PushSubscription. May also be sent wrapped as {\"subscription\": {...}}."
+      },
+      "Attachment": {
+        "type": "object",
+        "required": [
+          "id",
+          "thread_id",
+          "message_id",
+          "kind",
+          "content_type",
+          "filename",
+          "size",
+          "created_at",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID."
+          },
+          "thread_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID."
+          },
+          "message_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Null until the upload is attached to a message."
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image",
+              "file"
+            ],
+            "description": "image for png, jpeg, gif and webp (sniffed); file otherwise."
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string",
+            "description": "Sanitised original filename, at most 200 characters."
+          },
+          "size": {
+            "type": "integer",
+            "description": "Bytes."
+          },
+          "width": {
+            "type": "integer",
+            "description": "Images only."
+          },
+          "height": {
+            "type": "integer",
+            "description": "Images only."
+          },
+          "thumb_width": {
+            "type": "integer",
+            "description": "Images only; longest side at most 640."
+          },
+          "thumb_height": {
+            "type": "integer",
+            "description": "Images only."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "UTC RFC 3339 timestamp."
+          },
+          "url": {
+            "type": "string",
+            "description": "Download path relative to the base URL, e.g. /api/v1/attachments/{id}."
+          },
+          "thumb_url": {
+            "type": "string",
+            "description": "JPEG thumbnail path; images only."
+          }
+        },
+        "example": {
+          "id": "01a07ab9-3132-7b58-85f0-5c74ef773395",
+          "thread_id": "01a07ab9-312a-776f-ae4b-48c3cba6530c",
+          "message_id": "01a07ab9-314c-72db-9505-30a34c350400",
+          "kind": "image",
+          "content_type": "image/png",
+          "filename": "shot.png",
+          "size": 168591,
+          "width": 900,
+          "height": 300,
+          "thumb_width": 640,
+          "thumb_height": 213,
+          "created_at": "2026-09-07T07:15:52.264313Z",
+          "url": "/api/v1/attachments/01a07ab9-3132-7b58-85f0-5c74ef773395",
+          "thumb_url": "/api/v1/attachments/01a07ab9-3132-7b58-85f0-5c74ef773395/thumb"
+        }
+      },
+      "MessageCreateForm": {
+        "type": "object",
+        "description": "multipart/form-data variant of MessageCreateRequest: the same fields as form values plus file parts, uploaded and attached in the same request.",
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "markdown",
+              "text"
+            ]
+          },
+          "importance": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "important"
+            ]
+          },
+          "sender": {
+            "type": "string",
+            "enum": [
+              "agent",
+              "user",
+              "system"
+            ]
+          },
+          "notify": {
+            "type": "string",
+            "enum": [
+              "true",
+              "false"
+            ]
+          },
+          "meta": {
+            "type": "string",
+            "description": "JSON object as a string."
+          },
+          "title": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "attachments": {
+            "type": "string",
+            "description": "Comma-separated ids of pending uploads."
+          },
+          "file": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            },
+            "maxItems": 8,
+            "description": "File parts (any field name works). At most 10 MiB each, 8 per message including pending ids."
+          }
+        }
       }
     }
   }
