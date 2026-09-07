@@ -1,0 +1,25 @@
+# Build output
+/bin/
+/dist/
+/internal/webassets/dist/*
+!/internal/webassets/dist/.gitkeep
+/web/node_modules/
+/web/dist/
+/web/.vite/
+
+# Local environment and secrets
+.env
+.env.*
+*.agekey
+*.pem
+*.key
+/.finalechat/
+
+# Editor and OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Go
+/coverage.out
