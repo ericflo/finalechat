@@ -12,6 +12,33 @@ ENV FINALECHAT_VERSION=$VERSION
 # Type checks for the app and the service worker gate the bundle.
 RUN npm run build
 
+# ---- Integration suite -----------------------------------------------------
+# The Go suite exercises real SQL, LISTEN/NOTIFY fan-out and long-polls, so it
+# runs against the same PostgreSQL major as production. The Go toolchain is
+# copied from the official image into the postgres image; both are Alpine.
+FROM golang:1.26-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS toolchain
+FROM postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685 AS test
+COPY --from=toolchain /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:$PATH GOPATH=/go GOFLAGS=-mod=readonly CGO_ENABLED=0
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN --mount=type=cache,id=finalechat-go-mod,target=/go/pkg/mod,sharing=locked \
+    go mod download
+COPY . ./
+COPY --from=web /src/internal/webassets/dist ./internal/webassets/dist
+RUN --mount=type=cache,id=finalechat-go-mod,target=/go/pkg/mod,sharing=locked \
+    --mount=type=cache,id=finalechat-go-build,target=/root/.cache/go-build,sharing=locked \
+    set -eu \
+    && mkdir -p /tmp/pg && chown postgres:postgres /tmp/pg \
+    && gosu postgres initdb -D /tmp/pg --auth=trust >/dev/null \
+    && gosu postgres pg_ctl -D /tmp/pg -o "-k /tmp -p 5432 -c listen_addresses=127.0.0.1" -l /tmp/pg.log -w start >/dev/null \
+    && gosu postgres createdb -h 127.0.0.1 finalechat_test \
+    && test -z "$(gofmt -l cmd internal assets.go)" \
+    && go vet ./... \
+    && FINALECHAT_TEST_DATABASE_URL='postgres://postgres@127.0.0.1:5432/finalechat_test?sslmode=disable' go test -count=1 ./... \
+    && gosu postgres pg_ctl -D /tmp/pg -w stop >/dev/null \
+    && date -u +%Y-%m-%dT%H:%M:%SZ >/tmp/tests-passed
+
 # ---- Server ----------------------------------------------------------------
 FROM golang:1.26-bookworm@sha256:9fdc884aacc3bec89b20ffc69f4bb369c78210e3e4f600387b5128b12c199f81 AS build
 WORKDIR /src
@@ -21,15 +48,13 @@ RUN --mount=type=cache,id=finalechat-go-mod,target=/go/pkg/mod,sharing=locked \
     go mod download
 COPY . ./
 COPY --from=web /src/internal/webassets/dist ./internal/webassets/dist
+# The binary is only built once the suite has passed in the same graph, so a
+# published image can never skip its tests.
+COPY --from=test /tmp/tests-passed /tmp/tests-passed
 ARG VERSION=dev
-# vet and the database-free unit tests run in the same graph as the compile so
-# a publish can never skip them. The full suite (against PostgreSQL) runs in the
-# CI test step before this image is built.
 RUN --mount=type=cache,id=finalechat-go-mod,target=/go/pkg/mod,sharing=locked \
-    --mount=type=cache,id=finalechat-go-build,target=/root/.cache/go-build,sharing=locked \
-    go vet ./... \
-    && go test ./... \
-    && go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/finalechat ./cmd/finalechat
+    --mount=type=cache,id=finalechat-go-build-bookworm,target=/root/.cache/go-build,sharing=locked \
+    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/finalechat ./cmd/finalechat
 
 # ---- Runtime ---------------------------------------------------------------
 FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab

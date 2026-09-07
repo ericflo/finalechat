@@ -8,16 +8,11 @@ steps:
     commands:
       - export HOME=/tmp/finalechat-home GOCACHE=/tmp/finalechat-go-build GOMODCACHE=/tmp/finalechat-go-mod GOFLAGS=-buildvcs=false
       - mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE"
-      # A throwaway PostgreSQL inside the step: the suite exercises real SQL,
-      # LISTEN/NOTIFY fan-out and long-polls rather than a fake store.
-      - apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends postgresql >/dev/null
-      - export PGBIN="$(ls -d /usr/lib/postgresql/*/bin | head -1)" PGDATA=/tmp/finalechat-pg
-      - "$PGBIN/initdb" -D "$PGDATA" -U finalechat --auth=trust >/dev/null
-      - "$PGBIN/pg_ctl" -D "$PGDATA" -o "-k /tmp -p 54329 -c listen_addresses=127.0.0.1" -l /tmp/finalechat-pg.log start >/dev/null
-      - "$PGBIN/createdb" -h 127.0.0.1 -p 54329 -U finalechat finalechat_test
-      - export FINALECHAT_TEST_DATABASE_URL="postgres://finalechat@127.0.0.1:54329/finalechat_test?sslmode=disable"
       - test -z "$(gofmt -l cmd internal assets.go)" || { gofmt -l cmd internal assets.go; echo 'gofmt: files need formatting' >&2; exit 1; }
       - go vet ./...
+      - go build ./...
+      # Database-free unit tests here; the integration suite against PostgreSQL
+      # runs in the Dockerfile's test stage, gating the published image.
       - go test -count=1 ./...
     backend_options:
       kubernetes:
