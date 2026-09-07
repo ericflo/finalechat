@@ -6,6 +6,11 @@ use. Key facts for working in this repo:
 - Go server (`cmd/finalechat`, `internal/`), PostgreSQL via pgx, no ORM; every
   SQL statement lives in `internal/store`. Schema changes are new numbered
   files in `internal/db/migrations/`; never edit an applied migration.
+- Attachment bytes never touch PostgreSQL: `internal/blob` (B2 native API,
+  v4 endpoints; bucket-scoped keys are only accepted by v4) stores objects
+  under `a/<attachment id>/…`; the `attachments` table holds metadata and
+  object keys. Tests use the in-memory store; `internal/blob/b2_test.go` runs
+  live when `FINALECHAT_B2_TEST_*` is set.
 - Real-time fan-out uses PostgreSQL NOTIFY (`internal/bus`); handlers publish
   after their transaction commits. Long-poll handlers subscribe *before* they
   query so nothing is missed.

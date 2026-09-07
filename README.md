@@ -10,6 +10,10 @@ Questions and important messages arrive as push notifications.
 - Markdown messages, `important` flag, per-thread mute, archive.
 - Questions with options, descriptions, multi-select and free text; the agent
   long-polls for the answer.
+- Screenshots and files on messages in both directions (up to 8 per
+  message, 10 MiB each), stored in a private Backblaze B2 bucket with
+  metadata in PostgreSQL; agents can fetch what you send and MCP tools hand
+  images to the model directly.
 - **Remote mode**: a switch on your phone that makes Claude Code wait for your
   phone replies instead of the terminal.
 - Real-time updates over server-sent events; Web Push with VAPID; installable
@@ -31,6 +35,8 @@ Production: <https://www.finalechat.com>. Agents start at
 | `internal/store` | PostgreSQL queries and types |
 | `internal/bus` | LISTEN/NOTIFY event fan-out across replicas |
 | `internal/push` | Web Push sender |
+| `internal/blob` | Attachment bytes: Backblaze B2 native API client and an in-memory store |
+| `internal/imaging` | Image decoding and thumbnails |
 | `internal/db` | Pool and embedded migrations |
 | `web/` | Vite + React PWA (built into `internal/webassets/dist`) |
 | `cli/finalechat` | CLI, Claude Code hook handler, MCP server (Python, stdlib) |
@@ -47,8 +53,10 @@ make test            # Go integration suite against finalechat_test, web typeche
 ```
 
 The first account to register becomes the owner; registration then closes
-unless `FINALECHAT_INVITE_CODE` is set. Generate push keys once with
-`bin/finalechat vapid` and put them in the environment.
+unless `FINALECHAT_INVITE_CODE` is set (when it is set, even the first
+account needs it). Generate push keys once with `bin/finalechat vapid` and
+put them in the environment. Set `FINALECHAT_BLOB_STORE=memory` locally to
+try attachments without B2.
 
 ### Configuration
 
@@ -60,7 +68,9 @@ unless `FINALECHAT_INVITE_CODE` is set. Generate push keys once with
 | `FINALECHAT_CANONICAL_HOST` / `FINALECHAT_REDIRECT_HOSTS` | unset | Redirect browser navigations on alias hosts to the canonical one |
 | `FINALECHAT_VAPID_PUBLIC_KEY` / `FINALECHAT_VAPID_PRIVATE_KEY` | unset | Web Push keys; push is disabled without them |
 | `FINALECHAT_VAPID_SUBJECT` | `mailto:hello@finalechat.com` | Contact sent to push services |
-| `FINALECHAT_INVITE_CODE` | unset | Allows further registrations after the first account |
+| `FINALECHAT_INVITE_CODE` | unset | Gates registration (including the first account) behind a code |
+| `FINALECHAT_B2_KEY_ID` / `FINALECHAT_B2_KEY` / `FINALECHAT_B2_BUCKET` | unset | Backblaze B2 bucket-scoped key for attachments; attachments are disabled without them |
+| `FINALECHAT_BLOB_STORE` | `b2` when keys are set, else `disabled` | `memory` keeps attachments in process memory for local development |
 | `FINALECHAT_SECURE_COOKIES` | `true` | Set `false` for plain-HTTP development |
 | `FINALECHAT_TRUST_PROXY` | `true` | Honour `X-Forwarded-For` |
 | `FINALECHAT_SESSION_TTL` | `2160h` | Sliding browser session lifetime |
