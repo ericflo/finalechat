@@ -1588,6 +1588,15 @@
               "maximum": 600
             },
             "description": "Seconds to hold the request open for a message newer than `after`. Clamped to 600."
+          },
+          {
+            "name": "after_time",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "description": "Return messages created after this instant (ascending); used with wait when there is no message id to anchor on. Take it from a previous response's waited_from."
           }
         ],
         "responses": {
@@ -1614,6 +1623,11 @@
                     },
                     "timed_out": {
                       "type": "boolean"
+                    },
+                    "waited_from": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Present on anchorless waits: the instant the server started watching, by its own clock. Pass it back as after_time."
                     }
                   },
                   "required": [

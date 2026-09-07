@@ -330,9 +330,23 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if wait > 0 && page.After == nil {
-		// No anchor: wait for anything that arrives from now on.
-		now := time.Now()
+	if v := q.Get("after_time"); v != "" && page.After == nil {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			writeError(w, errValidation("after_time must be an RFC 3339 timestamp."))
+			return
+		}
+		page.AfterTime = &t
+		page.Before = nil
+	}
+	if wait > 0 && page.After == nil && page.AfterTime == nil {
+		// No anchor: wait for anything that arrives from now on, by the
+		// database's clock so no skew with created_at can hide a message.
+		now, err := s.store.Now(r.Context())
+		if err != nil {
+			writeError(w, err)
+			return
+		}
 		page.AfterTime = &now
 		page.Before = nil
 	}
@@ -354,13 +368,23 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(msgs) > 0 || wait == 0 || time.Now().After(deadline) {
 			decorate(msgs...)
-			writeJSON(w, http.StatusOK, map[string]any{"messages": msgs, "has_more": hasMore, "thread_id": thread.ID})
+			resp := map[string]any{"messages": msgs, "has_more": hasMore, "thread_id": thread.ID}
+			if page.AfterTime != nil {
+				resp["waited_from"] = page.AfterTime.UTC()
+			}
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 		if !s.waitForEvent(r.Context(), events, deadline, func(ev bus.Event) bool {
 			return ev.Type == bus.MessageCreated && ev.ThreadID == thread.ID.String()
 		}) {
-			writeJSON(w, http.StatusOK, map[string]any{"messages": []any{}, "has_more": false, "thread_id": thread.ID, "timed_out": true})
+			resp := map[string]any{"messages": []any{}, "has_more": false, "thread_id": thread.ID, "timed_out": true}
+			if page.AfterTime != nil {
+				// Pass this back as after_time so the next wait continues from
+				// the same instant instead of re-anchoring on "now".
+				resp["waited_from"] = page.AfterTime.UTC()
+			}
+			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 	}

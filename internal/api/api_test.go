@@ -15,7 +15,9 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -1118,5 +1120,95 @@ func TestTokenWritesAreRateLimited(t *testing.T) {
 	res.Body.Close()
 	if res.Header.Get("Retry-After") == "" || res.Header.Get("X-Request-Id") == "" {
 		t.Fatalf("expected Retry-After and X-Request-Id headers, got %v", res.Header)
+	}
+}
+
+func TestSearchAndAnchorlessWait(t *testing.T) {
+	b, a := setup(t)
+	a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "search:100%", "title": "progress 100% done"})
+	a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "search:other", "title": "my_project"})
+	// LIKE metacharacters in the query are literal.
+	hits := b.must(http.StatusOK, "GET", "/api/v1/threads?q=100%25", nil)["threads"].([]any)
+	if len(hits) != 1 || str(hits[0].(map[string]any), "title") != "progress 100% done" {
+		t.Fatalf("expected the literal match only, got %v", hits)
+	}
+	// external_id is searchable.
+	if n := len(b.must(http.StatusOK, "GET", "/api/v1/threads?q=search%3Aother", nil)["threads"].([]any)); n != 1 {
+		t.Fatalf("expected one hit on external_id, got %d", n)
+	}
+
+	// An anchorless wait reports where it started watching, and a later wait
+	// anchored there sees a message posted in between.
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "anchor:1"}), "thread"), "id")
+	out := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages?sender=user&wait=1", nil)
+	from := str(out, "waited_from")
+	if out["timed_out"] != true || from == "" {
+		t.Fatalf("expected a timed-out wait with waited_from, got %v", out)
+	}
+	b.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "slipped in between"})
+	out = a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages?sender=user&wait=1&after_time="+url.QueryEscape(from), nil)
+	msgs := out["messages"].([]any)
+	if len(msgs) != 1 || str(msgs[0].(map[string]any), "body") != "slipped in between" {
+		t.Fatalf("a wait anchored at waited_from should return the in-between message, got %v", out)
+	}
+	if status, _ := a.do("GET", "/api/v1/threads/"+thread+"/messages?after_time=yesterday", nil); status != http.StatusUnprocessableEntity {
+		t.Fatalf("expected a validation error for a bad after_time, got %d", status)
+	}
+}
+
+// TestRoutesMatchDocs keeps server.go, docs/openapi.json and docs/API.md in
+// step: every registered API route is documented, and nothing documented is
+// missing from the router.
+func TestRoutesMatchDocs(t *testing.T) {
+	src, err := os.ReadFile("server.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	routeRe := regexp.MustCompile(`HandleFunc\("(GET|POST|PUT|PATCH|DELETE|HEAD) (/api/v1/[^"]+)"`)
+	normalize := func(p string) string { return regexp.MustCompile(`\{[^}]+\}`).ReplaceAllString(p, "{}") }
+	routes := map[string]bool{}
+	for _, m := range routeRe.FindAllStringSubmatch(string(src), -1) {
+		if m[1] == "HEAD" || m[1] == "PUT" {
+			continue // aliases of documented methods
+		}
+		routes[m[1]+" "+normalize(strings.TrimPrefix(m[2], "/api/v1"))] = true
+	}
+	raw, err := os.ReadFile("../../docs/openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Paths map[string]map[string]any `json:"paths"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	documented := map[string]bool{}
+	for path, ops := range doc.Paths {
+		for method := range ops {
+			if strings.ToUpper(method) == "HEAD" {
+				continue
+			}
+			documented[strings.ToUpper(method)+" "+normalize(path)] = true
+		}
+	}
+	for r := range routes {
+		if !documented[r] {
+			t.Errorf("route %s is registered but missing from docs/openapi.json", r)
+		}
+	}
+	for d := range documented {
+		if !routes[d] {
+			t.Errorf("docs/openapi.json documents %s but the router does not register it", d)
+		}
+	}
+	md, err := os.ReadFile("../../docs/API.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path := range doc.Paths {
+		if !strings.Contains(string(md), " "+path) {
+			t.Errorf("docs/API.md does not mention %s", path)
+		}
 	}
 }

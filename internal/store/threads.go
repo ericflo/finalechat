@@ -191,8 +191,9 @@ func (s *Store) ListThreads(ctx context.Context, userID uuid.UUID, f ThreadFilte
 		where += " AND (t.last_activity_at, t.id) < ($4, $5)"
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
-		args = append(args, "%"+q+"%")
-		where += " AND (t.title ILIKE $" + itoa(len(args)) + " OR t.agent ILIKE $" + itoa(len(args)) + " OR t.preview ILIKE $" + itoa(len(args)) + ")"
+		args = append(args, "%"+escapeLike(q)+"%")
+		n := itoa(len(args))
+		where += " AND (t.title ILIKE $" + n + " ESCAPE '\\' OR t.agent ILIKE $" + n + " ESCAPE '\\' OR t.preview ILIKE $" + n + " ESCAPE '\\' OR t.external_id ILIKE $" + n + " ESCAPE '\\')"
 	}
 	rows, err := s.pool.Query(ctx, "SELECT "+threadColumns+" FROM threads t WHERE "+where+" ORDER BY t.last_activity_at DESC, t.id DESC LIMIT $2", args...)
 	if err != nil {
@@ -346,6 +347,18 @@ func (s *Store) GetCounts(ctx context.Context, userID uuid.UUID) (Counts, error)
 			(SELECT count(*) FROM (SELECT id FROM unread UNION SELECT id FROM asked) x)::int`, userID).
 		Scan(&c.PendingQuestions, &c.UnreadThreads, &c.Attention)
 	return c, err
+}
+
+// escapeLike makes user text literal inside an ILIKE pattern.
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// Now is the database's clock, for anchors compared against created_at.
+func (s *Store) Now(ctx context.Context) (time.Time, error) {
+	var t time.Time
+	err := s.pool.QueryRow(ctx, "SELECT now()").Scan(&t)
+	return t.UTC(), err
 }
 
 func itoa(n int) string {

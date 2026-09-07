@@ -394,8 +394,9 @@ class Client:
         return self.request("POST", path, body=payload)
 
     def list_messages(self, ref: str, *, after: str | None = None, before: str | None = None,
-                      limit: int | None = None, wait: int | None = None, sender: str | None = None) -> dict:
-        params = {"after": after, "before": before, "limit": limit, "sender": sender}
+                      limit: int | None = None, wait: int | None = None, sender: str | None = None,
+                      after_time: str | None = None) -> dict:
+        params = {"after": after, "before": before, "limit": limit, "sender": sender, "after_time": after_time}
         timeout = 15.0
         if wait:
             params["wait"] = wait
@@ -456,6 +457,10 @@ def latest_message_id(client: Client, ref: str) -> str | None:
 def wait_for_reply(client: Client, ref: str, after: str | None, total: int, keep_going=None) -> dict | None:
     """Block until the next user message after `after` arrives, or time out."""
     deadline = time.monotonic() + max(0, total)
+    # Without a message to anchor on, the server anchors on its clock and
+    # hands the instant back as waited_from; carrying it forward means a reply
+    # that lands between two chunks is never skipped.
+    after_time: str | None = None
     while True:
         remaining = int(deadline - time.monotonic())
         if remaining <= 0:
@@ -464,8 +469,10 @@ def wait_for_reply(client: Client, ref: str, after: str | None, total: int, keep
             return None
         # Shorter chunks while a hook is waiting so a remote-mode switch is noticed quickly.
         chunk = 30 if keep_going is not None else 60
-        # Without an anchor the server waits for anything created from now on.
-        resp = client.list_messages(ref, after=after, sender="user", wait=min(chunk, remaining))
+        resp = client.list_messages(ref, after=after, after_time=None if after else after_time, sender="user",
+                                    wait=min(chunk, remaining))
+        if after is None and resp.get("waited_from"):
+            after_time = str(resp["waited_from"])
         msgs = resp.get("messages") or []
         # A "user" message posted by an agent (a mirrored terminal prompt) is
         # not the user replying from the app; keep waiting past it.

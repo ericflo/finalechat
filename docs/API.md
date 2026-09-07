@@ -145,7 +145,10 @@ until something happens or the wait elapses, then responds normally:
 
 - `GET /threads/{ref}/messages?after=<id>&wait=N` returns as soon as a
   message newer than `after` exists. Without `after`, a wait watches for
-  anything created after the request started.
+  anything created after the request started (by the server's clock) and
+  the response carries that instant as `waited_from`; pass it back as
+  `after_time=<RFC 3339>` on the next wait so nothing that lands between two
+  waits is missed.
 - `POST /threads/{ref}/questions?wait=N` (or `"wait": N` in the body)
   returns when the question is answered, cancelled or expired.
 - `GET /questions/{id}?wait=N` likewise.
