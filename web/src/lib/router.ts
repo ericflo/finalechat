@@ -13,12 +13,20 @@ function current(): Route {
 
 export function navigate(to: string, opts: { replace?: boolean } = {}) {
   if (opts.replace) window.history.replaceState(null, "", to);
-  else window.history.pushState(null, "", to);
+  else {
+    window.history.pushState(null, "", to);
+    depth++;
+  }
   listeners.forEach((l) => l());
 }
 
+let depth = 0;
+
 export function back(fallback = "/") {
-  if (window.history.length > 1 && document.referrer !== "" ? true : window.history.state !== null) {
+  // Only walk history we created; a deep link opened from a notification has
+  // nowhere sensible to go back to except the inbox.
+  if (depth > 0) {
+    depth--;
     window.history.back();
   } else {
     navigate(fallback, { replace: true });
@@ -29,11 +37,15 @@ export function useRoute(): Route {
   const [route, setRoute] = useState(current);
   useEffect(() => {
     const update = () => setRoute(current());
+    const onPop = () => {
+      if (depth > 0) depth--;
+      update();
+    };
     listeners.add(update);
-    window.addEventListener("popstate", update);
+    window.addEventListener("popstate", onPop);
     return () => {
       listeners.delete(update);
-      window.removeEventListener("popstate", update);
+      window.removeEventListener("popstate", onPop);
     };
   }, []);
   return route;

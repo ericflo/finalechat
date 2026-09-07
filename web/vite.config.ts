@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 
 function buildId(): string {
@@ -56,6 +56,3 @@ export default defineConfig({
     },
   },
 });
-
-// Keep the type checker aware of the package version for the About screen.
-void readFileSync;
