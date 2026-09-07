@@ -1,7 +1,7 @@
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
-import { ToastHost } from "./components/Common";
+import { ErrorBoundary, ToastHost } from "./components/Common";
 import { match, navigate, useRoute } from "./lib/router";
 import { bootstrap, toast, useStore } from "./lib/store";
 import { AuthScreen } from "./screens/Auth";
@@ -70,7 +70,13 @@ function App() {
   }
 
   const thread = match("/t/:id", path);
-  if (thread) return <ThreadScreen id={thread.id as string} highlightQuestion={route.search.get("q")} />;
+  if (thread) {
+    return (
+      <ErrorBoundary key={thread.id}>
+        <ThreadScreen id={thread.id as string} highlightQuestion={route.search.get("q")} />
+      </ErrorBoundary>
+    );
+  }
   if (path === "/settings") return <SettingsScreen />;
   if (path === "/settings/agents") return <AgentsScreen />;
   return <Inbox filter={route.search.get("filter")} />;
@@ -87,7 +93,7 @@ function registerServiceWorker() {
           if (!sw) return;
           sw.addEventListener("statechange", () => {
             if (sw.state === "installed" && navigator.serviceWorker.controller) {
-              toast("Finalechat updated. Reopen to use the new version.");
+              toast("A new version of Finalechat is ready.", "info", { label: "Reload", onClick: () => window.location.reload() });
             }
           });
         });
@@ -96,13 +102,32 @@ function registerServiceWorker() {
         // Service worker is an enhancement; the app works without it.
       });
   });
+  // A rolling deploy can serve a fresh index with assets the old replica no
+  // longer has; one reload picks the matching pair up.
+  window.addEventListener(
+    "error",
+    (ev) => {
+      const target = ev.target as HTMLElement | null;
+      if (!target || !(target instanceof HTMLScriptElement || target instanceof HTMLLinkElement)) return;
+      try {
+        if (sessionStorage.getItem("fc.reloaded") === "1") return;
+        sessionStorage.setItem("fc.reloaded", "1");
+      } catch {
+        return;
+      }
+      window.location.reload();
+    },
+    true,
+  );
 }
 
 registerServiceWorker();
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
     <ToastHost />
   </StrictMode>,
 );

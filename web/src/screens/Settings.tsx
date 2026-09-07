@@ -1,13 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../lib/api";
-import { CopyButton, Link, Sheet, Snippet, Toggle } from "../components/Common";
-import { IconBell, IconBook, IconChevron, IconLogout, IconPlus, IconTerminal, IconTrash } from "../components/Icons";
+import { ConfirmSheet, CopyButton, Link, Sheet, Snippet, Toggle } from "../components/Common";
+import { IconBell, IconBook, IconChevron, IconLogout, IconPhone, IconPlus, IconTerminal, IconTrash } from "../components/Icons";
 import { TopBar } from "../components/TopBar";
-import { getPushState, isIOS, isStandalone, subscribeToPush, unsubscribeFromPush, type PushState } from "../lib/push";
+import { currentPushEndpoint, getPushState, isIOS, isStandalone, subscribeToPush, unsubscribeFromPush, type PushState } from "../lib/push";
 import { navigate } from "../lib/router";
 import { setUser, signOut, toast, updateSettings, useStore } from "../lib/store";
 import { relativeTime } from "../lib/time";
-import type { APIToken } from "../lib/types";
+import type { APIToken, PushSubscriptionInfo } from "../lib/types";
 
 export function SettingsScreen() {
   const user = useStore((s) => s.user);
@@ -107,6 +107,8 @@ export function SettingsScreen() {
           </div>
         </div>
 
+        {pushEnabled && <DevicesCard push={push} />}
+
         <div className="section-title">Agents</div>
         <div className="card settings-list">
           <Link href="/settings/agents" className="setting link">
@@ -159,6 +161,69 @@ export function SettingsScreen() {
       </div>
     </div>
   );
+}
+
+/** Every device registered for notifications, with its delivery health. */
+function DevicesCard({ push }: { push: PushState | null }) {
+  const [devices, setDevices] = useState<PushSubscriptionInfo[] | null>(null);
+  const [mine, setMine] = useState<string | null>(null);
+  useEffect(() => {
+    api
+      .listPushSubscriptions()
+      .then((r) => setDevices(r.subscriptions))
+      .catch(() => setDevices([]));
+    void currentPushEndpoint().then(setMine);
+  }, [push]);
+  if (devices === null || devices.length === 0) return null;
+  const remove = async (d: PushSubscriptionInfo) => {
+    try {
+      await api.unsubscribePush(d.endpoint);
+      setDevices((cur) => (cur ?? []).filter((x) => x.id !== d.id));
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not remove", "error");
+    }
+  };
+  return (
+    <>
+      <div className="section-title">Devices</div>
+      <div className="card settings-list">
+        {devices.map((d) => {
+          const failing = d.failure_count > 0;
+          return (
+            <div key={d.id} className="device-row">
+              <div>
+                <div className="name">
+                  <IconPhone style={{ width: 16, height: 16, color: "var(--text-3)" }} />
+                  {describeDevice(d.user_agent)}
+                  {d.endpoint === mine && <span className="pill accent">This device</span>}
+                </div>
+                <div className={`meta ${failing ? "bad" : ""}`}>
+                  {failing
+                    ? `${d.failure_count} failed deliver${d.failure_count === 1 ? "y" : "ies"} since the last success`
+                    : d.last_success_at
+                      ? `Last delivered ${relativeTime(d.last_success_at)}`
+                      : `Registered ${relativeTime(d.created_at)} · nothing delivered yet`}
+                </div>
+              </div>
+              <button type="button" className="icon-btn" aria-label="Remove device" onClick={() => remove(d)}>
+                <IconTrash />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function describeDevice(ua: string): string {
+  if (/iPhone/.test(ua)) return "iPhone";
+  if (/iPad/.test(ua)) return "iPad";
+  if (/Android/.test(ua)) return "Android";
+  if (/Macintosh/.test(ua)) return "Mac";
+  if (/Windows/.test(ua)) return "Windows";
+  if (/Linux/.test(ua)) return "Linux";
+  return "Device";
 }
 
 function AccountCard() {
@@ -249,6 +314,7 @@ export function AgentsScreen() {
   const [name, setName] = useState("");
   const [secret, setSecret] = useState<{ token: APIToken; secret: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [revoking, setRevoking] = useState<APIToken | null>(null);
   const origin = window.location.origin;
 
   const refresh = () =>
@@ -277,7 +343,6 @@ export function AgentsScreen() {
   };
 
   const revoke = async (t: APIToken) => {
-    if (!window.confirm(`Revoke "${t.name}"? Agents using it will stop working.`)) return;
     try {
       await api.revokeToken(t.id);
       if (secret?.token.id === t.id) setSecret(null);
@@ -333,7 +398,7 @@ export function AgentsScreen() {
                     {t.prefix}… · {t.last_used_at ? `used ${relativeTime(t.last_used_at)}` : "never used"}
                   </div>
                 </div>
-                <button type="button" className="icon-btn" aria-label={`Revoke ${t.name}`} onClick={() => revoke(t)}>
+                <button type="button" className="icon-btn" aria-label={`Revoke ${t.name}`} onClick={() => setRevoking(t)}>
                   <IconTrash />
                 </button>
               </div>
@@ -364,9 +429,25 @@ export function AgentsScreen() {
           )}
         </div>
 
+        {revoking && (
+          <ConfirmSheet
+            title={`Revoke "${revoking.name}"?`}
+            body="Agents using this token stop working immediately. Create a new token to reconnect them."
+            confirmLabel="Revoke token"
+            danger
+            onClose={() => setRevoking(null)}
+            onConfirm={() => void revoke(revoking)}
+          />
+        )}
+
         <div className="section-title">One-line setup</div>
         <div className="card" style={{ padding: "6px 16px 16px" }}>
           <Snippet title="Install the CLI and sign in (any agent, any harness)" code={`export FINALECHAT_TOKEN=${tokenValue}\ncurl -fsSL ${origin}/install.sh | sh`} />
+          {secret && (
+            <p style={{ fontSize: 12.5, color: "var(--text-3)", marginTop: 6 }}>
+              The token lands in your shell history with this line; on a shared machine run <code>finalechat login</code> and paste it at the prompt instead.
+            </p>
+          )}
           <Snippet title="Then wire up Claude Code (hooks + MCP)" code={`finalechat install claude-code`} />
           <p style={{ fontSize: 13.5, color: "var(--text-2)", marginTop: 10, lineHeight: 1.45 }}>
             After that, every Claude Code session gets its own thread here: its replies, your prompts, and its questions. Turn on <strong>Remote mode</strong> when you leave the desk and Claude will wait for your answers from this app.

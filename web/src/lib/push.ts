@@ -14,11 +14,22 @@ export function pushSupported(): boolean {
   return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
 }
 
+/** Resolves the active registration, or null when none activates in time (the
+ * promise `serviceWorker.ready` never settles when registration failed). */
+async function registration(timeoutMs = 4000): Promise<ServiceWorkerRegistration | null> {
+  if (!("serviceWorker" in navigator)) return null;
+  return Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise<null>((resolve) => window.setTimeout(() => resolve(null), timeoutMs)),
+  ]);
+}
+
 export async function getPushState(): Promise<PushState> {
-  if (!pushSupported()) return isIOS() && !isStandalone() ? "unsupported" : "unsupported";
+  if (!pushSupported()) return "unsupported";
   if (!window.isSecureContext) return "insecure";
   if (Notification.permission === "denied") return "denied";
-  const reg = await navigator.serviceWorker.ready;
+  const reg = await registration();
+  if (!reg) return "unsupported";
   const sub = await reg.pushManager.getSubscription();
   if (sub) return "subscribed";
   return Notification.permission === "granted" ? "unsubscribed" : "prompt";
@@ -66,11 +77,38 @@ export async function unsubscribeFromPush(): Promise<PushState> {
 export async function resyncPushSubscription(): Promise<void> {
   if (!pushSupported()) return;
   try {
-    const reg = await navigator.serviceWorker.ready;
-    const sub = await reg.pushManager.getSubscription();
+    const reg = await registration();
+    const sub = await reg?.pushManager.getSubscription();
     if (sub) await api.subscribePush(sub.toJSON());
   } catch {
     // Not fatal.
+  }
+}
+
+/** Drops this device's subscription on sign-out so the next account (or a
+ * stranger with the phone) does not keep receiving this account's pushes. */
+export async function forgetPushSubscription(): Promise<void> {
+  if (!pushSupported()) return;
+  try {
+    const reg = await registration(1500);
+    const sub = await reg?.pushManager.getSubscription();
+    if (!sub) return;
+    await api.unsubscribePush(sub.endpoint).catch(() => {});
+    await sub.unsubscribe();
+  } catch {
+    // Not fatal.
+  }
+}
+
+/** This device's push endpoint, for matching against the server's device list. */
+export async function currentPushEndpoint(): Promise<string | null> {
+  if (!pushSupported()) return null;
+  try {
+    const reg = await registration(1500);
+    const sub = await reg?.pushManager.getSubscription();
+    return sub?.endpoint ?? null;
+  } catch {
+    return null;
   }
 }
 

@@ -90,12 +90,13 @@ export const api = {
     qs.set("limit", String(params.limit ?? 100));
     return request<{ messages: Message[]; has_more: boolean }>("GET", `${base}/threads/${threadId}/messages?${qs}`);
   },
-  sendMessage: (threadId: string, body: string, attachments: string[] = []) =>
+  sendMessage: (threadId: string, body: string, attachments: string[] = [], clientKey?: string) =>
     request<{ message: Message; thread: Thread }>("POST", `${base}/threads/${threadId}/messages`, {
       body,
       format: "markdown",
       sender: "user",
       attachments,
+      client_key: clientKey,
     }),
   /** Uploads one file as a pending attachment; progress is reported in 0..1. */
   uploadAttachment: (threadId: string, file: File, onProgress?: (fraction: number) => void) =>
@@ -127,6 +128,7 @@ export const api = {
   listPendingQuestions: () => request<{ questions: Question[] }>("GET", `${base}/questions?status=pending`),
   answerQuestion: (id: string, answer: { selected: string[]; text?: string }) =>
     request<{ question: Question; message: Message; thread: Thread }>("POST", `${base}/questions/${id}/answer`, answer),
+  dismissQuestion: (id: string) => request<{ question: Question }>("POST", `${base}/questions/${id}/dismiss`, {}),
 
   vapid: () => request<{ enabled: boolean; public_key: string }>("GET", `${base}/push/vapid`),
   subscribePush: (sub: PushSubscriptionJSON) => request<{ subscription: PushSubscriptionInfo }>("POST", `${base}/push/subscriptions`, sub),

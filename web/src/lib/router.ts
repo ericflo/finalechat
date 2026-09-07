@@ -68,7 +68,13 @@ export function match(pattern: string, path: string): Record<string, string> | n
   for (let i = 0; i < p.length; i++) {
     const seg = p[i] as string;
     const val = s[i] as string;
-    if (seg.startsWith(":")) params[seg.slice(1)] = decodeURIComponent(val);
+    if (seg.startsWith(":")) {
+      try {
+        params[seg.slice(1)] = decodeURIComponent(val);
+      } catch {
+        params[seg.slice(1)] = val;
+      }
+    }
     else if (seg !== val) return null;
   }
   return params;

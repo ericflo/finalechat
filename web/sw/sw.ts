@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 // Finalechat service worker: push notifications, badge, notification taps,
-// and an app-shell cache so the installed app opens instantly.
+// an app-shell cache so the installed app opens instantly, and a bounded
+// cache of attachment images so a thread reads offline.
 
 declare const __APP_VERSION__: string;
 const sw = self as unknown as ServiceWorkerGlobalScope;
@@ -14,6 +15,8 @@ interface NotificationAction {
 const VERSION = __APP_VERSION__;
 const SHELL_CACHE = `fc-shell-${VERSION}`;
 const ASSET_CACHE = "fc-assets-v1";
+const MEDIA_CACHE = "fc-media-v1";
+const MEDIA_LIMIT = 160;
 
 interface PushPayload {
   type: "message" | "question" | "test";
@@ -29,6 +32,9 @@ interface PushPayload {
   badge?: number;
 }
 
+// Routes the app renders; only these are cached as the shell.
+const appRoute = /^\/(?:t\/[^/]+|settings(?:\/agents)?|login|register|agents)?\/?$/;
+
 sw.addEventListener("install", (event) => {
   event.waitUntil(
     caches
@@ -43,6 +49,7 @@ sw.addEventListener("activate", (event) => {
     (async () => {
       const keys = await caches.keys();
       await Promise.all(keys.filter((k) => k.startsWith("fc-shell-") && k !== SHELL_CACHE).map((k) => caches.delete(k)));
+      await trimMedia();
       await sw.clients.claim();
     })(),
   );
@@ -53,16 +60,39 @@ sw.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== sw.location.origin) return;
-  // API and docs are always live.
-  if (url.pathname.startsWith("/api/") || url.pathname === "/AGENTS.md" || url.pathname === "/healthz") return;
 
-  // Hashed assets: cache first, forever.
+  // Attachment bytes are immutable and worth keeping for offline reading.
+  if (url.pathname.startsWith("/api/v1/attachments/")) {
+    event.respondWith(
+      caches.open(MEDIA_CACHE).then(async (cache) => {
+        const hit = await cache.match(req);
+        if (hit) return hit;
+        const res = await fetch(req);
+        if (res.ok && res.status === 200) {
+          void cache.put(req, res.clone()).then(trimMedia);
+        }
+        return res;
+      }),
+    );
+    return;
+  }
+  // Everything else under the API, and the agent-facing documents, is live.
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/cli/") || url.pathname.startsWith("/skill/")) return;
+  if (["/AGENTS.md", "/agents.md", "/llms.txt", "/install.sh", "/openapi.json", "/healthz", "/readyz"].includes(url.pathname)) return;
+
+  // Hashed assets: cache first, forever; retry once so a rolling deploy's
+  // brief mismatch does not white-screen the app.
   if (url.pathname.startsWith("/assets/") || url.pathname.startsWith("/icons/")) {
     event.respondWith(
       caches.open(ASSET_CACHE).then(async (cache) => {
         const hit = await cache.match(req);
         if (hit) return hit;
-        const res = await fetch(req);
+        let res = await fetch(req).catch(() => null);
+        if (!res || !res.ok) {
+          await new Promise((r) => setTimeout(r, 800));
+          res = await fetch(req).catch(() => null);
+        }
+        if (!res) return Response.error();
         if (res.ok) void cache.put(req, res.clone());
         return res;
       }),
@@ -71,13 +101,14 @@ sw.addEventListener("fetch", (event) => {
   }
 
   // Navigations: network first with a cached shell fallback so the app opens
-  // offline and shows its own "reconnecting" state.
+  // offline and shows its own "reconnecting" state. Only the app's own HTML
+  // is stored as the shell.
   if (req.mode === "navigate") {
     event.respondWith(
       (async () => {
         try {
           const res = await fetch(req);
-          if (res.ok) {
+          if (res.ok && appRoute.test(url.pathname) && (res.headers.get("content-type") ?? "").includes("text/html")) {
             const cache = await caches.open(SHELL_CACHE);
             void cache.put("/", res.clone());
           }
@@ -90,6 +121,18 @@ sw.addEventListener("fetch", (event) => {
     );
   }
 });
+
+async function trimMedia() {
+  try {
+    const cache = await caches.open(MEDIA_CACHE);
+    const keys = await cache.keys();
+    if (keys.length <= MEDIA_LIMIT) return;
+    // Cache keys come back in insertion order; drop the oldest.
+    await Promise.all(keys.slice(0, keys.length - MEDIA_LIMIT).map((k) => cache.delete(k)));
+  } catch {
+    // ignore
+  }
+}
 
 sw.addEventListener("push", (event) => {
   let payload: PushPayload | null = null;
@@ -105,6 +148,11 @@ sw.addEventListener("push", (event) => {
 });
 
 async function showNotification(p: PushPayload) {
+  const clients = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
+  // The thread is on screen right now: no buzz for what the user is reading.
+  // (Web Push still requires a visible notification; keep it silent.)
+  const reading = p.thread_id ? clients.some((c) => c.focused && new URL(c.url).pathname === `/t/${p.thread_id}`) : false;
+
   const actions: NotificationAction[] = [];
   if (p.type === "question" && p.options && p.options.length > 0 && p.options.length <= 3) {
     for (const label of p.options.slice(0, 2)) actions.push({ action: `answer:${label}`, title: label });
@@ -117,19 +165,25 @@ async function showNotification(p: PushPayload) {
     icon: "/icons/icon-192.png",
     badge: "/icons/badge-96.png",
     data: p,
-    renotify: true,
-    requireInteraction: p.type === "question",
-    silent: false,
+    renotify: !reading,
+    requireInteraction: p.type === "question" && !reading,
+    silent: reading,
     actions,
     timestamp: Date.now(),
   };
-  if (p.type === "question" || p.important) options.vibrate = [80, 40, 80];
+  if (!reading && (p.type === "question" || p.important)) options.vibrate = [80, 40, 80];
 
   const title = p.type === "question" ? `❓ ${p.title}` : p.important ? `❗ ${p.title}` : p.title;
   await sw.registration.showNotification(title, options);
   if (typeof p.badge === "number") await setBadge(p.badge);
-  const clients = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
   for (const c of clients) c.postMessage({ type: "refresh", payload: p });
+  if (reading) {
+    // Let it show for a beat so the platform is satisfied, then clear it.
+    setTimeout(async () => {
+      const shown = await sw.registration.getNotifications({ tag: p.tag });
+      shown.forEach((n) => n.close());
+    }, 1500);
+  }
 }
 
 async function setBadge(n: number) {
@@ -151,9 +205,10 @@ sw.addEventListener("notificationclick", (event) => {
       if (action.startsWith("answer:") && p?.question_id) {
         const label = action.slice("answer:".length);
         try {
+          // The browser supplies Sec-Fetch-Site itself; the cookie rides along.
           const res = await fetch(`/api/v1/questions/${p.question_id}/answer`, {
             method: "POST",
-            headers: { "Content-Type": "application/json", "Sec-Fetch-Site": "same-origin" },
+            headers: { "Content-Type": "application/json" },
             credentials: "same-origin",
             body: JSON.stringify({ selected: [label] }),
           });
@@ -193,7 +248,7 @@ sw.addEventListener("pushsubscriptionchange", (event) => {
       const sub = e.newSubscription ?? (await sw.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey }));
       await fetch("/api/v1/push/subscriptions", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "Sec-Fetch-Site": "same-origin" },
+        headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
         body: JSON.stringify(sub.toJSON()),
       });
@@ -202,5 +257,7 @@ sw.addEventListener("pushsubscriptionchange", (event) => {
 });
 
 sw.addEventListener("message", (event) => {
-  if ((event.data as { type?: string })?.type === "skip-waiting") void sw.skipWaiting();
+  const data = event.data as { type?: string } | undefined;
+  if (data?.type === "skip-waiting") void sw.skipWaiting();
+  if (data?.type === "clear-media") void caches.delete(MEDIA_CACHE);
 });

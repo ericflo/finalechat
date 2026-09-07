@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { serverNow } from "./time";
+import { serverNow, useNow } from "./time";
 import type { Activity, ActivityKind } from "./types";
 
 /**
@@ -23,16 +23,9 @@ export function useLiveActivity(activity: Activity | null | undefined): Activity
 
 /** Whole seconds since `iso`, ticking once a second while mounted. */
 export function useElapsed(iso: string | null): number {
-  const start = iso ? new Date(iso).getTime() : 0;
-  const [now, setNow] = useState(() => serverNow());
-  useEffect(() => {
-    if (!iso) return;
-    setNow(serverNow());
-    const t = window.setInterval(() => setNow(serverNow()), 1000);
-    return () => window.clearInterval(t);
-  }, [iso]);
+  const now = useNow(1000);
   if (!iso) return 0;
-  return Math.max(0, Math.floor((now - start) / 1000));
+  return Math.max(0, Math.floor((now - new Date(iso).getTime()) / 1000));
 }
 
 export function formatElapsed(seconds: number): string {

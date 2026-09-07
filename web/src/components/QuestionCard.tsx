@@ -1,23 +1,39 @@
-import { useEffect, useRef, useState } from "react";
-import { answerQuestion, toast, useStore } from "../lib/store";
+import { memo, useEffect, useRef, useState } from "react";
+import { answerQuestion, dismissQuestion, toast, useStore } from "../lib/store";
 import type { Question } from "../lib/types";
-import { fullDateTime, relativeTime } from "../lib/time";
+import { compactTime, countdown, fullDateTime, useNow } from "../lib/time";
 import { IconCheck } from "./Icons";
-import { Link } from "./Common";
+import { Avatar, Link } from "./Common";
 
-export function QuestionCard({ q, showThread, highlight }: { q: Question; showThread?: boolean; highlight?: boolean }) {
+export const QuestionCard = memo(function QuestionCard({ q, showThread, highlight }: { q: Question; showThread?: boolean; highlight?: boolean }) {
   const thread = useStore((s) => s.threads[q.thread_id]);
   const [selected, setSelected] = useState<string[]>([]);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmDismiss, setConfirmDismiss] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const pending = q.status === "pending";
+  const expiresAt = q.expires_at ? new Date(q.expires_at).getTime() : 0;
+  // Tick every second in the last ten minutes, every half minute otherwise.
+  const now = useNow(q.status === "pending" && expiresAt && expiresAt - Date.now() < 10 * 60 * 1000 ? 1000 : 30000);
+  const remaining = expiresAt ? expiresAt - now : Infinity;
+  // The server sweeps expiries every few seconds; the card flips at zero on its own.
+  const pending = q.status === "pending" && remaining > 0;
+  const localExpired = q.status === "pending" && remaining <= 0;
 
   useEffect(() => {
-    if (highlight && ref.current) {
-      ref.current.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
+    if (!highlight || !ref.current) return;
+    const el = ref.current;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    // Images and markdown above may still be laying out; anchor again once they settle.
+    const t = window.setTimeout(() => el.scrollIntoView({ block: "center", behavior: "smooth" }), 450);
+    return () => window.clearTimeout(t);
   }, [highlight]);
+
+  useEffect(() => {
+    if (!confirmDismiss) return;
+    const t = window.setTimeout(() => setConfirmDismiss(false), 4000);
+    return () => window.clearTimeout(t);
+  }, [confirmDismiss]);
 
   const toggle = (label: string) => {
     if (!pending) return;
@@ -42,20 +58,41 @@ export function QuestionCard({ q, showThread, highlight }: { q: Question; showTh
     }
   };
 
-  const statusLabel = { pending: "Needs you", answered: "Answered", cancelled: "Withdrawn", expired: "Expired", dismissed: "Dismissed" }[q.status];
+  const dismiss = async () => {
+    setConfirmDismiss(false);
+    setBusy(true);
+    try {
+      await dismissQuestion(q.id);
+      toast("Dismissed. The agent will carry on without an answer.");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not dismiss.", "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const status = localExpired ? "expired" : q.status;
+  const statusLabel = { pending: "Needs you", answered: "Answered", cancelled: "Withdrawn", expired: "Expired", dismissed: "Dismissed" }[status];
+  const header = typeof q.meta.header === "string" && q.meta.header.trim() ? q.meta.header.trim().slice(0, 48) : "";
+  const agentName = thread?.agent || thread?.title || "Agent";
+  const urgent = pending && remaining < 2 * 60 * 1000;
 
   return (
-    <div ref={ref} className={`question ${pending ? "" : "resolved"}`} data-question-id={q.id}>
+    <div ref={ref} className={`question ${pending ? "" : "resolved"} ${highlight ? "highlight" : ""}`} data-question-id={q.id}>
       <div className="q-head">
-        <span>{statusLabel}</span>
-        <span style={{ fontWeight: 500, letterSpacing: 0, textTransform: "none", color: "var(--text-3)" }} title={fullDateTime(q.created_at)}>
-          {relativeTime(q.created_at)}
-        </span>
         {showThread && thread && (
-          <Link href={`/t/${thread.id}?q=${q.id}`} className="q-thread">
-            {thread.title || thread.agent || "Thread"}
+          <Link href={`/t/${thread.id}?q=${q.id}`} className="q-agent" aria-label={`Open thread ${thread.title || thread.agent}`}>
+            <Avatar name={agentName} small />
+            <span className="q-agent-name">
+              {thread.title || thread.agent || "Thread"}
+              {thread.title && thread.agent && <span className="q-agent-sub"> · {thread.agent}</span>}
+            </span>
           </Link>
         )}
+        {(!showThread || !pending || header) && <span className={`q-eyebrow ${pending ? "" : "muted"}`}>{pending && header ? header : statusLabel}</span>}
+        <span className="q-time" title={fullDateTime(q.created_at)}>
+          {compactTime(q.created_at, now)}
+        </span>
       </div>
       <div className="q-prompt">{q.prompt}</div>
 
@@ -103,11 +140,26 @@ export function QuestionCard({ q, showThread, highlight }: { q: Question; showTh
             </div>
           )}
           <div className="q-actions">
-            {q.expires_at && <span className="q-expires">Expires {relativeTime(q.expires_at)}</span>}
-            <span className="spacer" />
-            <button type="button" className="btn primary small" disabled={!canSubmit} onClick={submit}>
+            <button type="button" className="btn primary q-send" disabled={!canSubmit} onClick={submit}>
               {busy ? "Sending…" : selected.length > 0 && !q.multi_select && !text.trim() ? `Send · ${selected[0]}` : "Send answer"}
             </button>
+            <div className="q-foot">
+              {q.expires_at && (
+                <span className={`q-expires ${urgent ? "urgent" : ""}`} title={fullDateTime(q.expires_at)}>
+                  Expires in {countdown(remaining)}
+                </span>
+              )}
+              <span className="spacer" />
+              {confirmDismiss ? (
+                <button type="button" className="btn small danger" disabled={busy} onClick={dismiss}>
+                  Dismiss without answering?
+                </button>
+              ) : (
+                <button type="button" className="btn ghost small" disabled={busy} onClick={() => setConfirmDismiss(true)}>
+                  Dismiss
+                </button>
+              )}
+            </div>
           </div>
         </>
       )}
@@ -119,11 +171,11 @@ export function QuestionCard({ q, showThread, highlight }: { q: Question; showTh
           {q.answer.text && <div style={{ whiteSpace: "pre-wrap" }}>{q.answer.text}</div>}
         </div>
       )}
-      {(q.status === "cancelled" || q.status === "expired" || q.status === "dismissed") && (
+      {(status === "cancelled" || status === "expired" || status === "dismissed") && (
         <div className="q-answer gone">
-          {q.status === "cancelled" ? "The agent withdrew this question." : q.status === "expired" ? "This question expired before it was answered." : "You dismissed this question."}
+          {status === "cancelled" ? "The agent withdrew this question." : status === "expired" ? "This question expired before it was answered." : "You dismissed this question."}
         </div>
       )}
     </div>
   );
-}
+});
