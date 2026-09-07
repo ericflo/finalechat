@@ -332,6 +332,9 @@ class Client:
             body["meta"] = meta
         return self.request("POST", "/api/v1/threads", body=body)
 
+    def delete_message(self, message_id: str) -> dict:
+        return self.request("DELETE", f"/api/v1/messages/{urllib.parse.quote(message_id, safe='')}")
+
     def get_thread(self, ref: str) -> dict:
         return self.request("GET", f"/api/v1/threads/{self.ref_path(ref)}").get("thread", {})
 
@@ -947,6 +950,16 @@ def cmd_fetch(args) -> int:
     client = client_from_args(args)
     target = save_attachment(client, args.attachment, args.output)
     print(target)
+    return EXIT_OK
+
+
+def cmd_delete(args) -> int:
+    client = client_from_args(args)
+    resp = client.delete_message(args.message_id)
+    if args.json:
+        print_json(resp)
+    else:
+        print(f"deleted · message {args.message_id}")
     return EXIT_OK
 
 
@@ -1800,6 +1813,18 @@ def mcp_tools() -> list[dict]:
             },
         },
         {
+            "name": "finalechat_delete_message",
+            "description": (
+                "Delete a message you sent (and its attachments) for good, for example when it contained a "
+                "secret or was sent to the wrong thread. finalechat_send returns the message id."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {"message_id": {"type": "string", "description": "The message id (UUID)."}},
+                "required": ["message_id"],
+            },
+        },
+        {
             "name": "finalechat_wait_for_reply",
             "description": (
                 "Wait for the human's next message in the thread (sent from their phone). Use it after "
@@ -1913,7 +1938,7 @@ def mcp_call(client: Client, name: str, arguments: dict):
         resp = client.post_message(target.ref, message, important=bool(arguments.get("important")),
                                    title=target.title, agent=target.agent, files=files)
         thread = resp.get("thread") or {}
-        out = f"Sent to thread {thread.get('id')} ({thread.get('title') or 'untitled'})"
+        out = f"Sent to thread {thread.get('id')} ({thread.get('title') or 'untitled'}); message id {(resp.get('message') or {}).get('id')}"
         for att in message_attachments(resp.get("message") or {}):
             out += "\n" + attachment_line(client, att)
         return out
@@ -1967,6 +1992,13 @@ def mcp_call(client: Client, name: str, arguments: dict):
         ttl = max(1, min(600, int(arguments.get("ttl_seconds") or 45)))
         client.set_activity(target.ref, text, kind=kind, ttl=ttl, title=target.title, agent=target.agent)
         return f"Status shown: {text} (lapses in {ttl}s or at your next message)"
+
+    if name == "finalechat_delete_message":
+        mid = str(arguments.get("message_id") or "").strip()
+        if not mid:
+            raise CLIError("message_id is required")
+        client.delete_message(mid)
+        return f"Deleted message {mid}."
 
     if name == "finalechat_wait_for_reply":
         timeout = int(arguments.get("timeout_seconds") or 1800)
@@ -2204,6 +2236,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--text", action="store_true", help="send as plain text instead of markdown")
     p.add_argument("--json", action="store_true", help="print the created message as JSON")
     p.set_defaults(func=cmd_say)
+
+    p = sub.add_parser("delete", help="remove a message you should not have sent", formatter_class=Formatter,
+                       description="Delete a message and its attachments for good, for example after posting a secret. "
+                                   "Message ids are printed by say, read and wait.")
+    p.add_argument("message_id", metavar="MESSAGE_ID")
+    p.add_argument("--json", action="store_true", help="print the response as JSON")
+    p.set_defaults(func=cmd_delete)
 
     p = sub.add_parser("status", help="show what you are doing (a live status line)", formatter_class=Formatter,
                        description="Set the thread's live status line: what you are doing right now. The app "

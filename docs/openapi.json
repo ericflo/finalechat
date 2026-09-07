@@ -499,7 +499,7 @@
           "Events"
         ],
         "summary": "Server-sent events stream",
-        "description": "text/event-stream of `ready`, `thread.created`, `thread.updated`, `thread.deleted, thread.activity ({at, thread_id, activity}; no thread, no counts), question.dismissed, ping ({at} every 20 seconds)`, `message.created`, `question.created`, `question.answered`, `question.cancelled`, `question.expired`, `settings.updated` and `reconnect` events. Each data payload carries the full current objects (`thread`, `message`, `question`, `settings`) plus `counts` and `at`. A `: ping` comment is sent every 20 seconds.",
+        "description": "text/event-stream of `ready`, `thread.created`, `thread.updated`, `thread.deleted, thread.activity ({at, thread_id, activity}; no thread, no counts), question.dismissed, ping ({at} every 20 seconds)`, `message.created, message.deleted ({at, thread, message_id})`, `question.created`, `question.answered`, `question.cancelled`, `question.expired`, `settings.updated` and `reconnect` events. Each data payload carries the full current objects (`thread`, `message`, `question`, `settings`) plus `counts` and `at`. A `: ping` comment is sent every 20 seconds.",
         "responses": {
           "200": {
             "description": "Event stream.",
@@ -2265,6 +2265,70 @@
                     "created_at": "2026-09-07T05:38:55.033453Z",
                     "attachments": []
                   }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Messages"
+        ],
+        "summary": "Delete a message and its attachments",
+        "description": "Removes the message for good, repairs the thread preview, and emits message.deleted. The recovery path for output that should never have been posted.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Message id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "thread": {
+                      "$ref": "#/components/schemas/Thread"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "thread"
+                  ]
                 }
               }
             }

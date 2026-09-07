@@ -424,6 +424,33 @@ func (s *Server) waitForEvent(ctx context.Context, events <-chan bus.Event, dead
 	}
 }
 
+// DELETE /api/v1/messages/{id}
+//
+// Removes a message (and its attachments) for good: the recovery path for
+// output that should never have reached the phone.
+func (s *Server) handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	id, err := parseUUID(r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	msg, thread, attachments, err := s.store.DeleteMessage(r.Context(), p.user.ID, id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if len(attachments) > 0 {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			s.deleteAttachmentObjects(ctx, attachments)
+		}()
+	}
+	s.bus.Publish(context.WithoutCancel(r.Context()), bus.Event{Type: bus.MessageDeleted, UserID: p.user.ID.String(), ThreadID: thread.ID.String(), MessageID: msg.ID.String()})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "thread": thread})
+}
+
 // GET /api/v1/messages/{id}
 func (s *Server) handleGetMessage(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())

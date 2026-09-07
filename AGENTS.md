@@ -130,7 +130,9 @@ cap keeps proxies happy; loop if you need longer.
 - Archiving is the user's call: a plain message leaves an archived thread
   archived (it still collects unread), while an `important` message or a
   question brings it back to the inbox.
-- Do not post secrets, tokens or credentials.
+- Do not post secrets, tokens or credentials. If one slips out,
+  `DELETE /messages/{id}` (or `finalechat delete <message id>`) removes the
+  message and its files for good; the app drops it at once.
 
 ## Screenshots and files
 
@@ -323,6 +325,7 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `POST /threads/{ref}/messages` | Post a message (creates `ext:` thread); JSON with `attachments` ids, or multipart with `file` parts; optional `activity`, `client_key` |
 | `GET /threads/{ref}/messages?after=&before=&limit=&sender=&wait=` | Read or wait for messages |
 | `GET /messages/{id}` | One message |
+| `DELETE /messages/{id}` | Remove a message and its files for good (posted a secret by mistake) |
 | `POST /threads/{ref}/attachments` | Upload files (multipart `file` parts or a raw body) to attach later |
 | `GET /attachments/{id}`, `GET /attachments/{id}/thumb` | Download a file, or an image's JPEG thumbnail |
 | `POST /threads/{ref}/questions?wait=` | Ask; optionally block for the answer |

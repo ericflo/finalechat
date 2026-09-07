@@ -478,6 +478,14 @@ function appendMessage(m: Message) {
   });
 }
 
+function removeMessage(threadId: string, id: string) {
+  set((s) => {
+    const list = s.messages[threadId];
+    if (!list || !list.some((m) => m.id === id)) return {};
+    return { messages: { ...s.messages, [threadId]: list.filter((m) => m.id !== id) } };
+  });
+}
+
 function upsertQuestion(q: Question) {
   set((s) => {
     const list = s.threadQuestions[q.thread_id];
@@ -649,6 +657,10 @@ export function connect() {
     if (d.message) appendMessage(d.message);
     if (d.thread) upsertThreads([d.thread]);
   });
+  withPayload("message.deleted", (d) => {
+    if (d.message_id && d.thread) removeMessage(d.thread.id, d.message_id);
+    if (d.thread) upsertThreads([d.thread]);
+  });
   for (const name of ["question.created", "question.answered", "question.cancelled", "question.expired", "question.dismissed"]) {
     withPayload(name, (d) => {
       if (d.question) upsertQuestion(d.question);
@@ -669,6 +681,7 @@ interface EventPayload {
   at?: string;
   thread?: Thread;
   thread_id?: string;
+  message_id?: string;
   activity?: Activity | null;
   message?: Message;
   question?: Question;

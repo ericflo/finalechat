@@ -647,6 +647,13 @@ curl -sS "https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/mes
   -H "Authorization: Bearer $FINALECHAT_TOKEN"
 ```
 
+### DELETE /messages/{id}
+
+Removes the message and its attachments for good, repairs the thread
+preview from what remains, and emits `message.deleted` so open apps drop
+it. Returns `{"ok": true, "thread": {...}}`. This is the recovery path for
+output that should never have reached the phone.
+
 ### GET /messages/{id}
 
 ```json
@@ -899,6 +906,7 @@ data: {"at":"…","thread":{…},"message":{…},"counts":{…}}
 | `question.dismissed` | `{at, thread, question, counts}` when the user declines a question |
 | `ping` | `{at}` every 20 seconds; a client that sees none for 45 seconds should reconnect |
 | `message.created` | `{at, thread, message, counts}` |
+| `message.deleted` | `{at, thread, message_id, counts}` |
 | `question.created`, `question.answered`, `question.cancelled`, `question.expired` | `{at, thread, question, counts}` |
 | `settings.updated` | `{at, settings}` |
 | `reconnect` | `{}` when the server is shutting down; reconnect immediately |

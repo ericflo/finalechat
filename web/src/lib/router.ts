@@ -1,4 +1,5 @@
 import { useEffect, useState, type MouseEvent } from "react";
+import { flushSync } from "react-dom";
 
 export interface Route {
   path: string;
@@ -17,7 +18,18 @@ export function navigate(to: string, opts: { replace?: boolean } = {}) {
     window.history.pushState(null, "", to);
     depth++;
   }
-  listeners.forEach((l) => l());
+  notify();
+}
+
+/** Swaps screens inside a view transition where the browser has them, so a
+ * tap on a thread does not replace the whole viewport in one frame. */
+function notify() {
+  const doc = document as Document & { startViewTransition?: (fn: () => void) => unknown };
+  if (typeof doc.startViewTransition === "function" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    doc.startViewTransition(() => flushSync(() => listeners.forEach((l) => l())));
+  } else {
+    listeners.forEach((l) => l());
+  }
 }
 
 let depth = 0;

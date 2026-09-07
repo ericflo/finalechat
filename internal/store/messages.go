@@ -214,6 +214,50 @@ func (s *Store) hydrateAttachments(ctx context.Context, userID uuid.UUID, msgs [
 	return nil
 }
 
+// DeleteMessage removes a message and its attachment rows, and repairs the
+// thread's preview from what remains. The removed attachments are returned
+// so the caller can delete their objects.
+func (s *Store) DeleteMessage(ctx context.Context, userID, id uuid.UUID) (msg *Message, thread *Thread, attachments []*Attachment, err error) {
+	err = s.withTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		msg, err = scanMessage(tx.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.id = $1 AND m.user_id = $2", id, userID))
+		if err != nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, "SELECT "+attachmentColumns+" FROM attachments a WHERE a.message_id = $1", id)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			a, err := scanAttachment(rows)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			attachments = append(attachments, a)
+		}
+		rows.Close()
+		if _, err := tx.Exec(ctx, "DELETE FROM messages WHERE id = $1", id); err != nil {
+			return err
+		}
+		// The preview follows the newest remaining message or question.
+		thread, err = scanThread(tx.QueryRow(ctx, `WITH latest AS (
+				SELECT body AS text, sender, created_at, 0 AS attachments FROM messages WHERE thread_id = $1
+				UNION ALL
+				SELECT prompt, 'question', created_at, 0 FROM questions WHERE thread_id = $1
+				ORDER BY created_at DESC LIMIT 1
+			)
+			UPDATE threads t SET preview = COALESCE((SELECT text FROM latest), ''), preview_sender = COALESCE((SELECT sender FROM latest), ''), updated_at = now()
+			WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns, msg.ThreadID, userID))
+		return err
+	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	thread.Preview = Preview(thread.Preview)
+	return msg, thread, attachments, nil
+}
+
 // GetMessage loads a message the user owns.
 func (s *Store) GetMessage(ctx context.Context, userID, id uuid.UUID) (*Message, error) {
 	m, err := scanMessage(s.pool.QueryRow(ctx, "SELECT "+messageColumns+" FROM messages m WHERE m.id = $1 AND m.user_id = $2", id, userID))

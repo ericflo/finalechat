@@ -1212,3 +1212,41 @@ func TestRoutesMatchDocs(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteMessage(t *testing.T) {
+	b, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "del:1", "title": "delete"}), "thread"), "id")
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "first, harmless"})
+	// A message with a file.
+	up, _ := http.NewRequest("POST", testSrv.URL+"/api/v1/threads/"+thread+"/attachments?filename=key.txt", strings.NewReader("fc_leaked_token_value"))
+	up.Header.Set("Authorization", "Bearer "+a.token)
+	up.Header.Set("Content-Type", "text/plain")
+	res, err := http.DefaultClient.Do(up)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var uploaded map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&uploaded)
+	res.Body.Close()
+	att := uploaded["attachments"].([]any)[0].(map[string]any)
+	leaked := sub(a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "oops: fc_leaked_token_value", "attachments": []string{str(att, "id")}}), "message")
+	if p := str(sub(a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread, nil), "thread"), "preview"); !strings.Contains(p, "oops") {
+		t.Fatalf("preview should show the newest message, got %q", p)
+	}
+	out := a.must(http.StatusOK, "DELETE", "/api/v1/messages/"+str(leaked, "id"), nil)
+	if p := str(sub(out, "thread"), "preview"); p != "first, harmless" {
+		t.Fatalf("preview should fall back to the remaining message, got %q", p)
+	}
+	if status, _ := b.do("GET", "/api/v1/messages/"+str(leaked, "id"), nil); status != http.StatusNotFound {
+		t.Fatalf("deleted message still readable: %d", status)
+	}
+	if status, _ := b.do("GET", str(att, "url"), nil); status != http.StatusNotFound {
+		t.Fatalf("attachment of a deleted message still served: %d", status)
+	}
+	if n := len(a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages", nil)["messages"].([]any)); n != 1 {
+		t.Fatalf("expected one message left, got %d", n)
+	}
+	if status, _ := a.do("DELETE", "/api/v1/messages/"+str(leaked, "id"), nil); status != http.StatusNotFound {
+		t.Fatalf("expected 404 on a second delete, got %d", status)
+	}
+}

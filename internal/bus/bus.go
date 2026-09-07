@@ -42,6 +42,7 @@ const (
 	ThreadDeleted     = "thread.deleted"
 	ThreadActivity    = "thread.activity"
 	MessageCreated    = "message.created"
+	MessageDeleted    = "message.deleted"
 	QuestionCreated   = "question.created"
 	QuestionAnswered  = "question.answered"
 	QuestionCancelled = "question.cancelled"

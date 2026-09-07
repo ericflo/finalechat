@@ -154,6 +154,7 @@ func (s *Server) Handler() http.Handler {
 	authed.HandleFunc("POST /api/v1/threads/{thread}/questions", s.handleCreateQuestion)
 
 	authed.HandleFunc("GET /api/v1/messages/{id}", s.handleGetMessage)
+	authed.HandleFunc("DELETE /api/v1/messages/{id}", s.handleDeleteMessage)
 
 	authed.HandleFunc("POST /api/v1/threads/{thread}/attachments", s.handleUpload)
 	authed.HandleFunc("GET /api/v1/attachments/{id}", s.serveAttachment(false))

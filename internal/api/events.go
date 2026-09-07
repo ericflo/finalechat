@@ -17,6 +17,7 @@ import (
 // client can apply it without a follow-up request:
 //
 //	event: message.created  data: {"message": {...}, "thread": {...}}
+//	event: message.deleted  data: {"message_id": "...", "thread": {...}}
 //	event: question.*       data: {"question": {...}, "thread": {...}}
 //	event: thread.*         data: {"thread": {...}} or {"thread_id": "..."} when deleted
 //	event: thread.activity  data: {"thread_id": "...", "activity": {...} | null}
@@ -131,6 +132,8 @@ func (s *Server) expandEvent(r *http.Request, ev bus.Event) (map[string]any, err
 	}
 	out["thread"] = thread
 	switch ev.Type {
+	case bus.MessageDeleted:
+		out["message_id"] = ev.MessageID
 	case bus.MessageCreated:
 		id, err := uuid.Parse(ev.MessageID)
 		if err != nil {

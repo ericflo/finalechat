@@ -145,4 +145,6 @@ The question response has `question.status` and `question.answer`
 - Keep messages self-contained: the user reads them on a phone without the
   terminal.
 - Mark `--important` sparingly so notifications stay meaningful.
-- Never post secrets, tokens or credentials.
+- Never post secrets, tokens or credentials. If one slips out, remove the
+  message for good with `finalechat delete <message id>` (ids are printed
+  by `say`, `read` and `wait`).
