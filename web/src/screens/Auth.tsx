@@ -46,14 +46,14 @@ export function AuthScreen({ mode }: { mode: "login" | "register" }) {
         </div>
         {registering && signup === "closed" ? (
           <>
-            <p style={{ marginBottom: 14 }}>This Finalechat is private. Sign in with your account.</p>
+            <p style={{ marginBottom: 14 }}>Registration is closed on this server. Sign in with your account.</p>
             <Link href="/login" className="btn primary block">
               Sign in
             </Link>
           </>
         ) : (
           <form onSubmit={submit}>
-            {registering && signup === "open" && <div className="callout accent" style={{ marginBottom: 14 }}>You are creating the first account. Registration closes after this.</div>}
+            {registering && signup === "first" && <div className="callout accent" style={{ marginBottom: 14 }}>You are creating the first account on this server. Registration closes after this.</div>}
             {error && <div className="form-error">{error}</div>}
             <div className="field">
               <label htmlFor="email">Email</label>
@@ -74,6 +74,11 @@ export function AuthScreen({ mode }: { mode: "login" | "register" }) {
               <div className="field">
                 <label htmlFor="invite">Invite code</label>
                 <input id="invite" required value={invite} onChange={(e) => setInvite(e.target.value)} />
+              </div>
+            )}
+            {registering && (
+              <div className="help" style={{ marginBottom: 12 }}>
+                By creating an account you agree to the <Link href="/terms">Terms of Service</Link> and <Link href="/privacy">Privacy Policy</Link>.
               </div>
             )}
             <button type="submit" className="btn primary block" disabled={busy}>

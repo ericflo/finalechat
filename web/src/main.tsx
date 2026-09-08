@@ -36,6 +36,8 @@ function App() {
 
   if (isDocs) return <DocsScreen path="/api/?format=md" title="API reference" />;
   if (path === "/agents" || path === "/agents/") return <DocsScreen path="/AGENTS.md" title="Agent guide" />;
+  if (path === "/terms" || path === "/terms/") return <DocsScreen path="/terms.md" title="Terms of Service" />;
+  if (path === "/privacy" || path === "/privacy/") return <DocsScreen path="/privacy.md" title="Privacy Policy" />;
 
   if (user === null) {
     return (

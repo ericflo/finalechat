@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import { api, APIError } from "./api";
 import { forgetPushSubscription, resyncPushSubscription, setBadge } from "./push";
 import { serverNow, syncServerTime } from "./time";
-import type { Activity, Counts, Message, Question, Settings, Thread, User } from "./types";
+import type { Activity, Counts, Message, Question, Settings, SignupMode, Thread, User } from "./types";
 
 export type Connection = "idle" | "connecting" | "online" | "offline";
 
@@ -23,7 +23,7 @@ export interface State {
   pushEnabled: boolean;
   attachmentsEnabled: boolean;
   version: string;
-  signup: "open" | "invite" | "closed";
+  signup: SignupMode;
   connection: Connection;
   /** True when the current state came from the on-device snapshot and has not been confirmed by the server yet. */
   fromSnapshot: boolean;
@@ -267,7 +267,8 @@ export async function signIn(email: string, password: string) {
 export async function register(input: { email: string; password: string; display_name?: string; invite_code?: string }) {
   const { user } = await api.register(input);
   signedOut = false;
-  set({ user, settings: user.settings, signup: "closed", fromSnapshot: false });
+  // A first-account server closes behind its owner; an open server stays open.
+  set({ user, settings: user.settings, signup: state.signup === "first" ? "closed" : state.signup, fromSnapshot: false });
   await loadInbox();
   connect();
 }
@@ -285,6 +286,16 @@ export async function signOut(): Promise<boolean> {
     }
     // Any HTTP answer means the cookie is gone or useless; wipe locally.
   }
+  await forgetAccount();
+  return true;
+}
+
+/** The server deleted the account (and with it the session); wipe the device's copy. */
+export async function accountDeleted(): Promise<void> {
+  await forgetAccount();
+}
+
+async function forgetAccount(): Promise<void> {
   disconnect();
   await forgetPushSubscription();
   signedOut = true;
@@ -328,7 +339,6 @@ export async function signOut(): Promise<boolean> {
   } catch {
     // ignore
   }
-  return true;
 }
 
 export function setUser(user: User) {

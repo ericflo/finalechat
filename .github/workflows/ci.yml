@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: Server (Go + PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: finalechat
+          POSTGRES_PASSWORD: finalechat
+          POSTGRES_DB: finalechat_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U finalechat"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l cmd internal assets.go)"
+          if [ -n "$unformatted" ]; then
+            echo "Go files require gofmt:"; echo "$unformatted"; exit 1
+          fi
+      - run: go vet ./...
+      - run: go build ./...
+      - name: go test
+        env:
+          FINALECHAT_TEST_DATABASE_URL: postgres://finalechat:finalechat@127.0.0.1:5432/finalechat_test?sslmode=disable
+        run: go test -count=1 ./...
+
+  web:
+    name: Web app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: web
+      - run: npm run typecheck
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+
+  cli:
+    name: CLI, hooks and documents
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 scripts/build-cli-integrations.py --check
+      - run: python3 -m py_compile cli/finalechat
+      - run: python3 cli/finalechat --help >/dev/null
+      - run: python3 cli/finalechat selftest
+      - run: python3 -m unittest discover -s cli -p 'test_*.py'
+      - run: sh -n cli/install.sh
+      - run: python3 -c "import json; json.load(open('docs/openapi.json'))"

@@ -196,8 +196,8 @@ func TestSignupClosesAfterFirstAccount(t *testing.T) {
 
 func TestInviteCodeGatesEvenTheFirstAccount(t *testing.T) {
 	setup(t)
-	testAPI.cfg.InviteCode = "let-me-in"
-	defer func() { testAPI.cfg.InviteCode = "" }()
+	testAPI.cfg.Signup, testAPI.cfg.InviteCode = "invite", "let-me-in"
+	defer func() { testAPI.cfg.Signup, testAPI.cfg.InviteCode = "", "" }()
 	anon := newBrowser(t)
 	status, out := anon.do("GET", "/api/v1/auth/status", nil)
 	if status != 200 || out["signup"] != "invite" {
@@ -1605,4 +1605,164 @@ func TestAttentionAndClearedSeq(t *testing.T) {
 	if out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "much later", "seq": 760}); out["applied"] != true {
 		t.Fatalf("an old clear must not pin the status line shut: %v", out)
 	}
+}
+
+func TestOpenSignupAndAccountDeletion(t *testing.T) {
+	setup(t)
+	testAPI.cfg.Signup = "open"
+	defer func() { testAPI.cfg.Signup = "" }()
+	// Every test registers from the same address; the per-address
+	// registration budget is exercised by its own test below.
+	limiter := testAPI.registerLimiter
+	testAPI.registerLimiter = newRateLimiter(1000)
+	defer func() { testAPI.registerLimiter = limiter }()
+	anon := newBrowser(t)
+	status, out := anon.do("GET", "/api/v1/auth/status", nil)
+	if status != 200 || out["signup"] != "open" {
+		t.Fatalf("expected open signup, got %d %v", status, out)
+	}
+	anon.must(http.StatusCreated, "POST", "/api/v1/auth/register", map[string]any{"email": "fourth@example.com", "password": "correct-horse-battery", "display_name": "Fourth"})
+	// Registration stays open for the next stranger.
+	status, out = anon.do("GET", "/api/v1/auth/status", nil)
+	if status != 200 || out["signup"] != "open" || out["authenticated"] != true {
+		t.Fatalf("expected open signup and a session, got %d %v", status, out)
+	}
+
+	// The new account owns a thread, a message with an attachment, a token
+	// and a device; deleting the account removes all of it, including bytes.
+	tok := anon.must(http.StatusCreated, "POST", "/api/v1/tokens", map[string]any{"name": "doomed"})
+	agentTok := &client{t: t, http: &http.Client{}, token: str(tok, "secret")}
+	msg := agentTok.must(http.StatusCreated, "POST", "/api/v1/threads/ext:doomed/messages", map[string]any{"title": "doomed", "body": "hello"})
+	threadID := str(sub(msg, "message"), "thread_id")
+	png := makePNG(t, 12, 12)
+	req, _ := http.NewRequest("POST", testSrv.URL+"/api/v1/threads/"+threadID+"/attachments", bytes.NewReader(png))
+	req.Header.Set("Authorization", "Bearer "+agentTok.token)
+	req.Header.Set("Content-Type", "image/png")
+	req.Header.Set("X-Filename", "shot.png")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var up map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&up)
+	res.Body.Close()
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("upload: %d %v", res.StatusCode, up)
+	}
+	attID := str(up["attachments"].([]any)[0].(map[string]any), "id")
+	agentTok.must(http.StatusCreated, "POST", "/api/v1/threads/"+threadID+"/messages", map[string]any{"body": "with file", "attachments": []string{attID}})
+	me := anon.must(http.StatusOK, "GET", "/api/v1/me", nil)
+	if used, _ := sub(me, "storage")["attachment_bytes"].(float64); int(used) != len(png) {
+		t.Fatalf("expected %d attachment bytes in /me, got %v", len(png), sub(me, "storage"))
+	}
+
+	// Tokens cannot delete the account; a wrong password cannot either.
+	if status, out := agentTok.do("DELETE", "/api/v1/me", map[string]any{"password": "correct-horse-battery"}); status != http.StatusForbidden {
+		t.Fatalf("expected token deletion to be forbidden, got %d %v", status, out)
+	}
+	if status, out := anon.do("DELETE", "/api/v1/me", map[string]any{"password": "wrong-password"}); status != http.StatusForbidden || str(sub(out, "error"), "code") != "invalid_credentials" {
+		t.Fatalf("expected invalid_credentials, got %d %v", status, out)
+	}
+	anon.must(http.StatusOK, "DELETE", "/api/v1/me", map[string]any{"password": "correct-horse-battery"})
+	if status, _ := anon.do("GET", "/api/v1/me", nil); status != http.StatusUnauthorized {
+		t.Fatalf("expected the session to be gone, got %d", status)
+	}
+	if status, _ := agentTok.do("GET", "/api/v1/me", nil); status != http.StatusUnauthorized {
+		t.Fatalf("expected the token to be gone, got %d", status)
+	}
+	var n int
+	if err := testPool.QueryRow(context.Background(), "SELECT count(*) FROM users WHERE email = 'fourth@example.com'").Scan(&n); err != nil || n != 0 {
+		t.Fatalf("expected the account row to be gone, got n=%d err=%v", n, err)
+	}
+	if err := testPool.QueryRow(context.Background(), "SELECT count(*) FROM attachments WHERE id = $1", attID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("expected the attachment row to be gone, got n=%d err=%v", n, err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, _, _, err := testAPI.blobs.Get(context.Background(), "a/"+attID+"/shot.png"); err != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("attachment bytes should have been deleted with the account")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The address is free to register again.
+	fresh := newBrowser(t)
+	fresh.must(http.StatusCreated, "POST", "/api/v1/auth/register", map[string]any{"email": "fourth@example.com", "password": "correct-horse-battery"})
+	fresh.must(http.StatusOK, "DELETE", "/api/v1/me", map[string]any{"password": "correct-horse-battery"})
+}
+
+func TestRegistrationHasItsOwnRateLimit(t *testing.T) {
+	setup(t)
+	testAPI.cfg.Signup = "open"
+	defer func() { testAPI.cfg.Signup = "" }()
+	limiter := testAPI.registerLimiter
+	testAPI.registerLimiter = newRateLimiter(2)
+	defer func() { testAPI.registerLimiter = limiter }()
+	anon := newBrowser(t)
+	for i := 0; i < 2; i++ {
+		// Validation failures still spend the budget: the address is what is limited.
+		if status, _ := anon.do("POST", "/api/v1/auth/register", map[string]any{"email": "not an email", "password": "correct-horse-battery"}); status != http.StatusUnprocessableEntity {
+			t.Fatalf("attempt %d: expected validation failure, got %d", i, status)
+		}
+	}
+	if status, out := anon.do("POST", "/api/v1/auth/register", map[string]any{"email": "fifth@example.com", "password": "correct-horse-battery"}); status != http.StatusTooManyRequests || str(sub(out, "error"), "code") != "rate_limited" {
+		t.Fatalf("expected rate_limited, got %d %v", status, out)
+	}
+	// Signing in is budgeted separately and still works.
+	if status, _ := anon.do("POST", "/api/v1/auth/login", map[string]any{"email": "eric@example.com", "password": "correct-horse-battery"}); status != http.StatusOK {
+		t.Fatalf("expected login to be unaffected, got %d", status)
+	}
+}
+
+func TestAttachmentQuota(t *testing.T) {
+	b, a := setup(t)
+	me := b.must(http.StatusOK, "GET", "/api/v1/me", nil)
+	used, _ := sub(me, "storage")["attachment_bytes"].(float64)
+	if q, _ := sub(me, "storage")["attachment_quota_bytes"].(float64); q != 0 {
+		t.Fatalf("expected no quota in the test configuration, got %v", q)
+	}
+	testAPI.cfg.AttachmentQuotaBytes = int64(used) + 100
+	defer func() { testAPI.cfg.AttachmentQuotaBytes = 0 }()
+	msg := a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:quota/messages", map[string]any{"title": "quota", "body": "hello"})
+	threadID := str(sub(msg, "message"), "thread_id")
+	upload := func(name string, body []byte) (int, map[string]any) {
+		req, _ := http.NewRequest("POST", testSrv.URL+"/api/v1/threads/"+threadID+"/attachments", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+a.token)
+		req.Header.Set("Content-Type", "text/plain")
+		req.Header.Set("X-Filename", name)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		return res.StatusCode, out
+	}
+	if status, out := upload("one.txt", bytes.Repeat([]byte("a"), 60)); status != http.StatusCreated {
+		t.Fatalf("first upload within quota: %d %v", status, out)
+	}
+	if status, out := upload("two.txt", bytes.Repeat([]byte("b"), 60)); status != http.StatusRequestEntityTooLarge || str(sub(out, "error"), "code") != "storage_quota" {
+		t.Fatalf("expected storage_quota, got %d %v", status, out)
+	}
+	if status, out := upload("three.txt", bytes.Repeat([]byte("c"), 40)); status != http.StatusCreated {
+		t.Fatalf("upload that exactly fills the quota: %d %v", status, out)
+	}
+	me = b.must(http.StatusOK, "GET", "/api/v1/me", nil)
+	if got, _ := sub(me, "storage")["attachment_bytes"].(float64); int64(got) != int64(used)+100 {
+		t.Fatalf("expected %d bytes used, got %v", int64(used)+100, got)
+	}
+	if q, _ := sub(me, "storage")["attachment_quota_bytes"].(float64); int64(q) != int64(used)+100 {
+		t.Fatalf("expected the quota in /me, got %v", q)
+	}
+	// Freeing space by deleting the thread makes room again.
+	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+threadID, nil)
+	msg = a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:quota2/messages", map[string]any{"title": "quota", "body": "hello"})
+	threadID = str(sub(msg, "message"), "thread_id")
+	if status, out := upload("four.txt", bytes.Repeat([]byte("d"), 100)); status != http.StatusCreated {
+		t.Fatalf("upload after freeing space: %d %v", status, out)
+	}
+	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+threadID, nil)
 }

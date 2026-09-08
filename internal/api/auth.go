@@ -171,20 +171,22 @@ func (s *Server) clearSessionCookie(w http.ResponseWriter) {
 	})
 }
 
-// signupMode reports how registration is gated right now.
+// signupMode reports how registration is gated right now: "open" when anyone
+// may register, "invite" when a code is required (which, when configured,
+// gates the first account too, so a fresh instance cannot be claimed by a
+// stranger before its owner signs up), "first" while a first-account server
+// has no account yet, and "closed" otherwise.
 func (s *Server) signupMode(ctx context.Context) (string, error) {
-	// An invite code, when configured, gates every registration including the
-	// first one, so a freshly deployed instance cannot be claimed by a
-	// stranger before its owner signs up.
-	if s.cfg.InviteCode != "" {
-		return "invite", nil
+	switch s.cfg.Signup {
+	case "open", "invite", "closed":
+		return s.cfg.Signup, nil
 	}
 	n, err := s.store.CountUsers(ctx)
 	if err != nil {
 		return "", err
 	}
 	if n == 0 {
-		return "open", nil
+		return "first", nil
 	}
 	return "closed", nil
 }
@@ -213,7 +215,10 @@ type registerRequest struct {
 
 // POST /api/v1/auth/register
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if !s.authLimiter.allow(s.clientIP(r)) {
+	// Account creation has its own, tighter budget per address on top of the
+	// shared login budget; hashing is bounded separately.
+	ip := s.clientIP(r)
+	if !s.registerLimiter.allow(ip) || !s.authLimiter.allow(ip) {
 		writeError(w, errRateLimited)
 		return
 	}
@@ -246,7 +251,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	switch mode {
 	case "closed":
-		writeError(w, &apiError{Status: http.StatusForbidden, Code: "signup_closed", Message: "This Finalechat is private. Sign in instead."})
+		writeError(w, &apiError{Status: http.StatusForbidden, Code: "signup_closed", Message: "Registration is closed on this server. Sign in instead."})
 		return
 	case "invite":
 		if strings.TrimSpace(req.InviteCode) != s.cfg.InviteCode {
@@ -379,6 +384,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := map[string]any{"user": p.user, "counts": counts, "push_enabled": s.push.Enabled(), "attachments_enabled": s.blobs != nil, "base_url": s.cfg.BaseURL, "version": s.cfg.Version, "features": s.Features()}
+	if s.blobs != nil {
+		used, err := s.store.AttachmentBytesUsed(r.Context(), p.user.ID)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		resp["storage"] = map[string]any{"attachment_bytes": used, "attachment_quota_bytes": s.cfg.AttachmentQuotaBytes}
+	}
 	if p.token != nil {
 		resp["token"] = p.token
 		resp["auth"] = "token"
@@ -445,6 +458,63 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
+}
+
+// DELETE /api/v1/me
+//
+// Deletes the account and everything it owns: threads, messages, questions,
+// attachments, artifacts, tokens, connectors, sessions and devices. Session
+// only, and the current password is required.
+func (s *Server) handleDeleteMe(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	if p.sessionHash == nil {
+		writeError(w, &apiError{Status: http.StatusForbidden, Code: "forbidden", Message: "Deleting the account requires signing in to the app."})
+		return
+	}
+	if !s.authLimiter.allow(s.clientIP(r)) {
+		writeError(w, errRateLimited)
+		return
+	}
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	_, hash, err := s.store.GetUserByEmail(r.Context(), p.user.Email)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var ok bool
+	withHashing(func() { ok, err = auth.VerifyPassword(hash, req.Password) })
+	if err != nil || !ok {
+		writeError(w, &apiError{Status: http.StatusForbidden, Code: "invalid_credentials", Message: "The password is incorrect."})
+		return
+	}
+	attachments, err := s.store.ListUserAttachments(r.Context(), p.user.ID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.store.DeleteUser(r.Context(), p.user.ID); err != nil {
+		writeError(w, err)
+		return
+	}
+	s.clearSessionCookie(w)
+	// The rows are gone (the schema cascades, and artifact objects queue
+	// their own deletion); attachment bytes follow in the background, as for
+	// a deleted thread.
+	if len(attachments) > 0 && s.blobs != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer cancel()
+			s.deleteAttachmentObjects(ctx, attachments)
+		}()
+	}
+	s.log.Info("account deleted", "user_id", p.user.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // GET /api/v1/settings

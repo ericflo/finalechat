@@ -58,6 +58,18 @@ func (s *Server) storeUpload(r *http.Request, threadID uuid.UUID, contentType, f
 	if len(data) > store.MaxAttachmentBytes {
 		return nil, &apiError{Status: http.StatusRequestEntityTooLarge, Code: "too_large", Message: "Attachments must be at most 10 MiB."}
 	}
+	// A full account is refused before any decoding or upload work; the
+	// insert repeats the check under a per-account lock so concurrent
+	// uploads cannot slip past it together.
+	if s.cfg.AttachmentQuotaBytes > 0 {
+		used, err := s.store.AttachmentBytesUsed(r.Context(), p.user.ID)
+		if err != nil {
+			return nil, err
+		}
+		if used+int64(len(data)) > s.cfg.AttachmentQuotaBytes {
+			return nil, s.errStorageQuota()
+		}
+	}
 	contentType = normalizeContentType(contentType, filename, data)
 	filename = cleanFilename(filename, contentType)
 	id := store.NewID()
@@ -103,11 +115,14 @@ func (s *Server) storeUpload(r *http.Request, threadID uuid.UUID, contentType, f
 		return nil, errStorage
 	}
 	in.ObjectID = obj.ID
-	a, err := s.store.CreateAttachment(r.Context(), p.user.ID, threadID, in)
+	a, err := s.store.CreateAttachment(r.Context(), p.user.ID, threadID, in, s.cfg.AttachmentQuotaBytes)
 	if err != nil {
 		_ = s.blobs.Delete(context.Background(), in.ObjectKey, in.ObjectID)
 		if in.ThumbKey != "" {
 			_ = s.blobs.Delete(context.Background(), in.ThumbKey, in.ThumbID)
+		}
+		if errors.Is(err, store.ErrAttachmentQuota) {
+			return nil, s.errStorageQuota()
 		}
 		return nil, err
 	}
@@ -116,6 +131,26 @@ func (s *Server) storeUpload(r *http.Request, threadID uuid.UUID, contentType, f
 }
 
 var errStorage = &apiError{Status: http.StatusBadGateway, Code: "storage_unavailable", Message: "The file could not be stored right now. Try again.", RetryAfter: 10}
+
+// errStorageQuota reports that the account's attachment storage is full.
+func (s *Server) errStorageQuota() *apiError {
+	return &apiError{Status: http.StatusRequestEntityTooLarge, Code: "storage_quota", Message: fmt.Sprintf("This account's attachment storage is full (%s). Delete threads or messages that carry attachments to free space.", humanBytes(s.cfg.AttachmentQuotaBytes))}
+}
+
+// humanBytes formats a byte count for people.
+func humanBytes(n int64) string {
+	switch {
+	case n >= 1<<40:
+		return strconv.FormatFloat(float64(n)/(1<<40), 'f', -1, 64) + " TiB"
+	case n >= 1<<30:
+		return strconv.FormatFloat(float64(n)/(1<<30), 'f', -1, 64) + " GiB"
+	case n >= 1<<20:
+		return strconv.FormatFloat(float64(n)/(1<<20), 'f', -1, 64) + " MiB"
+	case n >= 1<<10:
+		return strconv.FormatFloat(float64(n)/(1<<10), 'f', -1, 64) + " KiB"
+	}
+	return strconv.FormatInt(n, 10) + " bytes"
+}
 
 // decoding bounds concurrent image decodes.
 var decoding = make(chan struct{}, 3)

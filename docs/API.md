@@ -21,7 +21,7 @@ under Settings → Agents. A token starts with `fc_` and is shown once. Send it
 as a bearer token:
 
 ```
-Authorization: Bearer fc_TlaRtPqYwguWNmAtY9FXJLTEJQdiuQp7GYIvMWun
+Authorization: Bearer fc_0123456789abcdefghijklmnopqrstuvwxyzABCD
 ```
 
 A token acts as the user who created it: it sees the user's threads, posts
@@ -69,7 +69,7 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | 401 | `invalid_credentials` | Wrong email or password |
 | 403 | `forbidden` | Operation not allowed for this credential type |
 | 403 | `csrf` | Cookie mutation that is not same-origin |
-| 403 | `signup_closed` | Registration is closed |
+| 403 | `signup_closed` | Registration is closed on this server |
 | 403 | `invalid_invite` | Registration needs a valid invite code |
 | 404 | `not_found` | Unknown route, malformed id, or an object you do not own |
 | 409 | `conflict` | Unique constraint (rare; concurrent `external_id` creates resolve to the winner) |
@@ -77,8 +77,9 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | 409 | `email_taken` | Registration with an existing email |
 | 409 | `no_subscriptions` | Test push with no subscribed device |
 | 413 | `too_large` | JSON body over 1 MiB, an attachment over 10 MiB, or a multipart request over the combined limit |
+| 413 | `storage_quota` | The account's attachment (or artifact) storage is full; delete threads or messages that carry files to free space |
 | 422 | `validation_failed` | A field failed validation; `message` says which |
-| 429 | `rate_limited` (login attempts per address; token writes beyond about 120 messages, 30 questions, 30 uploads or 300 statuses a minute; honour `Retry-After`) | Too many login or register attempts (20 per minute per IP) |
+| 429 | `rate_limited` (login attempts per address; token writes beyond about 120 messages, 30 questions, 30 uploads or 300 statuses a minute; honour `Retry-After`) | Too many login attempts (20 per minute per IP) or registrations (5 per minute per IP) |
 | 502 | `storage_unavailable` | Object storage rejected an upload or download; retry |
 | 503 | `push_disabled` | Push is not configured on this server |
 | 503 | `attachments_disabled` | Attachment storage is not configured on this server |
@@ -100,6 +101,7 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | `timeout_seconds` | 1 to 604800 (7 days) |
 | `limit` | threads 1 to 200 (default 50); messages and questions 1 to 500 (default 100) |
 | Attachment | 10 MiB per file, 8 per message or upload request; `filename` 200 characters |
+| Attachment storage | 5 GiB per account by default (`FINALECHAT_ATTACHMENT_QUOTA_BYTES`); `GET /me` reports `storage` |
 | Activity `text` / `ttl_seconds` | 200 characters on one line / 1 to 600 seconds (default 45) |
 
 ### Idempotency
@@ -320,7 +322,7 @@ is set whenever the question leaves `pending`, including on cancel or expiry.
 {
   "id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1",
   "name": "laptop",
-  "prefix": "fc_TlaRtPqY",
+  "prefix": "fc_01234567",
   "created_at": "2026-09-07T05:32:42.464521Z",
   "last_used_at": "2026-09-07T05:38:23.601635Z"
 }
@@ -361,13 +363,14 @@ Reports how registration is gated and who, if anyone, is signed in. No
 authentication required.
 
 ```json
-{"authenticated": false, "push_enabled": true, "attachments_enabled": true, "signup": "closed", "version": "dev"}
+{"authenticated": false, "push_enabled": true, "attachments_enabled": true, "signup": "open", "version": "dev"}
 ```
 
-`signup` is `open` (no account exists yet: the first registration creates
-the owner), `invite` (an invite code is required), or `closed`.
-`attachments_enabled` says whether files can be uploaded. When
-authenticated, the response also includes `user`.
+`signup` is `open` (anyone may register; this is what www.finalechat.com
+runs), `first` (a first-account server with no account yet: the first
+registration creates the owner and closes registration), `invite` (an invite
+code is required), or `closed`. `attachments_enabled` says whether files can
+be uploaded. When authenticated, the response also includes `user`.
 
 ### POST /auth/register
 
@@ -405,7 +408,8 @@ curl -sS https://www.finalechat.com/api/v1/me -H "Authorization: Bearer $FINALEC
   "base_url": "https://www.finalechat.com",
   "counts": {"pending_questions": 0, "unread_threads": 2},
   "push_enabled": true,
-  "token": {"id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1", "name": "laptop", "prefix": "fc_TlaRtPqY",
+  "storage": {"attachment_bytes": 18337921, "attachment_quota_bytes": 5368709120},
+  "token": {"id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1", "name": "laptop", "prefix": "fc_01234567",
             "created_at": "2026-09-07T05:32:42.464521Z", "last_used_at": "2026-09-07T05:38:23.601635Z"},
   "user": {"id": "01a07a5a-be46-723c-80f8-61155463dbdc", "email": "eric@example.com", "display_name": "Eric",
            "settings": {"notify_all_messages": false, "remote_mode": false},
@@ -415,6 +419,9 @@ curl -sS https://www.finalechat.com/api/v1/me -H "Authorization: Bearer $FINALEC
 ```
 
 `auth` is `token` or `session`; `token` is present only for token auth.
+`storage` (present when attachments are enabled) reports the bytes of
+attachments the account holds and the cap it is allowed; a
+`attachment_quota_bytes` of `0` means no cap.
 
 ### PATCH /me
 
@@ -426,6 +433,21 @@ password.
 ```
 
 Changing the password deletes every other session. Returns `{"user": {...}}`.
+
+### DELETE /me
+
+Session only (`403 forbidden` for tokens); rate limited. Deletes the account
+and everything it owns: threads, messages, questions, attachments,
+artifacts, tokens, connectors, sessions and devices. The current password is
+required.
+
+```json
+{"password": "current password"}
+```
+
+Returns `{"ok": true}` and clears the session cookie, or `403
+invalid_credentials`. Attachment and artifact bytes are removed from object
+storage shortly afterwards.
 
 ### GET /settings
 
@@ -463,7 +485,7 @@ and revoke.
 ### GET /tokens
 
 ```json
-{"tokens": [{"id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1", "name": "laptop", "prefix": "fc_TlaRtPqY",
+{"tokens": [{"id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1", "name": "laptop", "prefix": "fc_01234567",
              "created_at": "2026-09-07T05:32:42.464521Z", "last_used_at": "2026-09-07T05:38:23.601635Z"}]}
 ```
 
@@ -475,8 +497,8 @@ Revoked tokens are not listed.
 `201` with the token record and, once only, the secret:
 
 ```json
-{"secret": "fc_TlaRtPqYwguWNmAtY9FXJLTEJQdiuQp7GYIvMWun",
- "token": {"id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1", "name": "laptop", "prefix": "fc_TlaRtPqY",
+{"secret": "fc_0123456789abcdefghijklmnopqrstuvwxyzABCD",
+ "token": {"id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1", "name": "laptop", "prefix": "fc_01234567",
            "created_at": "2026-09-07T05:32:42.464521Z", "last_used_at": null}}
 ```
 
@@ -767,7 +789,8 @@ curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/atta
 
 Status `201`. Then pass the ids in a message's `attachments` field. Each
 upload attaches to exactly one message; a pending upload that is not
-attached within 24 hours is deleted. `413 too_large` for a file over 10 MiB,
+attached within 24 hours is deleted. `413 storage_quota` when the account's
+attachment storage is full. `413 too_large` for a file over 10 MiB,
 `422 validation_failed` for an empty file or an undecodable image, and
 `502 storage_unavailable` when the object store fails.
 

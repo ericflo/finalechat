@@ -67,6 +67,7 @@ export const api = {
   me: () => request<Me>("GET", `${base}/me`),
   updateMe: (input: { display_name?: string; current_password?: string; new_password?: string }) =>
     request<{ user: User }>("PATCH", `${base}/me`, input),
+  deleteMe: (password: string) => request<{ ok: true }>("DELETE", `${base}/me`, { password }),
   updateSettings: (input: Partial<Settings>) => request<{ settings: Settings }>("PATCH", `${base}/settings`, input),
   counts: () => request<{ counts: Counts }>("GET", `${base}/counts`),
 

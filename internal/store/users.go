@@ -91,6 +91,18 @@ func (s *Store) UpdateUserProfile(ctx context.Context, id uuid.UUID, displayName
 	return scanUser(s.pool.QueryRow(ctx, `UPDATE users SET display_name = $2, updated_at = now() WHERE id = $1 RETURNING `+userColumns, id, strings.TrimSpace(displayName)))
 }
 
+// DeleteUser removes an account; the schema cascades to everything it owns.
+func (s *Store) DeleteUser(ctx context.Context, id uuid.UUID) error {
+	tag, err := s.pool.Exec(ctx, "DELETE FROM users WHERE id = $1", id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // UpdatePassword replaces the password hash and invalidates other sessions.
 func (s *Store) UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string, keepSession []byte) error {
 	return s.withTx(ctx, func(tx pgx.Tx) error {

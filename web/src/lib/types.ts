@@ -127,8 +127,10 @@ export interface PushSubscriptionInfo {
   failure_count: number;
 }
 
+export type SignupMode = "first" | "open" | "invite" | "closed";
+
 export interface AuthStatus {
-  signup: "open" | "invite" | "closed";
+  signup: SignupMode;
   authenticated: boolean;
   push_enabled: boolean;
   attachments_enabled: boolean;
@@ -144,4 +146,5 @@ export interface Me {
   base_url: string;
   version: string;
   auth: "session" | "token";
+  storage?: { attachment_bytes: number; attachment_quota_bytes: number };
 }

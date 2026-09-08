@@ -45,6 +45,7 @@ Production: <https://www.finalechat.com>. Agents start at
 | `cli/finalechat` | CLI, Claude Code hook handler, MCP server (Python, stdlib) |
 | `skill/finalechat` | Claude Code Agent Skill |
 | `AGENTS.md`, `docs/API.md`, `docs/openapi.json` | Agent-facing docs, served by the server |
+| `docs/TERMS.md`, `docs/PRIVACY.md` | Terms and privacy policy of the hosted service, shown at `/terms` and `/privacy` |
 
 ## Develop
 
@@ -55,11 +56,20 @@ make run             # server on http://127.0.0.1:8787 (or: make web-dev for HMR
 make test            # Go integration suite against finalechat_test, web typecheck, CLI checks
 ```
 
-The first account to register becomes the owner; registration then closes
-unless `FINALECHAT_INVITE_CODE` is set (when it is set, even the first
-account needs it). Generate push keys once with `bin/finalechat vapid` and
-put them in the environment. Set `FINALECHAT_BLOB_STORE=memory` locally to
-try attachments without B2.
+Registration is controlled by `FINALECHAT_SIGNUP`. The default, `first`, is
+right for a personal server: the first account to register becomes the owner
+and registration then closes. `open` lets anyone create an account (what
+<https://www.finalechat.com> runs); `invite` requires the code in
+`FINALECHAT_INVITE_CODE` for every registration, including the first; and
+`closed` refuses all of them. Generate push keys once with
+`bin/finalechat vapid` and put them in the environment. Set
+`FINALECHAT_BLOB_STORE=memory` locally to try attachments without B2.
+
+Every account can use up to `FINALECHAT_ATTACHMENT_QUOTA_BYTES` of attachment
+storage (5 GiB by default; `GET /me` reports usage) and can delete itself from
+Settings → Account. `docs/TERMS.md` and `docs/PRIVACY.md` describe the hosted
+service and are linked from the sign-up form; edit them before running your
+own public instance.
 
 ### Configuration
 
@@ -71,7 +81,9 @@ try attachments without B2.
 | `FINALECHAT_CANONICAL_HOST` / `FINALECHAT_REDIRECT_HOSTS` | unset | Redirect browser navigations on alias hosts to the canonical one |
 | `FINALECHAT_VAPID_PUBLIC_KEY` / `FINALECHAT_VAPID_PRIVATE_KEY` | unset | Web Push keys; push is disabled without them |
 | `FINALECHAT_VAPID_SUBJECT` | `mailto:hello@finalechat.com` | Contact sent to push services |
-| `FINALECHAT_INVITE_CODE` | unset | Gates registration (including the first account) behind a code |
+| `FINALECHAT_SIGNUP` | `first` (`invite` when a code is set) | Registration mode: `first`, `open`, `invite` or `closed` |
+| `FINALECHAT_INVITE_CODE` | unset | The code registrations must present in `invite` mode |
+| `FINALECHAT_ATTACHMENT_QUOTA_BYTES` | `5GiB` | Attachment storage per account (`0` for no cap; accepts `500MiB`, `2G`, or a plain byte count) |
 | `FINALECHAT_B2_KEY_ID` / `FINALECHAT_B2_KEY` / `FINALECHAT_B2_BUCKET` | unset | Backblaze B2 bucket-scoped key for attachments; attachments are disabled without them |
 | `FINALECHAT_BLOB_STORE` | `b2` when keys are set, else `disabled` | `memory` keeps attachments in process memory for local development |
 | `FINALECHAT_SECURE_COOKIES` | `true` | Set `false` for plain-HTTP development |
@@ -100,9 +112,19 @@ homes, including tools, hooks/MCP, exact export, resume and installer preservati
 
 ## Deploy
 
-A push to `main` runs the Woodpecker pipeline in `.woodpecker.yaml` (Go suite
-against a throwaway PostgreSQL, web typecheck and build, CLI checks) and then
-publishes one immutable image from `Dockerfile`. Flux in the
-[epsilon](https://github.com/ericflo/epsilon) repository promotes the image;
-runtime configuration, secrets, ingress and the database live there under
-`apps/finalechat/`.
+Every push and pull request runs the GitHub Actions workflow in
+`.github/workflows/ci.yml` (Go suite against PostgreSQL, web typecheck and
+build, CLI checks). A push to `main` additionally runs the Woodpecker
+pipeline in `.woodpecker.yaml` inside the production cluster and publishes
+one immutable image from `Dockerfile`, which also gates the image on the same
+test suite. Flux in the private epsilon repository promotes the image;
+runtime configuration, secrets, ingress and the database live there.
+
+To run your own instance you need PostgreSQL 16, the binary (or the image
+from `Dockerfile`) with `DATABASE_URL` set, and optionally VAPID keys for push
+and a Backblaze B2 bucket for attachments. Migrations apply on start.
+
+## License
+
+MIT; see `LICENSE`. Security reports: see `SECURITY.md`. Contributions: see
+`CONTRIBUTING.md`.

@@ -1,6 +1,6 @@
 **Design: durable, versioned session artifacts**
 
-Status: implemented locally; see [validation and implementation limits](implementation-progress.md). This replaces the proposed live proxy between FinaleChat and eagent. Paths below refer to `/home/ericflo/Development/finalechat` and `/home/ericflo/Development/stream-agent-duel/eagent_final`.
+Status: implemented locally; see [validation and implementation limits](implementation-progress.md). This replaces the proposed live proxy between FinaleChat and eagent. Paths below refer to this repository and to the sibling [eagent](https://github.com/ericflo/eagent) repository.
 
 The optional [interactive settings extension](interactive-settings.md) adds custom settings artifacts, scoped live bindings and a durable command channel. Historical inspection remains available independently of remote control.
 

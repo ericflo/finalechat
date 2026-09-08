@@ -5,9 +5,9 @@ import { IconBell, IconBook, IconChevron, IconLogout, IconPhone, IconPlus, IconT
 import { TopBar } from "../components/TopBar";
 import { currentPushEndpoint, getPushState, isIOS, isStandalone, subscribeToPush, unsubscribeFromPush, type PushState } from "../lib/push";
 import { navigate } from "../lib/router";
-import { setUser, signOut, toast, updateSettings, useStore } from "../lib/store";
+import { accountDeleted, setUser, signOut, toast, updateSettings, useStore } from "../lib/store";
 import { relativeTime } from "../lib/time";
-import type { APIToken, PushSubscriptionInfo } from "../lib/types";
+import type { APIToken, Me, PushSubscriptionInfo } from "../lib/types";
 import { ConnectorsCard } from "./Connectors";
 
 export function SettingsScreen() {
@@ -146,6 +146,18 @@ export function SettingsScreen() {
               </div>
             </div>
           </div>
+          <Link href="/terms" className="setting link">
+            <div>
+              <div className="label">Terms of Service</div>
+            </div>
+            <IconChevron className="chev" />
+          </Link>
+          <Link href="/privacy" className="setting link">
+            <div>
+              <div className="label">Privacy Policy</div>
+            </div>
+            <IconChevron className="chev" />
+          </Link>
           <button
             type="button"
             className="setting link"
@@ -230,8 +242,18 @@ function describeDevice(ua: string): string {
 
 function AccountCard() {
   const user = useStore((s) => s.user);
+  const attachmentsEnabled = useStore((s) => s.attachmentsEnabled);
   const [name, setName] = useState(user ? user.display_name : "");
   const [changing, setChanging] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [storage, setStorage] = useState<Me["storage"] | null>(null);
+  useEffect(() => {
+    if (!attachmentsEnabled) return;
+    api
+      .me()
+      .then((me) => setStorage(me.storage ?? null))
+      .catch(() => setStorage(null));
+  }, [attachmentsEnabled]);
   if (!user) return null;
 
   const saveName = async () => {
@@ -259,8 +281,76 @@ function AccountCard() {
         </div>
         <IconChevron className="chev" />
       </button>
+      {storage && (
+        <div className="setting">
+          <div>
+            <div className="label">Attachment storage</div>
+            <div className="desc">
+              {formatBytes(storage.attachment_bytes)} used{storage.attachment_quota_bytes > 0 ? ` of ${formatBytes(storage.attachment_quota_bytes)}` : ""}. Deleting threads or messages frees space.
+            </div>
+          </div>
+        </div>
+      )}
+      <button type="button" className="setting link" onClick={() => setDeleting(true)}>
+        <div>
+          <div className="label" style={{ color: "var(--red)" }}>
+            Delete account
+          </div>
+          <div className="desc">Removes every thread, message, attachment, archive, token and device. There is no undo.</div>
+        </div>
+        <IconChevron className="chev" />
+      </button>
       {changing && <PasswordSheet onClose={() => setChanging(false)} />}
+      {deleting && <DeleteAccountSheet onClose={() => setDeleting(false)} />}
     </div>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n >= 1 << 30) return `${(n / (1 << 30)).toFixed(n >= 10 * (1 << 30) ? 0 : 1)} GB`;
+  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(n >= 10 * (1 << 20) ? 0 : 1)} MB`;
+  if (n >= 1 << 10) return `${Math.round(n / (1 << 10))} KB`;
+  return `${n} bytes`;
+}
+
+function DeleteAccountSheet({ onClose }: { onClose: () => void }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteMe(password);
+      await accountDeleted();
+      toast("Your account has been deleted.");
+      navigate("/login", { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete the account");
+      setBusy(false);
+    }
+  };
+  return (
+    <Sheet onClose={onClose}>
+      <form onSubmit={submit} style={{ padding: "4px 6px" }}>
+        <h2 style={{ fontSize: 18, marginBottom: 12 }}>Delete your account</h2>
+        <p style={{ marginBottom: 12 }}>This deletes every thread, message, attachment, archive, token and device on this account. There is no undo.</p>
+        {error && <div className="form-error">{error}</div>}
+        <div className="field">
+          <label htmlFor="delete-password">Your password</label>
+          <input id="delete-password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" className="btn danger" disabled={busy}>
+            Delete account
+          </button>
+        </div>
+      </form>
+    </Sheet>
   );
 }
 

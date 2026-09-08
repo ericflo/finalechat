@@ -33,9 +33,17 @@ type Config struct {
 	VAPIDPrivateKey string
 	// VAPIDSubject is the contact URL sent to push services (mailto: or https:).
 	VAPIDSubject string
-	// InviteCode gates registration once the first account exists. When empty,
-	// registration closes after the first account.
+	// Signup selects how registration is gated: "first" (the first account
+	// registers freely, then registration closes), "open" (anyone may
+	// register), "invite" (every registration, including the first, needs
+	// InviteCode) or "closed" (nobody may register). Unset resolves to
+	// "invite" when InviteCode is set and to "first" otherwise.
+	Signup string
+	// InviteCode is the code registrations must present in "invite" mode.
 	InviteCode string
+	// AttachmentQuotaBytes caps the total size of one account's attachments;
+	// zero removes the cap.
+	AttachmentQuotaBytes int64
 	// B2KeyID, B2Key and B2Bucket configure attachment storage in Backblaze
 	// B2. Attachments are disabled unless all three are set, or BlobStore is
 	// "memory" for local development.
@@ -76,6 +84,7 @@ func Load(version string) (Config, error) {
 		VAPIDPublicKey:   os.Getenv("FINALECHAT_VAPID_PUBLIC_KEY"),
 		VAPIDPrivateKey:  os.Getenv("FINALECHAT_VAPID_PRIVATE_KEY"),
 		VAPIDSubject:     getenv("FINALECHAT_VAPID_SUBJECT", "mailto:hello@finalechat.com"),
+		Signup:           strings.ToLower(strings.TrimSpace(os.Getenv("FINALECHAT_SIGNUP"))),
 		InviteCode:       os.Getenv("FINALECHAT_INVITE_CODE"),
 		B2KeyID:          os.Getenv("FINALECHAT_B2_KEY_ID"),
 		B2Key:            os.Getenv("FINALECHAT_B2_KEY"),
@@ -100,6 +109,26 @@ func Load(version string) (Config, error) {
 	if cfg.DatabaseURL == "" {
 		return cfg, errors.New("DATABASE_URL is required")
 	}
+	switch cfg.Signup {
+	case "":
+		if cfg.InviteCode != "" {
+			cfg.Signup = "invite"
+		} else {
+			cfg.Signup = "first"
+		}
+	case "first", "open", "closed":
+	case "invite":
+		if cfg.InviteCode == "" {
+			return cfg, errors.New("FINALECHAT_SIGNUP=invite requires FINALECHAT_INVITE_CODE")
+		}
+	default:
+		return cfg, errors.New("FINALECHAT_SIGNUP must be first, open, invite or closed")
+	}
+	quota, err := parseBytes(getenv("FINALECHAT_ATTACHMENT_QUOTA_BYTES", "5GiB"))
+	if err != nil {
+		return cfg, fmt.Errorf("FINALECHAT_ATTACHMENT_QUOTA_BYTES is invalid: %w", err)
+	}
+	cfg.AttachmentQuotaBytes = quota
 	if _, err := url.Parse(cfg.BaseURL); err != nil {
 		return cfg, fmt.Errorf("FINALECHAT_BASE_URL is invalid: %w", err)
 	}
@@ -161,6 +190,42 @@ func getenvInt(name string, def int) int {
 		return def
 	}
 	return n
+}
+
+// parseBytes reads a byte count such as "5368709120", "5GiB", "500MB" or
+// "2G"; both binary and decimal suffixes mean powers of 1024.
+func parseBytes(v string) (int64, error) {
+	v = strings.TrimSpace(strings.ToUpper(v))
+	if v == "" {
+		return 0, nil
+	}
+	i := 0
+	for i < len(v) && (v[i] >= '0' && v[i] <= '9' || v[i] == '.') {
+		i++
+	}
+	num, err := strconv.ParseFloat(v[:i], 64)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a byte count", v)
+	}
+	unit := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(v[i:]), "B"), "I")
+	mult := float64(1)
+	switch unit {
+	case "":
+	case "K":
+		mult = 1 << 10
+	case "M":
+		mult = 1 << 20
+	case "G":
+		mult = 1 << 30
+	case "T":
+		mult = 1 << 40
+	default:
+		return 0, fmt.Errorf("%q has an unknown unit", v)
+	}
+	if num < 0 {
+		return 0, fmt.Errorf("%q is negative", v)
+	}
+	return int64(num * mult), nil
 }
 
 func getenvDuration(name string, def time.Duration) time.Duration {

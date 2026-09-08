@@ -359,6 +359,72 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "Me"
+        ],
+        "summary": "Delete the account and everything it owns (session only, rate limited)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "password"
+                ],
+                "properties": {
+                  "password": {
+                    "type": "string",
+                    "description": "The account's current password."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Account deleted; the session cookie is cleared.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Token authentication, or the password is wrong (invalid_credentials).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/settings": {
@@ -561,7 +627,7 @@
                     {
                       "id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1",
                       "name": "laptop",
-                      "prefix": "fc_TlaRtPqY",
+                      "prefix": "fc_01234567",
                       "created_at": "2026-09-07T05:32:42.464521Z",
                       "last_used_at": "2026-09-07T05:38:23.601635Z"
                     }
@@ -628,11 +694,11 @@
                   ]
                 },
                 "example": {
-                  "secret": "fc_TlaRtPqYwguWNmAtY9FXJLTEJQdiuQp7GYIvMWun",
+                  "secret": "fc_0123456789abcdefghijklmnopqrstuvwxyzABCD",
                   "token": {
                     "id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1",
                     "name": "laptop",
-                    "prefix": "fc_TlaRtPqY",
+                    "prefix": "fc_01234567",
                     "created_at": "2026-09-07T05:32:42.464521Z",
                     "last_used_at": null
                   }
@@ -6488,7 +6554,7 @@
         "example": {
           "id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1",
           "name": "laptop",
-          "prefix": "fc_TlaRtPqY",
+          "prefix": "fc_01234567",
           "created_at": "2026-09-07T05:32:42.464521Z",
           "last_used_at": "2026-09-07T05:38:23.601635Z"
         }
@@ -7250,10 +7316,12 @@
           "signup": {
             "type": "string",
             "enum": [
+              "first",
               "open",
               "invite",
               "closed"
-            ]
+            ],
+            "description": "open: anyone may register. first: no account exists yet; the first registration creates the owner and closes registration. invite: an invite code is required. closed: registration is refused."
           },
           "push_enabled": {
             "type": "boolean"
@@ -7279,7 +7347,7 @@
         "example": {
           "authenticated": false,
           "push_enabled": true,
-          "signup": "closed",
+          "signup": "open",
           "version": "dev",
           "attachments_enabled": true
         }
@@ -7332,6 +7400,24 @@
               "type": "string"
             },
             "description": "Optional capabilities: activity, idempotency, dismiss, push, attachments."
+          },
+          "storage": {
+            "type": "object",
+            "description": "Present when attachments are enabled: bytes of attachments the account holds and its cap (0 means no cap).",
+            "required": [
+              "attachment_bytes",
+              "attachment_quota_bytes"
+            ],
+            "properties": {
+              "attachment_bytes": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "attachment_quota_bytes": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
           }
         },
         "example": {
@@ -7345,7 +7431,7 @@
           "token": {
             "id": "01a07a5a-be60-72d1-b7f0-8eb7c08f48b1",
             "name": "laptop",
-            "prefix": "fc_TlaRtPqY",
+            "prefix": "fc_01234567",
             "created_at": "2026-09-07T05:32:42.464521Z",
             "last_used_at": "2026-09-07T05:38:23.601635Z"
           },
@@ -7360,7 +7446,11 @@
             "created_at": "2026-09-07T05:32:42.438822Z"
           },
           "version": "dev",
-          "attachments_enabled": true
+          "attachments_enabled": true,
+          "storage": {
+            "attachment_bytes": 18337921,
+            "attachment_quota_bytes": 5368709120
+          }
         }
       },
       "PushSubscriptionRequest": {

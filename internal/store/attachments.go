@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +20,9 @@ const MaxAttachmentBytes = 10 << 20
 
 // MaxAttachmentsPerMessage bounds how many files one message carries.
 const MaxAttachmentsPerMessage = 8
+
+// ErrAttachmentQuota reports that an account's attachment storage is full.
+var ErrAttachmentQuota = errors.New("attachment storage quota exceeded")
 
 // Attachment is the metadata of an uploaded file; bytes live in object
 // storage under ObjectKey (and ThumbKey for image thumbnails).
@@ -74,19 +78,69 @@ type AttachmentInput struct {
 	ThumbHeight int
 }
 
-// CreateAttachment records an upload that is not yet part of a message.
-func (s *Store) CreateAttachment(ctx context.Context, userID, threadID uuid.UUID, in AttachmentInput) (*Attachment, error) {
+// CreateAttachment records an upload that is not yet part of a message. A
+// positive quota caps the account's total attachment bytes; the check and
+// the insert are serialized per account so concurrent uploads cannot pass
+// it together.
+func (s *Store) CreateAttachment(ctx context.Context, userID, threadID uuid.UUID, in AttachmentInput, quota int64) (*Attachment, error) {
 	var thumbKey *string
 	if in.ThumbKey != "" {
 		thumbKey = &in.ThumbKey
 	}
-	return scanAttachment(s.pool.QueryRow(ctx, `WITH a AS (
-			INSERT INTO attachments (id, user_id, thread_id, kind, content_type, filename, size, width, height, object_key, object_id, thumb_key, thumb_id, thumb_width, thumb_height)
-			SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
-			WHERE EXISTS (SELECT 1 FROM threads WHERE id = $3 AND user_id = $2)
-			RETURNING *
-		) SELECT `+attachmentColumns+` FROM a`,
-		in.ID, userID, threadID, in.Kind, in.ContentType, truncate(in.Filename, 255), in.Size, in.Width, in.Height, in.ObjectKey, in.ObjectID, thumbKey, in.ThumbID, in.ThumbWidth, in.ThumbHeight))
+	var out *Attachment
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		if quota > 0 {
+			if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 7319))", userID.String()); err != nil {
+				return err
+			}
+			var used int64
+			if err := tx.QueryRow(ctx, "SELECT COALESCE(sum(size), 0)::bigint FROM attachments WHERE user_id = $1", userID).Scan(&used); err != nil {
+				return err
+			}
+			if used+int64(in.Size) > quota {
+				return ErrAttachmentQuota
+			}
+		}
+		a, err := scanAttachment(tx.QueryRow(ctx, `WITH a AS (
+				INSERT INTO attachments (id, user_id, thread_id, kind, content_type, filename, size, width, height, object_key, object_id, thumb_key, thumb_id, thumb_width, thumb_height)
+				SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+				WHERE EXISTS (SELECT 1 FROM threads WHERE id = $3 AND user_id = $2)
+				RETURNING *
+			) SELECT `+attachmentColumns+` FROM a`,
+			in.ID, userID, threadID, in.Kind, in.ContentType, truncate(in.Filename, 255), in.Size, in.Width, in.Height, in.ObjectKey, in.ObjectID, thumbKey, in.ThumbID, in.ThumbWidth, in.ThumbHeight))
+		if err != nil {
+			return err
+		}
+		out = a
+		return nil
+	})
+	return out, err
+}
+
+// AttachmentBytesUsed sums the sizes of every attachment the account owns.
+func (s *Store) AttachmentBytesUsed(ctx context.Context, userID uuid.UUID) (int64, error) {
+	var used int64
+	err := s.pool.QueryRow(ctx, "SELECT COALESCE(sum(size), 0)::bigint FROM attachments WHERE user_id = $1", userID).Scan(&used)
+	return used, err
+}
+
+// ListUserAttachments returns every attachment an account owns, so their
+// objects can be removed once the account is gone.
+func (s *Store) ListUserAttachments(ctx context.Context, userID uuid.UUID) ([]*Attachment, error) {
+	rows, err := s.pool.Query(ctx, "SELECT "+attachmentColumns+" FROM attachments a WHERE a.user_id = $1", userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Attachment{}
+	for rows.Next() {
+		a, err := scanAttachment(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 // GetAttachment loads an attachment the user owns.

@@ -23,6 +23,8 @@ type Server struct {
 	blobs       blob.Store
 	log         *slog.Logger
 	authLimiter *rateLimiter
+	// registerLimiter bounds account creation per address more tightly.
+	registerLimiter *rateLimiter
 	// Per-token write budgets (tokens per minute); sessions are not metered.
 	messageLimiter  *rateLimiter
 	questionLimiter *rateLimiter
@@ -57,6 +59,7 @@ func New(cfg config.Config, st *store.Store, b *bus.Bus, p *push.Sender, blobs b
 		blobs:           blobs,
 		log:             log,
 		authLimiter:     newRateLimiter(20),
+		registerLimiter: newRateLimiter(5),
 		messageLimiter:  newRateLimiter(120),
 		questionLimiter: newRateLimiter(30),
 		uploadLimiter:   newRateLimiter(30),
@@ -113,6 +116,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agents.md", s.document("AGENTS.md", "text/markdown; charset=utf-8", false))
 	mux.HandleFunc("GET /llms.txt", s.document("AGENTS.md", "text/plain; charset=utf-8", false))
 	mux.HandleFunc("GET /docs/integrations.md", s.document("docs/integrations.md", "text/markdown; charset=utf-8", false))
+	mux.HandleFunc("GET /terms.md", s.document("docs/TERMS.md", "text/markdown; charset=utf-8", false))
+	mux.HandleFunc("GET /privacy.md", s.document("docs/PRIVACY.md", "text/markdown; charset=utf-8", false))
 	mux.HandleFunc("GET /api", s.apiIndex)
 	mux.HandleFunc("GET /api/{$}", s.apiIndex)
 	mux.HandleFunc("GET /api/openapi.json", s.document("docs/openapi.json", "application/json; charset=utf-8", false))
@@ -134,6 +139,7 @@ func (s *Server) Handler() http.Handler {
 	authed := http.NewServeMux()
 	authed.HandleFunc("GET /api/v1/me", s.handleMe)
 	authed.HandleFunc("PATCH /api/v1/me", s.handleUpdateMe)
+	authed.HandleFunc("DELETE /api/v1/me", s.handleDeleteMe)
 	authed.HandleFunc("GET /api/v1/settings", s.handleGetSettings)
 	authed.HandleFunc("PATCH /api/v1/settings", s.handleUpdateSettings)
 	authed.HandleFunc("GET /api/v1/counts", s.handleCounts)
