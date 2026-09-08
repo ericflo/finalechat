@@ -167,6 +167,16 @@ local journal is missing is reported as `unknown` rather than started
 again. A stale `expected_version` is not a reason to refuse it, since
 starting a session reads the configuration without changing it.
 
+Replies to a finished session revive it. A running eagent keeps its own
+poll on its thread, but nothing reads a thread once its session has ended,
+so `eagent serve` and `eagent connector run` follow the account's event
+stream (`GET /events`) and resume a session of theirs when a user message
+from the app arrives on its thread, delivering the message (with files, or
+as the answer to the question the session stopped on) as the next turn. On
+connect and periodically they also sweep threads whose latest message is
+the user's and newer than the session's last log write, so a reply sent
+while no eagent was running is picked up when one starts.
+
 Eagent advertises the action from every process that holds the project's
 connector. `eagent serve` and `eagent connector run` host the new session
 in-process, so it stays interactive for as long as they run; a plain
