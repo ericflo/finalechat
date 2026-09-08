@@ -1389,6 +1389,9 @@ def hook_spec(command: str) -> dict:
         "PreToolUse": entry(1800),
         "PostToolUse": entry(30),
         "SessionEnd": entry(30),
+        "SubagentStop": entry(30),
+        "PreCompact": entry(30),
+        "ConfigChange": entry(30),
     }
 
 
@@ -1417,16 +1420,13 @@ def load_settings(path: Path) -> dict:
 
 def write_settings(path: Path, data: dict) -> Path | None:
     backup = None
+    if path.is_symlink():
+        raise CLIError("Settings symlinks must be edited locally.")
     if path.exists():
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         backup = path.with_name(f"{path.name}.finalechat-backup-{stamp}")
-        shutil.copy2(path, backup)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w") as fh:
-        json.dump(data, fh, indent=2)
-        fh.write("\n")
-    tmp.replace(path)
+        private_write(backup, path.read_bytes())
+    private_write(path, json.dumps(data, indent=2).encode() + b"\n")
     return backup
 
 
@@ -1438,8 +1438,15 @@ def hook_command() -> str:
 
 
 def cmd_install(args) -> int:
-    if args.target != "claude-code":
-        raise CLIError("Only `claude-code` is supported right now.")
+    if args.target == "codex":
+        return install_codex_integration(args)
+    path = Path(args.settings).expanduser().resolve()
+    lock = INTEGRATION_DIR / "locks" / (sha256(os.fsencode(str(path))) + ".lock")
+    with integration_lock(lock):
+        return install_claude_hooks(args)
+
+
+def install_claude_hooks(args) -> int:
     settings_path = Path(args.settings).expanduser()
     command = hook_command()
     data = load_settings(settings_path)
@@ -1458,7 +1465,7 @@ def cmd_install(args) -> int:
     print(f"Installed Finalechat hooks into {settings_path}")
     if backup:
         print(f"  previous settings backed up to {backup.name}")
-    print("  events: SessionStart, UserPromptSubmit, Stop, Notification, PreToolUse, PostToolUse, SessionEnd")
+    print("  events: " + ", ".join(hook_spec(command)))
     if not args.no_mcp:
         install_mcp(command.replace(" hook claude-code", ""))
     print()
@@ -1466,6 +1473,11 @@ def cmd_install(args) -> int:
     print("(`finalechat remote on`, or the switch in the app) before you walk away so")
     print("sessions wait for your replies and answers instead of the terminal.")
     print("Restart running Claude Code sessions to pick up the hooks.")
+    if args.artifacts:
+        configure_integration("claude-code", args.project, artifacts=True, enabled=True)
+        start_integration_companion("claude-code", args.project, client_from_args(args))
+        print("Proactive transcript artifacts enabled for " + str(Path(args.project).resolve()))
+    print("Pair settings separately with: finalechat connector pair claude-code --project " + shlex.quote(str(Path(args.project).resolve())))
     return EXIT_OK
 
 
@@ -1495,8 +1507,15 @@ def install_mcp(cli: str) -> None:
 
 
 def cmd_uninstall(args) -> int:
-    if args.target != "claude-code":
-        raise CLIError("Only `claude-code` is supported right now.")
+    if args.target == "codex":
+        return install_codex_integration(args, remove=True)
+    path = Path(args.settings).expanduser().resolve()
+    lock = INTEGRATION_DIR / "locks" / (sha256(os.fsencode(str(path))) + ".lock")
+    with integration_lock(lock):
+        return uninstall_claude_hooks(args)
+
+
+def uninstall_claude_hooks(args) -> int:
     settings_path = Path(args.settings).expanduser()
     data = load_settings(settings_path)
     hooks = data.get("hooks")
@@ -1523,6 +1542,7 @@ def cmd_uninstall(args) -> int:
             subprocess.run([claude, "mcp", "remove", "--scope", "user", "finalechat"],
                            capture_output=True, text=True, timeout=30)
             print("  MCP: removed the `finalechat` server if it was registered")
+    configure_integration("claude-code", args.project, artifacts=False, enabled=False)
     return EXIT_OK
 
 
@@ -1875,6 +1895,12 @@ def hook_claude_code() -> int:
     if not isinstance(payload, dict):
         return EXIT_OK
     event = str(payload.get("hook_event_name") or "")
+    try:
+        notify_claude_artifact(payload)
+    except (CLIError, OSError, ValueError):
+        hook_log("Artifact registration deferred; the companion retains previously registered sessions.")
+    if os.environ.get("FINALECHAT_MIRROR", "on").lower() in ("off", "false", "0"):
+        return EXIT_OK
     token = resolve_token()
     if not token:
         return EXIT_OK
@@ -2625,6 +2651,1483 @@ def cmd_mcp(args) -> int:
     return mcp_serve()
 
 
+# BEGIN GENERATED INTEGRATIONS (scripts/build-cli-integrations.py)
+INTEGRATION_ASSETS = {'sdk': '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', 'viewer': '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', 'settings': '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'}
+INTEGRATION_ASSETS_DIGEST = '8037f9d40e04609b5eb7f4407b1fd2d49a7fb86901f8a05229a7cd2a1a02b2df'
+INTEGRATION_ADAPTER_DIGEST = '3c87c40bd6cd081ec4cc7bb2595b3dda8ff04ef7ce8f3e84a47e389dfb91e5f8'
+"""Source for the integrations embedded in the single-file CLI.
+
+Run scripts/build-cli-integrations.py after editing this file or cli/assets.
+No imports from this file are needed by an installed finalechat executable.
+"""
+
+import contextlib
+import copy
+import gzip
+import queue
+import stat
+import tempfile
+import threading
+import zipfile
+
+INTEGRATION_DIR = CONFIG_DIR / "integrations"
+ARTIFACT_CHUNK = 1 << 20
+ARTIFACT_MAX_FILE = 512 << 20
+ARTIFACT_MAX_TOTAL = 2 << 30
+INTEGRATION_SCHEMA = "finalechat-integrations/1"
+
+
+def canonical_bytes(value):
+    return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+
+
+def sha256(value):
+    return hashlib.sha256(value).hexdigest()
+
+
+def private_write(path, raw):
+    """Durable replacement; never follow a destination symlink or share temp names."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if path.is_symlink():
+        raise CLIError(f"Refusing to replace a symlink: {path}")
+    fd, name = tempfile.mkstemp(prefix=".finalechat-", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as out:
+            out.write(raw)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(name, path)
+        if os.name == "posix":
+            directory = os.open(str(path.parent), os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(name)
+
+
+def private_json(path, value):
+    private_write(path, canonical_bytes(value) + b"\n")
+
+
+def read_object(path, default=None, max_bytes=1 << 20):
+    try:
+        with Path(path).open("rb") as source:
+            raw = source.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            raise CLIError(f"Document is too large: {path}")
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise CLIError(f"Expected a JSON object: {path}")
+        return value
+    except FileNotFoundError:
+        return {} if default is None else default
+
+
+@contextlib.contextmanager
+def integration_lock(path, timeout=10):
+    if os.name != "posix":
+        raise CLIError("Settings control requires POSIX advisory locks on this platform.")
+    import fcntl
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(str(path), os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise CLIError("Another integration process owns this resource.") from None
+                time.sleep(0.05)
+        yield
+    finally:
+        os.close(fd)
+
+
+def integration_key(provider, project):
+    return provider + "-" + sha256(os.fsencode(str(Path(project).resolve())))[:24]
+
+
+def integration_path(provider, project):
+    return INTEGRATION_DIR / integration_key(provider, project)
+
+
+def portable_path(name):
+    if not isinstance(name, str) or not name or len(name.encode()) > 1024:
+        return False
+    if any(c in name for c in "\\:%?#") or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        return False
+    for part in name.split("/"):
+        if part in ("", ".", "..") or part[-1] in " ." or len(part.encode()) > 255:
+            return False
+        if re.fullmatch(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?", part):
+            return False
+    return True
+
+
+@contextlib.contextmanager
+def regular_source(path):
+    path = Path(path)
+    fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > ARTIFACT_MAX_FILE:
+            raise CLIError(f"Not a bounded regular file: {path}")
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            yield source, info.st_size
+    finally:
+        os.close(fd)
+
+
+def committed_jsonl(source, limit):
+    """Copy only complete native records, with a fixed initial EOF boundary."""
+    remaining = limit
+    line = 0
+    while remaining:
+        raw = source.readline(min(remaining, (16 << 20) + 1))
+        if not raw:
+            break
+        remaining -= len(raw)
+        if len(raw) > 16 << 20:
+            raise CLIError("A native JSONL record exceeds 16 MiB.")
+        if not raw.endswith(b"\n"):
+            if remaining:
+                raise CLIError("A native JSONL file changed during capture.")
+            break
+        line += 1
+        try:
+            value = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise CLIError(f"Invalid native JSONL record at line {line}.") from None
+        if not isinstance(value, dict):
+            raise CLIError(f"Expected native event object at line {line}.")
+        yield raw
+
+
+class WebsiteExport:
+    def __init__(self, directory, provider, session_id, project):
+        self.directory = Path(directory)
+        self.files = []
+        self.total = 0
+        self.manifest = {
+            "format": "finalechat.website/v1", "producer": {"name": provider, "version": VERSION},
+            "entrypoint": "index.html", "settings_entrypoint": "settings/index.html",
+            "captured_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "dataset": {"format": provider + ".native-jsonl/v1", "session_id": session_id,
+                        "project": str(project), "files": []},
+            "viewer": {"format": "finalechat.native-session-viewer/v1", "version": VERSION}, "files": self.files,
+        }
+
+    def add(self, name, role, content_type, parts):
+        if not portable_path(name) or any(f["path"].casefold() == name.casefold() for f in self.files):
+            raise CLIError("Invalid or duplicate archive path.")
+        target = self.directory / name
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        record = {"path": name, "role": role, "content_type": content_type, "size": 0, "chunks": []}
+        digest = hashlib.sha256()
+        pending = bytearray()
+        with target.open("xb") as out:
+            os.chmod(target, 0o600)
+            for raw in parts:
+                self.total += len(raw)
+                record["size"] += len(raw)
+                if record["size"] > ARTIFACT_MAX_FILE or self.total > ARTIFACT_MAX_TOTAL:
+                    raise CLIError("Archive exceeds the storage limits.")
+                digest.update(raw)
+                out.write(raw)
+                pending.extend(raw)
+                while len(pending) >= ARTIFACT_CHUNK:
+                    chunk = bytes(pending[:ARTIFACT_CHUNK])
+                    del pending[:ARTIFACT_CHUNK]
+                    record["chunks"].append({"sha256": sha256(chunk), "size": len(chunk)})
+            if pending:
+                record["chunks"].append({"sha256": sha256(pending), "size": len(pending)})
+            out.flush()
+            os.fsync(out.fileno())
+        record["sha256"] = digest.hexdigest()
+        self.files.append(record)
+        if len(self.files) > 4096 or sum(len(f["chunks"]) for f in self.files) > 16384:
+            raise CLIError("Archive contains too many files or chunks.")
+
+    def json(self, name, role, value):
+        self.add(name, role, "application/json", [canonical_bytes(value) + b"\n"])
+
+    def finish(self):
+        self.files.sort(key=lambda f: f["path"])
+        private_json(self.directory / "manifest.json", self.manifest)
+        return self.manifest
+
+
+def artifact_asset(name):
+    return gzip.decompress(base64.b64decode(INTEGRATION_ASSETS[name])).decode("utf-8")
+
+
+def build_native_export(directory, registration, settings=None, audit_path=None):
+    provider, project = registration["provider"], Path(registration["project"])
+    native = Path(registration["transcript"])
+    export = WebsiteExport(directory, provider, registration["session_id"], project)
+    sources = [(native, "sessions/" + native.name)]
+    if provider == "claude-code":
+        # Claude keeps full subagent records beside the parent, in <session>/subagents.
+        root = native.parent / native.stem / "subagents"
+        if root.exists():
+            if root.is_symlink() or not root.is_dir():
+                raise CLIError("Subagent directory must be a real directory.")
+            for child in sorted(root.glob("*.jsonl")):
+                sources.append((child, "sessions/" + native.stem + "/subagents/" + child.name))
+    for source, name in sources:
+        with regular_source(source) as (stream, size):
+            export.add(name, "source", "application/x-ndjson", committed_jsonl(stream, size))
+        export.manifest["dataset"]["files"].append(name)
+    export.json("context/capture.json", "context", {
+        "provider": provider, "project": str(project), "session_id": registration["session_id"],
+        "native_file": native.name, "native_version": registration.get("native_version", "unknown"),
+        "capture": "Complete newline-terminated native records; an incomplete final record is omitted.",
+        "restoration": "Verified source recovery only. Runtime state, credentials and external tool effects are not restored.",
+    })
+    if settings is None:
+        settings = {"label": provider + " settings", "descriptor": {
+            "format": "finalechat.settings/v1", "schema_version": INTEGRATION_SCHEMA,
+            "adapter_version": VERSION, "fields": []}, "snapshot": {
+                "version": "unavailable", "context": "unavailable", "saved": {}, "effective": {},
+                "runtime_known": False, "details": {"reason": "No settings snapshot was available at capture time."}}}
+    export.json("settings/state.json", "context", settings)
+    export.manifest["dataset"]["settings_version"] = settings["snapshot"]["version"]
+    if audit_path and Path(audit_path).exists():
+        with regular_source(audit_path) as (stream, size):
+            export.add("context/settings-audit.jsonl", "context", "application/x-ndjson", committed_jsonl(stream, size))
+    sdk = artifact_asset("sdk")
+    for asset, name in (("viewer", "index.html"), ("settings", "settings/index.html")):
+        raw = artifact_asset(asset).replace("/* FINALE_ARTIFACT_SDK */", sdk).encode("utf-8")
+        export.add(name, "viewer", "text/html", [raw])
+    return export.finish()
+
+
+def verify_website(directory):
+    """Verify all source bytes before publication or recovery; never execute HTML."""
+    directory = Path(directory).resolve()
+    manifest = read_object(directory / "manifest.json")
+    files = manifest.get("files", [])
+    if manifest.get("format") != "finalechat.website/v1" or not isinstance(files, list) or not 1 <= len(files) <= 4096:
+        raise CLIError("Unsupported or invalid artifact manifest.")
+    seen, total, chunk_count = set(), 0, 0
+    for record in files:
+        name = record.get("path")
+        if not portable_path(name) or name.casefold() in seen:
+            raise CLIError("Unsafe or duplicate archive filename.")
+        seen.add(name.casefold())
+        path = directory / name
+        for part in [path, *path.parents]:
+            if part == directory:
+                break
+            if part.is_symlink():
+                raise CLIError("Archives cannot contain symlinks.")
+        digest, count = hashlib.sha256(), 0
+        with regular_source(path) as (source, size):
+            if size != record.get("size"):
+                raise CLIError(f"Wrong file size: {name}")
+            for chunk in record.get("chunks", []):
+                length = chunk.get("size")
+                if type(length) is not int or not 1 <= length <= ARTIFACT_CHUNK:
+                    raise CLIError("Invalid chunk size.")
+                raw = source.read(length)
+                if len(raw) != length or sha256(raw) != chunk.get("sha256"):
+                    raise CLIError(f"Corrupt archive chunk: {name}")
+                digest.update(raw)
+                count += length
+                chunk_count += 1
+            if count != size or source.read(1) or digest.hexdigest() != record.get("sha256"):
+                raise CLIError(f"Corrupt archive file: {name}")
+        total += count
+        if total > ARTIFACT_MAX_TOTAL or chunk_count > 16384:
+            raise CLIError("Archive exceeds storage limits.")
+    if manifest.get("entrypoint") not in [f["path"] for f in files]:
+        raise CLIError("Archive entrypoint is missing.")
+    return manifest
+
+
+def recover_source_file(directory, record, destination):
+    """Check bytes again while copying, so verification is not a stale promise."""
+    digest, count = hashlib.sha256(), 0
+    with regular_source(Path(directory) / record["path"]) as (source, size):
+        with Path(destination).open("xb") as out:
+            os.chmod(destination, 0o600)
+            for chunk in record["chunks"]:
+                raw = source.read(chunk["size"])
+                if len(raw) != chunk["size"] or sha256(raw) != chunk["sha256"]:
+                    raise CLIError("Archive source changed during recovery.")
+                digest.update(raw)
+                count += len(raw)
+                out.write(raw)
+            if count != size or count != record["size"] or source.read(1) or digest.hexdigest() != record["sha256"]:
+                raise CLIError("Archive source changed during recovery.")
+            out.flush()
+            os.fsync(out.fileno())
+
+
+def upload_website(client, directory, journal_path, thread_ref, title):
+    """Journal immutable capture identity before the first remote write."""
+    manifest = verify_website(directory)
+    journal = read_object(journal_path)
+    digest = sha256(canonical_bytes(manifest))
+    if journal and journal.get("manifest_digest") != digest:
+        raise CLIError("A pending publication has different staged content; retain it and retry first.")
+    if not journal:
+        artifact = client.request("PUT", "/api/v1/threads/" + Client.ref_path(thread_ref) + "/artifacts/session",
+                                  body={"title": title}, retries=2)["artifact"]
+        journal = {"manifest_digest": digest, "artifact_id": artifact["id"],
+                   "previous_revision_id": artifact.get("current_revision_id"),
+                   "client_key": "native-" + secrets.token_hex(24), "directory": str(directory)}
+        private_json(journal_path, journal)
+    if journal.get("revision_id"):
+        return journal
+    base = "/api/v1/artifacts/" + Client.ref_path(journal["artifact_id"])
+    hashes = sorted({c["sha256"] for f in manifest["files"] for c in f["chunks"]})
+    missing = set(client.request("POST", base + "/blobs/check", body={"hashes": hashes})["missing"])
+    for record in manifest["files"]:
+        with regular_source(Path(directory) / record["path"]) as (source, _size):
+            for chunk in record["chunks"]:
+                raw = source.read(chunk["size"])
+                if sha256(raw) != chunk["sha256"]:
+                    raise CLIError("Staged artifact changed during upload.")
+                if chunk["sha256"] in missing:
+                    client.request_bytes("PUT", base + "/blobs/" + chunk["sha256"], data=raw,
+                                         content_type="application/octet-stream", timeout=60)
+                    missing.remove(chunk["sha256"])
+    revision = client.request("POST", base + "/revisions", body={
+        "client_key": journal["client_key"], "previous_revision_id": journal["previous_revision_id"],
+        "manifest": manifest}, retries=2)["revision"]
+    journal["revision_id"] = revision["id"]
+    private_json(journal_path, journal)
+    return journal
+
+
+class NativeRPCError(CLIError):
+    def __init__(self, method, error):
+        # Native error data can contain configuration values. Keep it local;
+        # command results use bounded adapter messages, never this raw object.
+        super().__init__(f"Native API rejected {method}: {error.get('message', 'unknown error')}")
+        self.error = error
+
+
+class CodexRPC:
+    """One owned App Server connection; it never resumes unrelated sessions."""
+    def __init__(self, project, executable="codex", environment=None):
+        self.process = subprocess.Popen([executable, "app-server", "--stdio"], cwd=str(project),
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                        stderr=subprocess.DEVNULL, env=environment)
+        self.messages = queue.Queue(maxsize=256)
+        self.sequence = 0
+        self.closed = threading.Event()
+        self.reader = threading.Thread(target=self._read, daemon=True)
+        self.reader.start()
+        try:
+            self.info = self.call("initialize", {"clientInfo": {"name": "finalechat", "version": VERSION},
+                                                 "capabilities": {"experimentalApi": True}})
+            self._send({"method": "initialized"})
+        except BaseException:
+            self.close()
+            raise
+
+    def _read(self):
+        try:
+            while not self.closed.is_set():
+                raw = self.process.stdout.readline((16 << 20) + 1)
+                if not raw:
+                    raise CLIError("Codex App Server disconnected.")
+                if len(raw) > 16 << 20 or not raw.endswith(b"\n"):
+                    raise CLIError("Oversized native API response.")
+                self.messages.put(json.loads(raw), timeout=1)
+        except Exception as err:
+            with contextlib.suppress(queue.Full):
+                self.messages.put(err, timeout=1)
+
+    def _send(self, value):
+        self.process.stdin.write(canonical_bytes(value) + b"\n")
+        self.process.stdin.flush()
+
+    def call(self, method, params, timeout=20):
+        self.sequence += 1
+        request_id = self.sequence
+        self._send({"id": request_id, "method": method, "params": params})
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                value = self.messages.get(timeout=max(0, deadline - time.monotonic()))
+            except queue.Empty:
+                raise CLIError(f"Native API timed out: {method}") from None
+            if isinstance(value, Exception):
+                raise CLIError("Could not read the native API response.") from value
+            if "method" in value and "id" in value:
+                # The settings/import adapter has no approval delegation. It
+                # cannot answer an approval on behalf of the terminal user.
+                self._send({"id": value["id"], "error": {"code": -32601, "message": "This connection only supports settings and read-only imports."}})
+                continue
+            if value.get("id") != request_id:
+                continue
+            if "error" in value:
+                raise NativeRPCError(method, value["error"])
+            return value.get("result", {})
+
+    def close(self):
+        self.closed.set()
+        if self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5)
+        for stream in (self.process.stdin, self.process.stdout):
+            with contextlib.suppress(OSError):
+                stream.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
+def value_at(document, pointer, missing=None):
+    value = document
+    for part in pointer.strip("/").split("/"):
+        if not isinstance(value, dict) or part not in value:
+            return missing
+        value = value[part]
+    return value
+
+
+def edit_at(document, pointer, edit):
+    parts = pointer.strip("/").split("/")
+    current = document
+    parents = []
+    for part in parts[:-1]:
+        if part not in current:
+            if edit["op"] == "unset":
+                return
+            current[part] = {}
+        if not isinstance(current[part], dict):
+            raise CLIError("A parent setting has an incompatible type; refresh and edit locally.")
+        parents.append((current, part))
+        current = current[part]
+    if edit["op"] == "set":
+        current[parts[-1]] = copy.deepcopy(edit["value"])
+    else:
+        current.pop(parts[-1], None)
+        for parent, part in reversed(parents):
+            if not parent[part]:
+                parent.pop(part)
+
+
+def setting_field(key, kind="string", choices=None, category="preference", timing="new_or_resumed_session", **extra):
+    shape = {"type": kind}
+    if kind == "string":
+        shape["max_length"] = 32768
+    if kind == "array":
+        shape["items"] = {"type": "string", "max_length": 4096}
+    if choices is not None:
+        shape["enum"] = choices
+    field = {"key": "/" + key, "label": key.replace("/", " · "), "schema": shape,
+             "writable": True, "unset": True, "class": category, "effective_when": timing}
+    field.update(extra)
+    return field
+
+
+def claude_catalog():
+    result = [setting_field("model"), setting_field("effortLevel", choices=["low", "medium", "high", "max"]),
+              setting_field("outputStyle", timing="restart_required"), setting_field("language"),
+              setting_field("agent"), setting_field("attribution/commit"), setting_field("attribution/pr")]
+    for name in ("alwaysThinkingEnabled", "fastMode", "fastModePerSessionOptIn", "autoMemoryEnabled",
+                 "includeCoAuthoredBy", "includeGitInstructions", "respectGitignore", "spinnerTipsEnabled",
+                 "terminalProgressBarEnabled"):
+        result.append(setting_field(name, "boolean"))
+    days = setting_field("cleanupPeriodDays", "integer")
+    days["schema"].update(minimum=0, maximum=36500)
+    result.append(days)
+    for name in ("allow", "deny", "ask", "additionalDirectories"):
+        result.append(setting_field("permissions/" + name, "array", category="permissions"))
+    result.append(setting_field("permissions/defaultMode", choices=["default", "acceptEdits", "plan", "dontAsk", "bypassPermissions", "auto"], category="permissions"))
+    result.append(setting_field("permissions/disableBypassPermissionsMode", choices=["disable"], category="permissions"))
+    for name in ("enabled", "autoAllowBashIfSandboxed", "allowUnsandboxedCommands", "enableWeakerNestedSandbox", "enableWeakerNetworkIsolation"):
+        result.append(setting_field("sandbox/" + name, "boolean", category="permissions", timing="restart_required"))
+    for name in ("excludedCommands", "network/allowedDomains", "network/allowUnixSockets", "filesystem/allowWrite", "filesystem/denyRead", "filesystem/denyWrite"):
+        result.append(setting_field("sandbox/" + name, "array", category="permissions", timing="restart_required"))
+    return result
+
+
+def codex_catalog():
+    result = [setting_field("model"), setting_field("review_model"), setting_field("model_provider", category="credential_reference"),
+              setting_field("model_reasoning_effort", choices=["none", "minimal", "low", "medium", "high", "xhigh"]),
+              setting_field("plan_mode_reasoning_effort", choices=["none", "minimal", "low", "medium", "high", "xhigh"]),
+              setting_field("model_reasoning_summary", choices=["auto", "concise", "detailed", "none"]),
+              setting_field("model_verbosity", choices=["low", "medium", "high"]),
+              setting_field("personality", choices=["none", "friendly", "pragmatic"]),
+              setting_field("service_tier", choices=["fast", "flex"]),
+              setting_field("approval_policy", choices=["untrusted", "on-failure", "on-request", "never"], category="permissions"),
+              setting_field("sandbox_mode", choices=["read-only", "workspace-write", "danger-full-access"], category="permissions"),
+              setting_field("web_search", choices=["disabled", "cached", "live"], category="permissions"),
+              setting_field("developer_instructions"), setting_field("compact_prompt"),
+              setting_field("history/persistence", choices=["save-all", "none"])]
+    for name in ("hide_agent_reasoning", "show_raw_agent_reasoning", "check_for_update_on_startup",
+                 "disable_paste_burst", "suppress_unstable_features_warning"):
+        result.append(setting_field(name, "boolean"))
+    for name in ("model_context_window", "model_auto_compact_token_limit", "tool_output_token_limit",
+                 "project_doc_max_bytes", "background_terminal_max_timeout"):
+        field = setting_field(name, "integer")
+        field["schema"].update(minimum=1, maximum=2147483647)
+        result.append(field)
+    for name in ("network_access", "exclude_tmpdir_env_var", "exclude_slash_tmp"):
+        result.append(setting_field("sandbox_workspace_write/" + name, "boolean", category="permissions"))
+    result.append(setting_field("sandbox_workspace_write/writable_roots", "array", category="permissions"))
+    result.append(setting_field("project_doc_fallback_filenames", "array"))
+    result.append(setting_field("allow_login_shell", "boolean", category="executable"))
+    return result
+
+
+def shape_accepts(shape, value):
+    kind = shape["type"]
+    if "enum" in shape and not any(type(value) is type(choice) and value == choice for choice in shape["enum"]):
+        return False
+    if kind == "string":
+        return isinstance(value, str) and len(value.encode()) <= shape.get("max_length", 32768)
+    if kind == "boolean":
+        return type(value) is bool
+    if kind in ("integer", "number"):
+        return type(value) in ((int,) if kind == "integer" else (int, float)) and shape.get("minimum", -float("inf")) <= value <= shape.get("maximum", float("inf"))
+    if kind == "array":
+        return isinstance(value, list) and len(value) <= 1024 and all(shape_accepts(shape["items"], item) for item in value)
+    return False
+
+
+def supported_snapshot_values(fields, saved, effective):
+    """Do not export arbitrary native objects under otherwise known keys."""
+    unsupported = []
+    for field in fields:
+        key = field["key"]
+        if any(key in values and not shape_accepts(field["schema"], values[key]) for values in (saved, effective)):
+            saved.pop(key, None)
+            effective.pop(key, None)
+            unsupported.append(key)
+            field.update(writable=False, locked_reason="The native value is outside this adapter's supported schema. Inspect it locally.")
+    return unsupported
+
+
+def validate_local_proposal(view, proposal, grant):
+    if len(canonical_bytes(proposal)) > 64 << 10:
+        raise CLIError("Settings proposal exceeds 64 KiB.")
+    if proposal.get("operation") not in grant["operations"]:
+        raise CLIError("This operation is not authorized locally.")
+    if proposal.get("schema_version") != view["descriptor"]["schema_version"]:
+        raise CLIError("Settings schema changed; refresh before saving.")
+    if proposal.get("generation", "") != view.get("generation", ""):
+        raise CLIError("Settings runtime generation changed.")
+    if proposal.get("expected_version") != view["snapshot"]["version"]:
+        raise SettingsConflict("Settings changed; refresh before saving.")
+    if proposal["operation"] == "settings.refresh":
+        if proposal.get("edits") or proposal.get("parameters"):
+            raise CLIError("Refresh accepts no payload.")
+        return
+    if proposal["operation"] != "settings.apply":
+        raise CLIError("Unsupported settings operation.")
+    edits = proposal.get("edits")
+    if not isinstance(edits, list) or not 1 <= len(edits) <= 256 or proposal.get("parameters"):
+        raise CLIError("Provide 1–256 settings edits.")
+    fields = {field["key"]: field for field in view["descriptor"]["fields"]}
+    seen = set()
+    for edit in edits:
+        if not isinstance(edit, dict) or not isinstance(edit.get("key"), str):
+            raise CLIError("Invalid settings edit.")
+        key, op = edit.get("key"), edit.get("op")
+        field = fields.get(key)
+        if key in seen or any(key.startswith(old + "/") or old.startswith(key + "/") for old in seen):
+            raise CLIError("Overlapping settings edits are not allowed.")
+        seen.add(key)
+        if not field or not field["writable"] or field["class"] not in grant["classes"]:
+            raise CLIError("This field is unavailable or not authorized locally.")
+        if op == "unset" and field["unset"] and edit.get("value") is None:
+            continue
+        if op != "set" or not shape_accepts(field["schema"], edit.get("value")):
+            raise CLIError("Invalid setting value: " + key)
+
+
+class SettingsConflict(CLIError):
+    pass
+
+
+class ClaudeSettings:
+    provider = "claude-code"
+
+    def __init__(self, project, scope="project", user_directory=None):
+        self.project = Path(project).resolve()
+        self.scope = scope
+        self.user_directory = Path(user_directory or os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude")).expanduser().resolve()
+        paths = {"user": self.user_directory / "settings.json", "project": self.project / ".claude/settings.json",
+                 "project_local": self.project / ".claude/settings.local.json"}
+        if scope not in paths:
+            raise CLIError("Claude Code supports user, project and project_local scopes.")
+        self.paths, self.path = paths, paths[scope]
+        self.key = "claude-" + scope + "-" + sha256(os.fsencode(str(self.path)))[:24]
+        self.native_version = native_version("claude")
+
+    def grant(self):
+        return {"key": self.key, "label": "Claude Code · " + ("User settings" if self.scope == "user" else self.project.name),
+                "scope": self.scope, "operations": ["settings.apply", "settings.refresh"],
+                "classes": ["preference", "permissions"]}
+
+    def managed_paths(self):
+        root = Path("/Library/Application Support/ClaudeCode" if sys.platform == "darwin" else "/etc/claude-code")
+        paths = [root / "managed-settings.json"]
+        fragments = root / "managed-settings.d"
+        if fragments.is_dir():
+            paths.extend(sorted(fragments.glob("*.json")))
+        return paths
+
+    def snapshot(self, grant=None):
+        grant = grant or self.grant()
+        layers = [(scope, path, read_object(path)) for scope, path in self.paths.items()]
+        layers.extend(("managed", path, read_object(path)) for path in self.managed_paths())
+        saved = next(data for scope, _path, data in layers if scope == self.scope)
+        fields, saved_values, effective, provenance = claude_catalog(), {}, {}, {}
+        for field in fields:
+            key = field["key"]
+            marker = object()
+            for scope, path, data in layers:
+                value = value_at(data, key, marker)
+                if value is marker:
+                    continue
+                if scope == self.scope:
+                    saved_values[key] = value
+                # Permission arrays merge across scopes. A managed policy
+                # remains authoritative even when its selected value is empty.
+                if field["schema"]["type"] == "array" and isinstance(value, list) and scope != "managed":
+                    previous = effective.get(key, [])
+                    effective[key] = list(dict.fromkeys(previous + value)) if isinstance(previous, list) and all(isinstance(x, str) for x in previous + value) else value
+                else:
+                    effective[key] = value
+                provenance[key] = scope
+                if scope == "managed" or (list(self.paths).index(scope) > list(self.paths).index(self.scope) if scope in self.paths else False):
+                    field.update(writable=False, locked_reason="Overridden by " + scope + " settings.")
+            field["source"] = provenance.get(key, "default")
+            if field["class"] not in grant["classes"]:
+                field.update(writable=False, locked_reason="This settings class was not paired.")
+            if field["class"] == "permissions":
+                # Claude has no supported effective-policy read API. Cloud or
+                # MDM requirements can be absent from these files; never claim
+                # a remote permission change bypasses that policy boundary.
+                field["description"] = "Saved file preference. Claude Code revalidates managed policy when loading it; current runtime adoption is unconfirmed."
+        env_overrides = {"ANTHROPIC_MODEL": "/model", "CLAUDE_CODE_EFFORT_LEVEL": "/effortLevel"}
+        environment = {}
+        for name, key in env_overrides.items():
+            if name in os.environ:
+                environment[name] = sha256(os.fsencode(os.environ[name]))
+                for field in fields:
+                    if field["key"] == key:
+                        field.update(writable=False, locked_reason="Connector environment overrides this field: " + name)
+        context = [{"scope": scope, "path": str(path), "sha256": sha256(canonical_bytes(data))} for scope, path, data in layers]
+        unsupported_values = supported_snapshot_values(fields, saved_values, effective)
+        version = sha256(canonical_bytes([context, environment, INTEGRATION_SCHEMA, self.native_version, INTEGRATION_ADAPTER_DIGEST]))
+        descriptor = {"format": "finalechat.settings/v1", "schema_version": INTEGRATION_SCHEMA + "/claude",
+                      "adapter_version": VERSION, "fields": fields}
+        known = {field["key"].split("/")[1] for field in fields}
+        return {"key": self.key, "label": self.grant()["label"], "scope": self.scope, "generation": "", "descriptor": descriptor,
+                "snapshot": {"version": version, "context": version, "saved": saved_values, "effective": effective,
+                             "runtime_known": False, "details": {"layers": context, "sources": provenance,
+                                 "native_version": self.native_version, "managed_policy": "Local managed files observed; cloud/MDM and another process's environment are not observable.",
+                                 "unsupported_fields": sorted(k for k in saved if k not in known),
+                                 "unsupported_values": unsupported_values,
+                                 "credential_values": "Excluded; environment values and helper commands are not exported."}}}
+
+    def prepare(self, proposal, grant):
+        view = self.snapshot(grant)
+        validate_local_proposal(view, proposal, grant)
+        with contextlib.suppress(FileNotFoundError):
+            if self.path.is_symlink():
+                raise CLIError("Settings symlinks must be managed locally.")
+        before = self.path.read_bytes() if self.path.exists() else b""
+        data = json.loads(before) if before.strip() else {}
+        for edit in proposal.get("edits", []):
+            edit_at(data, edit["key"], edit)
+        desired = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False).encode() + b"\n"
+        if len(desired) > 1 << 20:
+            raise CLIError("Resulting settings document exceeds 1 MiB.")
+        return {"view": view, "before_hash": sha256(before), "desired_hash": sha256(desired),
+                "desired_bytes": base64.b64encode(desired).decode(), "path": str(self.path)}
+
+    def apply_prepared(self, prepared):
+        before = self.path.read_bytes() if self.path.exists() else b""
+        if sha256(before) != prepared["before_hash"]:
+            raise SettingsConflict("Settings file changed immediately before saving.")
+        private_write(self.path.with_name(self.path.name + ".finalechat-backup"), before)
+        private_write(self.path, base64.b64decode(prepared["desired_bytes"]))
+
+    def matches_prepared(self, prepared):
+        raw = self.path.read_bytes() if self.path.exists() else b""
+        return sha256(raw) == prepared["desired_hash"]
+
+    def close(self):
+        pass
+
+
+def native_version(executable):
+    try:
+        result = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=5)
+        return result.stdout.strip()[:200] if result.returncode == 0 else "unavailable"
+    except (OSError, subprocess.SubprocessError):
+        return "unavailable"
+
+
+class CodexSettings:
+    provider = "codex"
+
+    def __init__(self, project, scope="user", rpc=None):
+        if scope != "user":
+            raise CLIError("This native Codex adapter writes user config. Project/profile layers remain visible through native provenance; direct writes to them are not advertised by this adapter.")
+        self.project, self.scope = Path(project).resolve(), scope
+        self.rpc = rpc or CodexRPC(self.project)
+        self.native_version = str(self.rpc.info.get("userAgent", "unknown"))[:200]
+        self.path = Path(self.rpc.info["codexHome"]) / "config.toml"
+        self.key = "codex-user-" + sha256(os.fsencode(str(self.path)))[:24]
+
+    def grant(self):
+        return {"key": self.key, "label": "Codex · User defaults", "scope": "user",
+                "operations": ["settings.apply", "settings.refresh"],
+                "classes": ["preference", "permissions", "credential_reference", "executable"]}
+
+    def read(self):
+        result = self.rpc.call("config/read", {"cwd": str(self.project), "includeLayers": True})
+        requirements = self.rpc.call("configRequirements/read", {}).get("requirements") or {}
+        layer = next((layer for layer in result.get("layers") or [] if layer["name"]["type"] == "user" and not layer["name"].get("profile")), None)
+        if layer is None or Path(layer["name"]["file"]).resolve() != self.path.resolve():
+            raise CLIError("The native API did not identify the authorized user config layer.")
+        return result, requirements, layer
+
+    def snapshot(self, grant=None):
+        grant = grant or self.grant()
+        native, requirements, layer = self.read()
+        fields, saved, effective = codex_catalog(), {}, {}
+        requirements_map = {"/approval_policy": "allowedApprovalPolicies", "/sandbox_mode": "allowedSandboxModes", "/web_search": "allowedWebSearchModes"}
+        for field in fields:
+            key = field["key"]
+            value = value_at(layer["config"], key)
+            if value is not None:
+                saved[key] = value
+            value = value_at(native["config"], key)
+            if value is not None:
+                effective[key] = value
+            origin = native["origins"].get(key[1:].replace("/", "."), {}).get("name", {})
+            field["source"] = origin.get("type", "default")
+            if origin.get("type") in ("mdm", "enterpriseManaged", "legacyManagedConfigTomlFromFile", "legacyManagedConfigTomlFromMdm", "project", "sessionFlags") or origin.get("profile"):
+                field.update(writable=False, locked_reason="Overridden by a native " + field["source"] + " layer.")
+            allowed = requirements.get(requirements_map.get(key, ""))
+            if allowed is not None:
+                field["schema"]["enum"] = [v for v in allowed if isinstance(v, str)]
+                if not field["schema"]["enum"]:
+                    field.update(writable=False, locked_reason="Managed policy requires a configuration this adapter cannot express.")
+            if key == "/model_provider":
+                names = list((native["config"].get("model_providers") or {}).keys())
+                if isinstance(effective.get(key), str) and effective[key] not in names:
+                    names.append(effective[key])
+                if names:
+                    field["schema"]["enum"] = sorted(names)
+                else:
+                    field.update(writable=False, locked_reason="Provider endpoints must be established locally first.")
+            # Native null removes a value. Verified against the installed
+            # config/batchWrite API; no handwritten TOML round trip.
+            if field["class"] not in grant["classes"]:
+                field.update(writable=False, locked_reason="This settings class was not paired.")
+            if requirements.get("allowRemoteControl") is False:
+                field.update(writable=False, locked_reason="Managed policy disables remote control.")
+            if key == "/allow_login_shell" and requirements.get("allowLoginShell") is False:
+                field.update(writable=False, locked_reason="Managed policy disables login shells.")
+        context = [{"name": x["name"], "version": x["version"], "disabled_reason": x.get("disabledReason")} for x in native.get("layers") or []]
+        unsupported_values = supported_snapshot_values(fields, saved, effective)
+        version = sha256(canonical_bytes([context, requirements, INTEGRATION_SCHEMA, self.native_version, INTEGRATION_ADAPTER_DIGEST]))
+        known = {f["key"].split("/")[1] for f in fields}
+        # Never publish whole native config/read results: provider/MCP/env
+        # dictionaries can contain credentials and executable helpers.
+        return {"key": self.key, "label": self.grant()["label"], "scope": self.scope, "generation": "",
+                "descriptor": {"format": "finalechat.settings/v1", "schema_version": INTEGRATION_SCHEMA + "/codex", "adapter_version": VERSION, "fields": fields},
+                "snapshot": {"version": version, "context": version, "saved": saved, "effective": effective, "runtime_known": False,
+                             "details": {"layers": context, "native_user_version": layer["version"], "native_version": self.native_version,
+                                         "unsupported_values": unsupported_values,
+                                         "managed_requirements_digest": sha256(canonical_bytes(requirements)),
+                                         "unsupported_fields": sorted(k for k in native["config"] if k not in known),
+                                         "runtime": "This connection owns configuration reads and writes. It does not control another Codex session."}}}
+
+    def prepare(self, proposal, grant):
+        view = self.snapshot(grant)
+        validate_local_proposal(view, proposal, grant)
+        edits = [{"keyPath": edit["key"][1:].replace("/", "."), "mergeStrategy": "replace",
+                  "value": edit.get("value") if edit["op"] == "set" else None} for edit in proposal.get("edits", [])]
+        return {"view": view, "native_expected_version": view["snapshot"]["details"]["native_user_version"],
+                "edits": edits, "path": str(self.path), "before_hash": sha256(self.path.read_bytes() if self.path.exists() else b"")}
+
+    def apply_prepared(self, prepared):
+        self.rpc.call("config/batchWrite", {"edits": prepared["edits"], "filePath": str(self.path),
+                                           "expectedVersion": prepared["native_expected_version"], "reloadUserConfig": False})
+
+    def matches_prepared(self, prepared):
+        _native, _requirements, layer = self.read()
+        for edit in prepared["edits"]:
+            if value_at(layer["config"], "/" + edit["keyPath"].replace(".", "/")) != edit["value"]:
+                return False
+        return True
+
+    def close(self):
+        self.rpc.close()
+
+
+def make_settings_adapter(provider, project, scope=None):
+    if provider == "claude-code":
+        return ClaudeSettings(project, scope or "project")
+    if provider == "codex":
+        return CodexSettings(project, scope or "user")
+    raise CLIError("Unsupported integration provider.")
+
+
+def settings_lock_path(adapter):
+    return INTEGRATION_DIR / "locks" / (sha256(os.fsencode(str(adapter.path.resolve()))) + ".lock")
+
+
+def append_local_audit(directory, command, status, result):
+    event = {"event_id": command["id"], "event": "settings." + status,
+             "command_id": command["id"], "user_id": command.get("user_id"),
+             "resource_id": command["resource_id"], "proposal_digest": command["proposal_sha256"],
+             "proposal": command["proposal"], "result": result,
+             "recorded_at": datetime.now(timezone.utc).isoformat()}
+    path = Path(directory) / "settings-audit.jsonl"
+    # The per-resource execution lock serializes writers. Different resources
+    # share this append lock, and each record is flushed before acknowledging.
+    with integration_lock(Path(directory) / "audit.lock"):
+        fd = os.open(str(path), os.O_APPEND | os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "ab") as out:
+            out.write(canonical_bytes(event) + b"\n")
+            out.flush()
+            os.fsync(out.fileno())
+
+
+def execute_settings_command(adapter, grant, command, directory, before_write=lambda: None):
+    """At-least-once execution with a durable intent, reconciliation and audit."""
+    command_id = command.get("id", "")
+    if not re.fullmatch(r"[a-f0-9-]{36}", command_id):
+        raise CLIError("Invalid command identity.")
+    path = Path(directory) / "commands" / (command_id + ".json")
+    identity = {"command_id": command_id, "proposal_digest": command["proposal_sha256"], "resource_key": adapter.key}
+    with integration_lock(settings_lock_path(adapter)):
+        journal = read_object(path, max_bytes=4 << 20)
+        if journal and journal.get("identity") != identity:
+            raise CLIError("Command journal identity mismatch.")
+
+        def finish(status, result):
+            journal.update(identity=identity, status=status, result=result)
+            private_json(path, journal)
+            if not journal.get("audit_recorded"):
+                append_local_audit(directory, command, status, result)
+                journal["audit_recorded"] = True
+                private_json(path, journal)
+            return status, result
+
+        if journal.get("status"):
+            return finish(journal["status"], journal["result"])
+        proposal = command["proposal"]
+        prepared = journal.get("prepared")
+        if not prepared and command.get("attempts", 1) > 1 and proposal.get("operation") != "settings.refresh":
+            return finish("unknown", {"message": "The earlier delivery has no local journal. No mutation was repeated."})
+        if not prepared:
+            try:
+                prepared = adapter.prepare(proposal, grant)
+            except SettingsConflict:
+                return finish("conflicted", {"message": "Settings or their resolution context changed. Refresh and review again."})
+            except (CLIError, ValueError, OSError):
+                return finish("rejected", {"message": "The local adapter rejected this proposal. Refresh to inspect supported fields and policy."})
+            journal.update(identity=identity, prepared=prepared)
+            private_json(path, journal)
+        if proposal["operation"] == "settings.refresh":
+            return finish("succeeded", {"message": "Read current saved settings.", "version": prepared["view"]["snapshot"]["version"], "effects": [], "snapshot_publication": "pending"})
+        reconciled = bool(journal.get("write_started"))
+        try:
+            if not adapter.matches_prepared(prepared):
+                if reconciled or command.get("attempts", 1) > 1:
+                    return finish("unknown", {"message": "The earlier write cannot be established from current settings. It was not repeated."})
+                # Renew against the current connector instance immediately
+                # before crossing into the actual file/native writer.
+                before_write()
+                current = adapter.snapshot(grant)
+                if current["snapshot"]["version"] != prepared["view"]["snapshot"]["version"]:
+                    return finish("conflicted", {"message": "Settings changed immediately before execution."})
+                before_write()
+                journal["write_started"] = True
+                private_json(path, journal)
+                adapter.apply_prepared(prepared)
+            after = adapter.snapshot(grant)
+        except NativeRPCError as err:
+            code = (err.error.get("data") or {}).get("config_write_error_code")
+            if code == "configVersionConflict":
+                return finish("conflicted", {"message": "Codex rejected a stale native configuration version."})
+            if code in ("configLayerReadonly", "configValidationError", "configPathNotFound"):
+                return finish("rejected", {"message": "The native configuration API rejected the write. Inspect current native requirements locally."})
+            return finish("unknown", {"message": "The native API reported an error with an uncertain write outcome. No mutation will be repeated automatically."})
+        except SettingsConflict:
+            return finish("conflicted", {"message": "The local configuration file changed before writing."})
+        except (CLIError, OSError):
+            # Keep intent unresolved: a subsequent claim reconciles without
+            # automatically repeating a possibly completed native write.
+            raise
+        fields = {field["key"]: field for field in prepared["view"]["descriptor"]["fields"]}
+        effects = [{"key": edit["key"], "saved": True, "runtime_applied": False,
+                    "effective_when": fields[edit["key"]]["effective_when"]} for edit in proposal["edits"]]
+        return finish("succeeded", {"previous_version": prepared["view"]["snapshot"]["version"],
+                                     "version": after["snapshot"]["version"], "effects": effects,
+                                     "reconciled": reconciled, "snapshot_publication": "pending"})
+
+
+def validate_registration(provider, project, session_id, transcript):
+    project = Path(project).resolve()
+    transcript = Path(transcript).expanduser()
+    if transcript.is_symlink():
+        raise CLIError("Transcript symlinks are not captured.")
+    transcript = transcript.resolve()
+    if not session_id or len(session_id) > 200 or any(ord(c) < 32 for c in session_id):
+        raise CLIError("Invalid native session identity.")
+    with regular_source(transcript) as (source, size):
+        first = next(committed_jsonl(source, min(size, 16 << 20)), None)
+    if not first:
+        raise CLIError("The native session has no complete records yet.")
+    record = json.loads(first)
+    if provider == "codex":
+        payload = record.get("payload") or {}
+        if record.get("type") != "session_meta" or payload.get("id") != session_id:
+            raise CLIError("Codex rollout identity does not match the requested session.")
+        if Path(payload.get("cwd", "")).resolve() != project:
+            raise CLIError("Codex rollout belongs to a different project.")
+        version = str(payload.get("cli_version") or "unknown")
+    else:
+        version = str(record.get("version") or "unknown")
+        # Some Claude transcripts start with file-history metadata without a
+        # session ID. When the record has one, it must agree with the hook.
+        if record.get("sessionId") and record["sessionId"] != session_id:
+            raise CLIError("Claude transcript identity does not match its hook.")
+    return {"provider": provider, "project": str(project), "session_id": session_id,
+            "transcript": str(transcript), "native_version": version}
+
+
+def register_native_session(provider, project, session_id, transcript):
+    registration = validate_registration(provider, project, session_id, transcript)
+    directory = integration_path(provider, project)
+    key = sha256(session_id.encode())
+    private_json(directory / "sessions" / (key + ".json"), registration)
+    return registration
+
+
+def notify_claude_artifact(payload):
+    """Hooks only register/wake. HTTP and archival never block model hooks."""
+    project = str(Path(payload.get("cwd") or os.getcwd()).resolve())
+    directory = integration_path("claude-code", project)
+    config = read_object(directory / "integration.json")
+    if not config.get("artifacts") or not config.get("enabled", True):
+        return
+    transcript, session_id = payload.get("transcript_path"), payload.get("session_id")
+    if transcript and session_id and Path(transcript).exists():
+        register_native_session("claude-code", project, str(session_id), str(transcript))
+    # ConfigChange is an observation, not an acknowledgement that an unrelated
+    # Claude process adopted a particular model or effort setting.
+    if payload.get("hook_event_name") == "ConfigChange":
+        private_json(directory / "last-config-observation.json", {
+            "event": "ConfigChange", "session_id": session_id,
+            "observed_at": datetime.now(timezone.utc).isoformat()})
+    start_integration_companion("claude-code", project)
+
+
+def discover_codex_sessions(project, directory, native_root):
+    """Opted-in project scan, matching the native header before registration."""
+    project = Path(project).resolve()
+    root = Path(native_root).resolve()
+    known = read_object(Path(directory) / "discovery.json")
+    changed = False
+    for folder in (root / "sessions", root / "archived_sessions"):
+        if not folder.is_dir() or folder.is_symlink():
+            continue
+        count = 0
+        for current, dirs, files in os.walk(folder, followlinks=False):
+            dirs[:] = [d for d in dirs if not (Path(current) / d).is_symlink()]
+            for name in files:
+                if not name.endswith(".jsonl"):
+                    continue
+                count += 1
+                if count > 50000:
+                    raise CLIError("Too many native rollouts to scan; register a session explicitly.")
+                path = Path(current) / name
+                if path.is_symlink():
+                    continue
+                # An unmatched existing session cannot later change projects;
+                # record its inode, not its growing transcript contents.
+                info = path.stat()
+                identity = str(info.st_ino) + ":" + str(info.st_dev)
+                if known.get(str(path)) == identity:
+                    continue
+                with path.open("rb") as source:
+                    raw = source.readline((1 << 20) + 1)
+                if len(raw) > 1 << 20 or not raw.endswith(b"\n"):
+                    continue
+                try:
+                    event = json.loads(raw)
+                    payload = event.get("payload") or {}
+                    if event.get("type") == "session_meta" and payload.get("cwd") and Path(payload["cwd"]).resolve() == project:
+                        register_native_session("codex", project, str(payload["id"]), path)
+                except (ValueError, KeyError, CLIError):
+                    continue
+                known[str(path)] = identity
+                changed = True
+    if changed:
+        # Avoid an unbounded local registry on machines with years of history.
+        if len(known) > 20000:
+            known = dict(list(known.items())[-20000:])
+        private_json(Path(directory) / "discovery.json", known)
+
+
+def registration_signature(registration, settings, directory):
+    native = Path(registration["transcript"])
+    sources = [native]
+    subagents = native.parent / native.stem / "subagents"
+    if registration["provider"] == "claude-code" and subagents.is_dir():
+        sources.extend(sorted(subagents.glob("*.jsonl")))
+    audit = Path(directory) / "settings-audit.jsonl"
+    if audit.exists():
+        sources.append(audit)
+    stats = [(str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in sources]
+    return sha256(canonical_bytes([stats, settings["snapshot"]["version"], VERSION, INTEGRATION_ASSETS_DIGEST]))
+
+
+def publish_registered_session(client, registration, directory, settings):
+    session_dir = Path(directory) / "publications" / sha256(registration["session_id"].encode())
+    session_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with integration_lock(session_dir / "publisher.lock", timeout=0):
+        state_path = session_dir / "state.json"
+        state = read_object(state_path)
+        pending = session_dir / "pending.json"
+        thread_ref = "ext:" + registration["provider"] + ":" + registration["session_id"]
+
+        def complete(stage, signature):
+            result = upload_website(client, stage, pending, thread_ref, "Session explorer")
+            record = {"signature": signature, "artifact_id": result["artifact_id"], "revision_id": result["revision_id"],
+                      "settings_version": verify_website(stage)["dataset"].get("settings_version")}
+            private_json(state_path, record)
+            pending.unlink()
+            shutil.rmtree(stage)
+            return record
+
+        if pending.exists():
+            intent = read_object(pending)
+            stage = Path(intent["directory"])
+            if stage.parent.resolve() != session_dir.resolve():
+                raise CLIError("Publication journal points outside its private staging directory.")
+            state = complete(stage, intent.get("signature", ""))
+        signature = registration_signature(registration, settings, directory)
+        if state.get("signature") == signature:
+            return state
+        stage = Path(tempfile.mkdtemp(prefix="capture-", dir=str(session_dir)))
+        try:
+            build_native_export(stage, registration, settings, Path(directory) / "settings-audit.jsonl")
+            # upload_website records its own immutable identity before upload.
+            result = complete(stage, signature)
+        except BaseException:
+            if not pending.exists():
+                shutil.rmtree(stage)
+            raise
+        return result
+
+
+def publish_integration_pass(provider, project, client, directory):
+    config = read_object(Path(directory) / "integration.json")
+    if not config.get("artifacts"):
+        return
+    adapter = make_settings_adapter(provider, project, config.get("primary_scope"))
+    try:
+        settings = adapter.snapshot()
+        if provider == "codex":
+            discover_codex_sessions(project, directory, adapter.rpc.info["codexHome"])
+        for path in sorted((Path(directory) / "sessions").glob("*.json")):
+            registration = read_object(path)
+            try:
+                publish_registered_session(client, registration, directory, settings)
+            except (CLIError, OSError, ValueError) as err:
+                hook_log(f"artifact publication deferred ({provider}, {registration.get('session_id')}): {type(err).__name__}")
+    finally:
+        adapter.close()
+
+
+def start_integration_companion(provider, project, client=None):
+    directory = integration_path(provider, project)
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # The child acquires the process lock itself, so simultaneous hooks do
+    # not elect multiple owners. Do not kill PIDs from stale state files.
+    try:
+        with integration_lock(directory / "companion.lock", timeout=0):
+            pass
+    except CLIError:
+        return False
+    env = os.environ.copy()
+    if client:
+        env["FINALECHAT_URL"] = client.base_url
+        if client.token:
+            env["FINALECHAT_TOKEN"] = client.token
+    with (directory / "companion.log").open("ab") as log:
+        os.chmod(directory / "companion.log", 0o600)
+        subprocess.Popen([sys.executable, cli_path(), "connector", "run", provider, "--project", str(project)],
+                         stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+                         close_fds=True, env=env)
+    return True
+
+
+def run_integration_companion(provider, project, client, once=False):
+    directory = integration_path(provider, project)
+    stop = threading.Event()
+    instance = secrets.token_hex(24)
+    with integration_lock(directory / "companion.lock", timeout=0):
+        def publish_loop():
+            while not stop.is_set():
+                config = read_object(directory / "integration.json")
+                if not config.get("enabled", True):
+                    return
+                try:
+                    publish_integration_pass(provider, project, client, directory)
+                except (CLIError, OSError, ValueError):
+                    hook_log(f"{provider} artifact publisher will retry.")
+                if once or stop.wait(30):
+                    return
+
+        publisher = threading.Thread(target=publish_loop, daemon=True)
+        publisher.start()
+        adapters = {}
+        try:
+            while not stop.is_set():
+                config = read_object(directory / "integration.json")
+                if not config.get("enabled", True):
+                    break
+                pairing = read_object(directory / "connector.json")
+                if not pairing:
+                    if once:
+                        break
+                    stop.wait(5)
+                    continue
+                control_client = Client(pairing["base_url"], pairing["secret"])
+                base = "/api/v1/connectors/" + Client.ref_path(pairing["connector"]["id"])
+                try:
+                    connector = control_client.request("GET", base)["connector"]
+                    if connector["state"] != "active":
+                        if once:
+                            break
+                        stop.wait(5)
+                        continue
+                    control_client.request("POST", base + "/heartbeat", body={"instance": instance})
+                    resources, grants = {}, {}
+                    for grant in connector["grants"]:
+                        if grant["key"] not in {g["key"] for g in pairing["connector"]["requested_grants"]}:
+                            raise CLIError("Server resource does not match the local pairing.")
+                        adapter = adapters.get(grant["key"])
+                        if adapter is None:
+                            adapter = make_settings_adapter(provider, project, grant["scope"])
+                            if adapter.key != grant["key"]:
+                                adapter.close()
+                                raise CLIError("Local resource identity changed; pair it again.")
+                            adapters[grant["key"]] = adapter
+                        view = adapter.snapshot(grant)
+                        resource = control_client.request("PUT", base + "/resources/" + Client.ref_path(adapter.key), body={
+                            "instance": instance, "generation": "", "descriptor": view["descriptor"], "snapshot": view["snapshot"]})["resource"]
+                        resources[resource["id"]] = adapter
+                        grants[resource["id"]] = grant
+                        if grant["scope"] == config.get("primary_scope", "project" if provider == "claude-code" else "user"):
+                            for state_path in (directory / "publications").glob("*/state.json"):
+                                publication = read_object(state_path)
+                                try:
+                                    control_client.request("PUT", base + "/bindings/" + publication["artifact_id"], body={
+                                        "resource_id": resource["id"], "revision_id": publication["revision_id"]})
+                                except APIError as err:
+                                    if err.status not in (404, 409):
+                                        raise
+                    response = control_client.request("POST", base + "/commands/claim", body={"instance": instance},
+                                                      params={"wait": 0 if once else 20}, timeout=30, retries=0)
+                    command = response.get("command")
+                    if command:
+                        adapter = resources.get(command["resource_id"])
+                        if adapter is None:
+                            raise CLIError("Claimed command has no locally registered resource.")
+                        claim = {"instance": instance, "claim_token": command["claim_token"]}
+
+                        def renew():
+                            control_client.request("POST", base + "/heartbeat", body={"instance": instance}, retries=0)
+                            control_client.request("POST", "/api/v1/commands/" + command["id"] + "/renew", body=claim, retries=0)
+
+                        renew()
+                        lease_stop, lease_lost = threading.Event(), threading.Event()
+
+                        def keep_lease():
+                            while not lease_stop.wait(15):
+                                try:
+                                    renew()
+                                except (CLIError, OSError):
+                                    lease_lost.set()
+                                    return
+
+                        def check_lease():
+                            if lease_lost.is_set():
+                                raise CLIError("The command lease was lost before writing.")
+                            renew()
+
+                        keeper = threading.Thread(target=keep_lease, daemon=True)
+                        keeper.start()
+                        try:
+                            status, result = execute_settings_command(adapter, grants[command["resource_id"]], command, directory, before_write=check_lease)
+                            if lease_lost.is_set():
+                                raise CLIError("The command lease was lost; its durable result awaits reconciliation.")
+                            control_client.request("POST", "/api/v1/commands/" + command["id"] + "/result", body=dict(claim, status=status, result=result), retries=0)
+                        finally:
+                            lease_stop.set()
+                            keeper.join(timeout=35)
+                except (CLIError, OSError, ValueError):
+                    # Reconnect native transports after failures. Keep this
+                    # elected instance stable across transient HTTP outages.
+                    for adapter in adapters.values():
+                        adapter.close()
+                    adapters.clear()
+                    hook_log(f"{provider} settings connector will retry; any unresolved intent remains journaled.")
+                    if not once:
+                        stop.wait(5)
+                if once:
+                    break
+        finally:
+            if once:
+                publisher.join(timeout=60)
+            stop.set()
+            publisher.join(timeout=5)
+            for adapter in adapters.values():
+                adapter.close()
+
+
+def configure_integration(provider, project, **changes):
+    directory = integration_path(provider, project)
+    with integration_lock(directory / "configuration.lock"):
+        path = directory / "integration.json"
+        config = read_object(path)
+        config.update(provider=provider, project=str(Path(project).resolve()))
+        config.update(changes)
+        private_json(path, config)
+    return config
+
+
+def cmd_artifact(args):
+    if args.artifact_command in ("verify", "restore"):
+        manifest = verify_website(args.directory)
+        if args.artifact_command == "verify":
+            print(f"Verified {len(manifest['files'])} files and their SHA-256 chunks.")
+            return EXIT_OK
+        target = Path(args.output).expanduser()
+        target.mkdir(parents=True, exist_ok=False, mode=0o700)
+        try:
+            # Recover into a fresh directory. Do not install executable
+            # settings, process files, credentials, or a live command binding.
+            selected = [f for f in manifest["files"] if f["role"] == "source"]
+            for record in selected:
+                destination = target / record["path"]
+                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                recover_source_file(args.directory, record, destination)
+            private_json(target / "recovery.json", {"format": "finalechat.source-recovery/v1", "dataset": manifest["dataset"],
+                                                      "files": selected, "runtime_restored": False})
+        except BaseException:
+            shutil.rmtree(target)
+            raise
+        print(f"Recovered {len(selected)} native source files into {target}. No agent was started.")
+        return EXIT_OK
+    provider, project = args.provider, str(Path(args.project).resolve())
+    directory = integration_path(provider, project)
+    if args.artifact_command in ("enable", "disable"):
+        config = configure_integration(provider, project, artifacts=args.artifact_command == "enable", enabled=True)
+        if config["artifacts"]:
+            start_integration_companion(provider, project, client_from_args(args))
+        print(f"{provider} artifact publication {args.artifact_command}d for {project}.")
+        return EXIT_OK
+    if args.artifact_command == "publish":
+        # Explicit one-shot publication is allowed without persistent opt-in.
+        client = client_from_args(args)
+        adapter = make_settings_adapter(provider, project)
+        try:
+            settings = adapter.snapshot()
+            registrations = [read_object(p) for p in (directory / "sessions").glob("*.json")]
+            if args.session:
+                registrations = [r for r in registrations if r["session_id"] == args.session]
+            if not registrations:
+                raise CLIError("No tracked sessions. Use artifact track first.")
+            for registration in registrations:
+                result = publish_registered_session(client, registration, directory, settings)
+                print(f"Published {registration['session_id']} · revision {result['revision_id']}")
+        finally:
+            adapter.close()
+        return EXIT_OK
+    transcript = args.transcript
+    if not transcript and provider == "codex":
+        with CodexRPC(project) as rpc:
+            thread = rpc.call("thread/read", {"threadId": args.session, "includeTurns": False})["thread"]
+            transcript = thread.get("path")
+            if not transcript:
+                raise CLIError("This Codex thread has no native rollout path. Supply a supported JSONL capture with --transcript.")
+            if thread.get("cwd") and Path(thread["cwd"]).resolve() != Path(project):
+                raise CLIError("Native thread belongs to a different project; select that project explicitly.")
+    if not transcript:
+        raise CLIError("Claude Code export/track requires --transcript with the native session JSONL path.")
+    registration = validate_registration(provider, project, args.session, transcript)
+    if args.artifact_command == "track":
+        register_native_session(provider, project, args.session, transcript)
+        print(f"Tracking {provider}:{args.session}. Proactive upload is controlled by artifact enable/disable.")
+        return EXIT_OK
+    target = Path(args.output).expanduser()
+    target.mkdir(parents=True, exist_ok=False, mode=0o700)
+    adapter = None
+    try:
+        adapter = make_settings_adapter(provider, project)
+        manifest = build_native_export(target, registration, adapter.snapshot(), directory / "settings-audit.jsonl")
+        verify_website(target)
+    except BaseException:
+        shutil.rmtree(target)
+        raise
+    finally:
+        if adapter:
+            adapter.close()
+    print(f"Exported {len(manifest['files'])} files to {target}. Open index.html and choose this extracted directory.")
+    return EXIT_OK
+
+
+def cmd_connector(args):
+    provider, project = args.provider, str(Path(args.project).resolve())
+    directory = integration_path(provider, project)
+    client = client_from_args(args)
+    action = args.connector_command
+    if action == "pair":
+        scopes = list(dict.fromkeys(args.scope or (["project"] if provider == "claude-code" else ["user"])))
+        adapters = []
+        try:
+            for scope in scopes:
+                adapters.append(make_settings_adapter(provider, project, scope))
+            grants = [adapter.grant() for adapter in adapters]
+            # Validate local capabilities before creating a pending pairing.
+            for adapter in adapters:
+                adapter.snapshot()
+            existing = read_object(directory / "connector.json")
+            if existing:
+                scoped = Client(existing["base_url"], existing["secret"])
+                try:
+                    prior = scoped.request("GET", "/api/v1/connectors/" + existing["connector"]["id"])["connector"]
+                except APIError as err:
+                    if err.status not in (401, 403, 404):
+                        raise
+                    prior = None
+                if prior and prior["state"] in ("active", "pending"):
+                    print("Existing pairing: " + existing["approval_url"])
+                    print("Revoke it in FinaleChat before changing this installation's scopes.")
+                    return EXIT_OK
+            pairing = client.request("POST", "/api/v1/connectors", body={"name": provider + " · " + Path(project).name + " · " + hostname(),
+                                      "provider": provider, "requested_grants": grants})
+            pairing["base_url"] = client.base_url
+            private_json(directory / "connector.json", pairing)
+            configure_integration(provider, project, enabled=True, primary_scope=scopes[0])
+            print("Approve the exact scopes and settings classes in FinaleChat:")
+            print(pairing["approval_url"])
+            if not args.foreground:
+                start_integration_companion(provider, project, client)
+        finally:
+            for adapter in adapters:
+                adapter.close()
+        return EXIT_OK
+    if action == "status":
+        config = read_object(directory / "integration.json")
+        pairing = read_object(directory / "connector.json")
+        value = {"provider": provider, "project": project, "enabled": config.get("enabled", False), "artifacts": config.get("artifacts", False), "paired": bool(pairing)}
+        if pairing:
+            scoped = Client(pairing["base_url"], pairing["secret"])
+            remote = scoped.request("GET", "/api/v1/connectors/" + pairing["connector"]["id"])
+            value.update(connector=remote["connector"], online=remote.get("online", False))
+        print_json(value)
+        return EXIT_OK
+    if action == "stop":
+        configure_integration(provider, project, enabled=False)
+        print("Companion will stop after its current operation. Revoke its scopes in FinaleChat to unpair.")
+        return EXIT_OK
+    if action == "start":
+        configure_integration(provider, project, enabled=True)
+        started = start_integration_companion(provider, project, client)
+        print("Companion started." if started else "Companion is already running.")
+        return EXIT_OK
+    run_integration_companion(provider, project, client, once=args.once)
+    return EXIT_OK
+
+
+def install_codex_integration(args, remove=False):
+    executable = shutil.which("codex")
+    if not executable:
+        raise CLIError("Install Codex before registering its integration.")
+    if not args.no_mcp:
+        command = [executable, "mcp", "remove", "finalechat"] if remove else [executable, "mcp", "add", "finalechat", "--", sys.executable, cli_path(), "mcp"]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise CLIError("Codex MCP registration failed; run codex mcp list to inspect the local configuration.")
+    if remove:
+        configure_integration("codex", args.project, enabled=False, artifacts=False)
+        print("Removed Codex MCP registration and stopped this project's companion.")
+    else:
+        print("Codex MCP integration installed. It provides chat tools; native rollouts provide the archive.")
+        if args.artifacts:
+            configure_integration("codex", args.project, enabled=True, artifacts=True)
+            start_integration_companion("codex", args.project, client_from_args(args))
+            print("Proactive native rollout publication enabled for " + str(Path(args.project).resolve()))
+        print("Pair settings separately with: finalechat connector pair codex --project " + shlex.quote(str(Path(args.project).resolve())))
+    return EXIT_OK
+
+
+def add_integration_parsers(sub):
+    def provider_project(parser):
+        parser.add_argument("provider", choices=["claude-code", "codex"])
+        parser.add_argument("--project", default=".", help="canonical project scope (default current directory)")
+
+    root = sub.add_parser("artifact", help="export, verify, recover and publish permanent session websites")
+    commands = root.add_subparsers(dest="artifact_command", required=True)
+    for name in ("enable", "disable", "track", "export", "publish"):
+        parser = commands.add_parser(name)
+        provider_project(parser)
+        if name in ("track", "export"):
+            parser.add_argument("session", help="native session ID")
+            parser.add_argument("--transcript", help="native JSONL path; Codex can resolve its own thread ID")
+        if name == "publish":
+            parser.add_argument("session", nargs="?", help="tracked native session; omit for all tracked sessions here")
+        if name == "export":
+            parser.add_argument("-o", "--output", required=True, help="new export directory")
+        parser.set_defaults(func=cmd_artifact)
+    for name in ("verify", "restore"):
+        parser = commands.add_parser(name)
+        parser.add_argument("directory", help="extracted archive directory containing manifest.json")
+        if name == "restore":
+            parser.add_argument("-o", "--output", required=True, help="new directory for verified native source recovery")
+        parser.set_defaults(func=cmd_artifact)
+    root = sub.add_parser("connector", help="pair and supervise scoped settings control and artifact publication")
+    commands = root.add_subparsers(dest="connector_command", required=True)
+    for name in ("pair", "start", "run", "stop", "status"):
+        parser = commands.add_parser(name)
+        provider_project(parser)
+        if name == "pair":
+            parser.add_argument("--scope", choices=["user", "project", "project_local"], action="append", help="repeat for multiple resources; defaults to Claude project / Codex user")
+            parser.add_argument("--foreground", action="store_true", help="only pair; run the companion under your supervisor separately")
+        if name == "run":
+            parser.add_argument("--once", action="store_true", help="one publication/control pass, useful for supervision checks")
+        parser.set_defaults(func=cmd_connector)
+
+# END GENERATED INTEGRATIONS
+
+
 # --------------------------------------------------------------------------- #
 # Argument parsing
 # --------------------------------------------------------------------------- #
@@ -2798,19 +4301,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("action", nargs="?", choices=["on", "off", "status"], help="default: status")
     p.set_defaults(func=cmd_remote)
 
-    p = sub.add_parser("install", help="integrate with an agent harness (claude-code)", formatter_class=Formatter,
-                       description="Install Finalechat hooks (and the MCP server) into Claude Code so every "
-                                   "session is mirrored to your phone.")
-    p.add_argument("target", choices=["claude-code"])
+    p = sub.add_parser("install", help="integrate with Claude Code or Codex", formatter_class=Formatter,
+                       description="Install Claude Code hooks or Codex MCP, with optional native session artifacts.")
+    p.add_argument("target", choices=["claude-code", "codex"])
     p.add_argument("--no-mcp", action="store_true", help="skip registering the MCP server")
     p.add_argument("--settings", default="~/.claude/settings.json", metavar="PATH",
                    help="Claude Code settings file (default ~/.claude/settings.json)")
+    p.add_argument("--project", default=".", help="project for optional artifact publication")
+    p.add_argument("--artifacts", action="store_true", help="opt this project into proactive native session archives")
     p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("uninstall", help="remove the integration", formatter_class=Formatter)
-    p.add_argument("target", choices=["claude-code"])
+    p.add_argument("target", choices=["claude-code", "codex"])
     p.add_argument("--no-mcp", action="store_true", help="leave the MCP server registered")
     p.add_argument("--settings", default="~/.claude/settings.json", metavar="PATH")
+    p.add_argument("--project", default=".", help="project whose companion should stop")
     p.set_defaults(func=cmd_uninstall)
 
     p = sub.add_parser("hook", help="handle a harness hook event (reads JSON on stdin)", formatter_class=Formatter)
@@ -2826,6 +4331,7 @@ def build_parser() -> argparse.ArgumentParser:
                                    "finalechat_view_attachment and finalechat_fetch_attachment.")
     p.set_defaults(func=cmd_mcp)
 
+    add_integration_parsers(sub)
     return parser
 
 
@@ -2845,6 +4351,9 @@ def main(argv: list[str] | None = None) -> int:
     except CLIError as err:
         print(f"finalechat: {err}", file=sys.stderr)
         return err.exit_code
+    except (OSError, ValueError) as err:
+        print(f"finalechat: local data or filesystem error ({type(err).__name__}); inspect the selected paths and configuration.", file=sys.stderr)
+        return EXIT_USAGE
 
 
 if __name__ == "__main__":

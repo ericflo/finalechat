@@ -9,6 +9,8 @@ import { DocsScreen } from "./screens/Docs";
 import { Inbox } from "./screens/Inbox";
 import { AgentsScreen, SettingsScreen } from "./screens/Settings";
 import { ThreadScreen } from "./screens/Thread";
+import { ArtifactScreen } from "./screens/Artifacts";
+import { ResourceSettingsScreen } from "./screens/Connectors";
 
 function App() {
   const route = useRoute();
@@ -69,6 +71,10 @@ function App() {
     return null;
   }
 
+  const artifact = match("/t/:thread/artifacts/:id", path);
+  if (artifact) return <ErrorBoundary key={artifact.id}><ArtifactScreen id={artifact.id!} thread={artifact.thread!} selectedRevision={route.search.get("revision")} surface={route.search.get("surface")} /></ErrorBoundary>;
+  const resource = match("/settings/resources/:id", path);
+  if (resource) return <ErrorBoundary key={resource.id}><ResourceSettingsScreen id={resource.id!} /></ErrorBoundary>;
   const thread = match("/t/:id", path);
   if (thread) {
     return (

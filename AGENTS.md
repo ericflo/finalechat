@@ -302,6 +302,26 @@ instead of the terminal prompt. Read it yourself
 from `GET /me` → `user.settings.remote_mode` if you want to adapt your own
 behaviour, for example by waiting on questions longer.
 
+## Permanent session artifacts and scoped settings
+
+Integrations can publish immutable session websites independently of chat mirroring. Feature-detect `artifacts.v1` and `settings-control.v1` in `GET /me`. Register an artifact with `PUT /threads/{ref}/artifacts/{key}`, check/upload its SHA-256 chunks, then commit a `finalechat.website/v1` manifest using a stable `client_key` and `previous_revision_id`. Every committed revision remains downloadable; HTML previews are sandboxed and receive a bounded MessageChannel bridge. The full contract and limits are in [the API reference](https://www.finalechat.com/api/).
+
+The CLI supports both native integrations:
+
+```sh
+finalechat install claude-code --artifacts --project .
+finalechat install codex --artifacts --project .
+finalechat connector pair claude-code --project . --scope project
+finalechat connector pair codex --project .
+finalechat connector run codex --project .
+finalechat artifact verify ./extracted-archive
+finalechat artifact restore ./extracted-archive -o ./new-recovery
+```
+
+Archive publication and settings control are separate opt-ins. Pairing requests exact local resources; the user approves their scopes and classes in FinaleChat. A connector-specific credential can publish its settings snapshots and claim/report its own commands. Human settings commands require the browser session and FinaleChat's trusted Save/action controls. Never put a general agent token into an artifact or translate a settings Save into a model prompt.
+
+Claude hooks register complete native transcripts and subagent files for a supervised companion. Codex uses stored native rollout JSONL plus its supported configuration APIs. Native source recovery copies verified files into a new directory; it does not start agents or replay tool effects. Saved settings and runtime adoption are separate facts: these adapters do not claim that editing defaults changes an unrelated running agent's model or effort. The implementation and lifecycle details are in [docs/integrations.md](docs/integrations.md).
+
 ## Errors and limits
 
 Errors are JSON with a stable `code` and a human `message`:

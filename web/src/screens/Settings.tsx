@@ -8,6 +8,7 @@ import { navigate } from "../lib/router";
 import { setUser, signOut, toast, updateSettings, useStore } from "../lib/store";
 import { relativeTime } from "../lib/time";
 import type { APIToken, PushSubscriptionInfo } from "../lib/types";
+import { ConnectorsCard } from "./Connectors";
 
 export function SettingsScreen() {
   const user = useStore((s) => s.user);
@@ -131,6 +132,7 @@ export function SettingsScreen() {
           </a>
         </div>
 
+        <ConnectorsCard />
         <div className="section-title">Account</div>
         <AccountCard />
 

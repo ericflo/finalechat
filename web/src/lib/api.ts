@@ -22,7 +22,7 @@ export class APIError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
+export async function request<T>(method: string, path: string, body?: unknown, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   let res: Response;

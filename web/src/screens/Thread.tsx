@@ -11,6 +11,7 @@ import { navigate } from "../lib/router";
 import { AlreadyPostedError, deleteThread, loadOlderMessages, loadThread, markRead, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
 import type { Activity, Attachment, Message, Question, Thread } from "../lib/types";
+import { ThreadArtifacts } from "./Artifacts";
 
 type Item = { kind: "message"; at: string; m: Message } | { kind: "question"; at: string; q: Question };
 
@@ -239,7 +240,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
             <IconMore />
           </button>
         }
-        below={thread ? <MetaStrip thread={thread} /> : null}
+        below={thread ? <><MetaStrip thread={thread} /><ThreadArtifacts thread={id} /></> : null}
       />
       <div ref={listRef} className="messages" onClick={onListClick}>
         {hasOlder && (

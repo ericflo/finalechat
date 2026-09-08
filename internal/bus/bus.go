@@ -20,12 +20,16 @@ const channel = "finalechat_events"
 // full object load it from the database using the IDs; the payload limit for
 // NOTIFY is 8000 bytes so bodies are never carried here.
 type Event struct {
-	Type       string    `json:"type"`
-	UserID     string    `json:"user_id"`
-	ThreadID   string    `json:"thread_id,omitempty"`
-	MessageID  string    `json:"message_id,omitempty"`
-	QuestionID string    `json:"question_id,omitempty"`
-	At         time.Time `json:"at"`
+	Type        string    `json:"type"`
+	UserID      string    `json:"user_id"`
+	ThreadID    string    `json:"thread_id,omitempty"`
+	MessageID   string    `json:"message_id,omitempty"`
+	QuestionID  string    `json:"question_id,omitempty"`
+	ArtifactID  string    `json:"artifact_id,omitempty"`
+	ConnectorID string    `json:"connector_id,omitempty"`
+	ResourceID  string    `json:"resource_id,omitempty"`
+	CommandID   string    `json:"command_id,omitempty"`
+	At          time.Time `json:"at"`
 	// Activity carries a thread's status line inline (it is small and
 	// frequent) so consumers need no database round trip; "null" clears.
 	Activity json.RawMessage `json:"activity,omitempty"`
@@ -49,6 +53,11 @@ const (
 	QuestionExpired   = "question.expired"
 	QuestionDismissed = "question.dismissed"
 	SettingsUpdated   = "settings.updated"
+	ArtifactUpdated   = "artifact.updated"
+	ArtifactDeleted   = "artifact.deleted"
+	ConnectorUpdated  = "connector.updated"
+	ResourceUpdated   = "settings-resource.updated"
+	CommandUpdated    = "command.updated"
 )
 
 type subscriber struct {

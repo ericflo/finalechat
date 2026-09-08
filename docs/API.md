@@ -1001,3 +1001,84 @@ automatically, as are endpoints that fail 20 times in a row.
 `GET /healthz` returns `ok` while the process is up; `GET /readyz` returns
 `ready` once the database answers. Neither requires authentication and
 neither lives under `/api/v1`.
+
+<!-- artifact-control-contract -->
+
+## Durable artifacts and integration settings
+
+Feature-detect `artifacts.v1` and `settings-control.v1` in `/me` or `/auth/status`.
+Artifact bytes use the configured blob backend; immutable metadata and command
+outcomes live in PostgreSQL. B2 keys need `listFiles` for complete cleanup of
+upload versions whose responses were lost. Memory storage is for tests only.
+
+The container format is `finalechat.website/v1`. Each manifest lists a standalone
+HTML entrypoint, optional settings entrypoint, producer, capture time, native
+dataset identity and files with full SHA-256 hashes and ordered 1 MiB chunks.
+Files retain native bytes. Limits: 4,096 files, 16,384 chunk references, 512 MiB
+per file, 2 GiB per revision, 10 GiB of unique bytes per account, 8 MiB per HTML
+entrypoint, 1 MiB manifest/request. Paths must be portable and traversal-free.
+Upload missing chunks before committing. Preserve the parent revision and
+idempotency key in a durable publisher journal before sending a commit.
+
+Embed `/sdk/finale-artifact.js` inline in exported HTML. `finale.ready` resolves
+after the host connects or a local archive directory is chosen. The SDK exposes
+`manifest()`, bounded `read(path,{offset,length})`, `chunks(path)`, `lines(path)`,
+`text(path)` and `openLocalFiles()`. The host creates a fresh MessageChannel for
+one iframe document. Files are scoped to its mounted artifact/revision. There
+is no generic HTTP proxy, credential access or iframe-triggered command queue.
+Downloads are inert; preview documents get their own restrictive response CSP.
+
+Pair control independently from upload. API tokens may request pairing but
+only a signed-in user may approve resource keys, scopes, operations and classes.
+The resulting `fcc_` token cannot use chat, upload, account or browser commands.
+Publish `finalechat.settings/v1` descriptors with bounded typed fields, saved and
+effective values, provenance, locked reasons and effect timing. `settings.apply`
+uses explicit set/unset edits. The adapter revalidates against fresh native state.
+Keep credentials out of snapshots, proposals and results.
+
+Settings pages call `finale.settings.read()` and `finale.settings.propose(p)` to
+stage a proposal; the trusted FinaleChat Save/action controls submit it. Saved
+historical surfaces remain read only until the user opens current settings.
+Drafts do not execute. Explicit send-when-connected applies only to stable
+settings edits with a deadline. Durable commands have fenced renewable leases,
+an append-only audit and explicit expired/conflicted/unknown outcomes. Adapters
+must journal intent and reconcile save-before-ack crashes. No automatic retry
+may repeat an uncertain paid action. A saved file does not prove runtime adoption.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `PUT /threads/{thread}/artifacts/{key}` | Register or rename a session artifact |
+| `GET /threads/{thread}/artifacts` | List a thread’s artifacts |
+| `GET /artifacts/{id}` | Artifact metadata, current manifest and limits |
+| `DELETE /artifacts/{id}` | Delete artifact and all revisions |
+| `POST /artifacts/{id}/blobs/check` | Check which chunk hashes are absent |
+| `PUT /artifacts/{id}/blobs/{hash}` | Upload a verified chunk |
+| `POST /artifacts/{id}/revisions` | Atomically commit an immutable revision |
+| `GET /artifacts/{id}/revisions` | List immutable revision summaries |
+| `GET /artifacts/{id}/revisions/{revision}` | Read one revision manifest |
+| `GET /artifacts/{id}/revisions/{revision}/files/{file}` | Download exact file bytes or a bounded slice |
+| `GET /artifacts/{id}/revisions/{revision}/preview` | Load a sandboxed website entrypoint |
+| `GET /artifacts/{id}/revisions/{revision}/download` | Download the portable ZIP archive |
+| `POST /connectors` | Request pairing and receive a scoped credential |
+| `GET /connectors` | List paired and pending installations |
+| `GET /connectors/{connector}` | Connector pairing state and grants |
+| `POST /connectors/{connector}/approve` | Approve a subset of requested grants |
+| `DELETE /connectors/{connector}` | Revoke access and cancel queued commands |
+| `POST /connectors/{connector}/heartbeat` | Renew installation process ownership |
+| `PUT /connectors/{connector}/resources/{key}` | Publish a granted resource descriptor and snapshot |
+| `PUT /connectors/{connector}/bindings/{id}` | Bind a current settings artifact to a resource |
+| `GET /artifacts/{id}/settings-binding` | Read the artifact’s current resource binding |
+| `POST /artifacts/{id}/settings-surface` | Open a current settings editing session |
+| `GET /settings-resources/{resource}` | Read latest settings snapshot and connector availability |
+| `GET /settings-resources/{resource}/audit` | Read durable settings audit history |
+| `POST /settings-resources/{resource}/commands` | Queue a user-approved settings command |
+| `GET /settings-resources/{resource}/draft` | Read a saved proposal draft |
+| `PUT /settings-resources/{resource}/draft` | Save a draft without scheduling execution |
+| `DELETE /settings-resources/{resource}/draft` | Discard a proposal draft |
+| `POST /connectors/{connector}/commands/claim` | Claim the next command with a renewable lease |
+| `POST /commands/{command}/renew` | Renew the current fenced execution lease |
+| `POST /commands/{command}/result` | Persist an execution outcome |
+| `GET /commands/{command}` | Read durable command status and result |
+| `POST /commands/{command}/cancel` | Cancel a command that has not started |
+
+See the OpenAPI schemas for exact envelopes and constraints. SSE adds `artifact.updated`, `artifact.deleted`, `connector.updated`, `settings-resource.updated` and `command.updated`; these notify clients to reload the corresponding durable objects.

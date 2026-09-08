@@ -249,6 +249,72 @@ func (b *B2) Get(ctx context.Context, key string) (io.ReadCloser, string, int64,
 }
 
 // Delete removes one file version. Unknown versions are ignored.
+// DeleteAll is used only for unique retired artifact names. Listing by exact
+// name recovers duplicate versions created by a lost upload response. It needs
+// B2's listFiles capability in addition to readFiles/writeFiles/deleteFiles.
+func (b *B2) DeleteAll(ctx context.Context, key string) error {
+	if key == "" {
+		return fmt.Errorf("empty object name")
+	}
+	if err := b.authorize(ctx, false); err != nil {
+		return err
+	}
+	for page := 0; page < 100; page++ {
+		token, apiURL, _, bucketID := b.creds()
+		query := url.Values{"bucketId": {bucketID}, "prefix": {key}, "startFileName": {key}, "maxFileCount": {"1000"}}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/b2api/v4/b2_list_file_versions?"+query.Encode(), nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", token)
+		res, err := b.client.Do(req)
+		if err != nil {
+			return err
+		}
+		if res.StatusCode == http.StatusUnauthorized {
+			res.Body.Close()
+			if err := b.authorize(ctx, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if res.StatusCode != http.StatusOK {
+			msg := readErr(res.Body)
+			res.Body.Close()
+			return fmt.Errorf("b2 list versions: %s: %s", res.Status, msg)
+		}
+		var out struct {
+			Files []struct {
+				Name   string `json:"fileName"`
+				ID     string `json:"fileId"`
+				Action string `json:"action"`
+			} `json:"files"`
+		}
+		err = json.NewDecoder(io.LimitReader(res.Body, 4<<20)).Decode(&out)
+		res.Body.Close()
+		if err != nil {
+			return err
+		}
+		removed := 0
+		for _, f := range out.Files {
+			if f.Name != key {
+				continue
+			}
+			if f.ID == "" || (f.Action != "upload" && f.Action != "hide") {
+				return fmt.Errorf("unexpected artifact object version")
+			}
+			if err := b.Delete(ctx, key, f.ID); err != nil {
+				return err
+			}
+			removed++
+		}
+		if removed == 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("artifact object cleanup exceeded page limit")
+}
+
 func (b *B2) Delete(ctx context.Context, key, id string) error {
 	if id == "" {
 		return nil

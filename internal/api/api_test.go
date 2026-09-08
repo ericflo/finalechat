@@ -1242,15 +1242,26 @@ func TestSearchAndAnchorlessWait(t *testing.T) {
 // step: every registered API route is documented, and nothing documented is
 // missing from the router.
 func TestRoutesMatchDocs(t *testing.T) {
-	src, err := os.ReadFile("server.go")
+	routeFiles, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
+	}
+	var src []byte
+	for _, entry := range routeFiles {
+		if !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		raw, err := os.ReadFile(entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		src = append(src, raw...)
 	}
 	routeRe := regexp.MustCompile(`HandleFunc\("(GET|POST|PUT|PATCH|DELETE|HEAD) (/api/v1/[^"]+)"`)
 	normalize := func(p string) string { return regexp.MustCompile(`\{[^}]+\}`).ReplaceAllString(p, "{}") }
 	routes := map[string]bool{}
 	for _, m := range routeRe.FindAllStringSubmatch(string(src), -1) {
-		if m[1] == "HEAD" || m[1] == "PUT" {
+		if m[1] == "HEAD" || (m[1] == "PUT" && m[2] == "/api/v1/threads/{thread}/activity") {
 			continue // aliases of documented methods
 		}
 		routes[m[1]+" "+normalize(strings.TrimPrefix(m[2], "/api/v1"))] = true

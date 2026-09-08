@@ -6,13 +6,16 @@ BIN := bin/finalechat
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 DEV_DB_URL ?= postgres://finalechat:finalechat@127.0.0.1:55432/finalechat?sslmode=disable
 
-.PHONY: all build web web-dev run test test-go test-web test-cli fmt vet check dev-db dev-db-stop icons clean
+.PHONY: all build cli web web-dev run test test-go test-web test-browser test-cli fmt vet check dev-db dev-db-stop icons clean
 
 all: build
 
 ## Build the web app into internal/webassets/dist, then the server binary.
-build: web
+build: cli web
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o $(BIN) ./cmd/finalechat
+
+cli:
+	python3 scripts/build-cli-integrations.py
 
 web: web/node_modules
 	cd web && FINALECHAT_VERSION=$(VERSION) $(NPM) run build
@@ -56,10 +59,16 @@ test-go:
 test-web: web/node_modules
 	cd web && $(NPM) run typecheck
 
+## Isolated Chromium fixture checks; install Playwright separately (see docs/integrations.md).
+test-browser: web/node_modules
+	node scripts/test-artifact-browser.mjs
+
 test-cli:
+	python3 scripts/build-cli-integrations.py --check
 	python3 -m py_compile cli/finalechat
 	python3 cli/finalechat --help >/dev/null
 	python3 cli/finalechat selftest
+	python3 -m unittest discover -s cli -p 'test_*.py'
 	sh -n cli/install.sh
 	python3 -c "import json; json.load(open('docs/openapi.json'))"
 

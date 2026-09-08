@@ -53,6 +53,12 @@
     {
       "name": "Push",
       "description": "Web Push device registration for the app."
+    },
+    {
+      "name": "Artifacts"
+    },
+    {
+      "name": "Integration settings"
     }
   ],
   "security": [
@@ -3663,6 +3669,2282 @@
           }
         }
       }
+    },
+    "/threads/{thread}/artifacts/{key}": {
+      "put": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Register or rename a session artifact",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Register or rename a session artifact",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{thread}/artifacts": {
+      "get": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "List a thread’s artifacts",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "List a thread’s artifacts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/artifacts/{id}": {
+      "get": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Artifact metadata, current manifest and limits",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Artifact metadata, current manifest and limits",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Delete artifact and all revisions",
+        "description": "Referenced chunks are retained until no revision references them. A durable cleanup queue retries B2 removal, including orphan upload versions.",
+        "responses": {
+          "200": {
+            "description": "Delete artifact and all revisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/artifacts/{id}/blobs/check": {
+      "post": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Check which chunk hashes are absent",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Check which chunk hashes are absent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "hashes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "hashes"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/artifacts/{id}/blobs/{hash}": {
+      "put": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Upload a verified chunk",
+        "description": "Raw bytes, 1 to 1,048,576 bytes. URL hash must match SHA-256. 200 if already present; 409 upload_in_progress; 413 quota/size limit.",
+        "responses": {
+          "201": {
+            "description": "Upload a verified chunk",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary",
+                "maxLength": 1048576
+              }
+            }
+          }
+        }
+      }
+    },
+    "/artifacts/{id}/revisions": {
+      "post": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Atomically commit an immutable revision",
+        "description": "Previous must equal current, or null for the first revision. The same key and manifest returns 200 even after newer revisions exist; key reuse with different content conflicts. All chunks must already exist for this owner.",
+        "responses": {
+          "201": {
+            "description": "Atomically commit an immutable revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "manifest": {
+                    "$ref": "#/components/schemas/ArtifactManifest"
+                  },
+                  "previous_revision_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "client_key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "manifest",
+                  "client_key"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "List immutable revision summaries",
+        "description": "Newest first, at most 50. Continue with before=next_before.",
+        "responses": {
+          "200": {
+            "description": "List immutable revision summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/artifacts/{id}/revisions/{revision}": {
+      "get": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Read one revision manifest",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Read one revision manifest",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "revision",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/artifacts/{id}/revisions/{revision}/files/{file}": {
+      "get": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Download exact file bytes or a bounded slice",
+        "description": "file is a slash-containing manifest path. Optional offset and length are decimal byte counts. Always Content-Disposition: attachment with a restrictive CSP. Touched chunks are verified; complete reads also verify the file hash.",
+        "responses": {
+          "200": {
+            "description": "Download exact file bytes or a bounded slice",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "revision",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "file",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "length",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ]
+      }
+    },
+    "/artifacts/{id}/revisions/{revision}/preview": {
+      "get": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Load a sandboxed website entrypoint",
+        "description": "Optional surface=settings selects settings_entrypoint. This is a separate opaque-origin document protected by response CSP and iframe sandbox=allow-scripts. Scripts have no general API/fetch bridge.",
+        "responses": {
+          "200": {
+            "description": "Load a sandboxed website entrypoint",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "revision",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "surface",
+            "in": "query",
+            "schema": {
+              "enum": [
+                "settings"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/artifacts/{id}/revisions/{revision}/download": {
+      "get": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Download the portable ZIP archive",
+        "description": "Contains manifest.json and every exact file under portable paths.",
+        "responses": {
+          "200": {
+            "description": "Download the portable ZIP archive",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "revision",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/connectors": {
+      "post": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Request pairing and receive a scoped credential",
+        "description": "Pending pairing expires in 15 minutes. Returns connector, one-time secret and approval_url. An API token cannot approve its own request.",
+        "responses": {
+          "201": {
+            "description": "Request pairing and receive a scoped credential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "provider": {
+                    "type": "string"
+                  },
+                  "requested_grants": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/SettingsGrant"
+                    }
+                  }
+                },
+                "required": [
+                  "name",
+                  "provider",
+                  "requested_grants"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "List paired and pending installations",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "List paired and pending installations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/connectors/{connector}": {
+      "get": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Connector pairing state and grants",
+        "description": "The browser also receives resources; a connector credential can read only its own status.",
+        "responses": {
+          "200": {
+            "description": "Connector pairing state and grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "connectorAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connector",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Revoke access and cancel queued commands",
+        "description": "Executing work becomes outcome unknown; revocation cannot promise rollback of an action already started.",
+        "responses": {
+          "200": {
+            "description": "Revoke access and cancel queued commands",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connector",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/connectors/{connector}/approve": {
+      "post": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Approve a subset of requested grants",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Approve a subset of requested grants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connector",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "grants": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/SettingsGrant"
+                    }
+                  }
+                },
+                "required": [
+                  "grants"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/connectors/{connector}/heartbeat": {
+      "post": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Renew installation process ownership",
+        "description": "One random stable process identity owns a 90-second heartbeat lease. A different process must wait for expiry.",
+        "responses": {
+          "200": {
+            "description": "Renew installation process ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "connectorAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connector",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "instance": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "instance"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/connectors/{connector}/resources/{key}": {
+      "put": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Publish a granted resource descriptor and snapshot",
+        "description": "Only approved resource keys/scopes/capabilities. Session resources require a generation. Saved defaults and runtime-effective values are distinct; credentials must never be included.",
+        "responses": {
+          "200": {
+            "description": "Publish a granted resource descriptor and snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "connectorAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connector",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "instance": {
+                    "type": "string"
+                  },
+                  "generation": {
+                    "type": "string"
+                  },
+                  "descriptor": {
+                    "$ref": "#/components/schemas/SettingsDescriptor"
+                  },
+                  "snapshot": {
+                    "$ref": "#/components/schemas/SettingsSnapshot"
+                  }
+                },
+                "required": [
+                  "instance",
+                  "descriptor",
+                  "snapshot"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/connectors/{connector}/bindings/{id}": {
+      "put": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Bind a current settings artifact to a resource",
+        "description": "id is an owned artifact. The revision must be current and have a settings entrypoint. Existing bindings cannot be silently moved to another resource.",
+        "responses": {
+          "200": {
+            "description": "Bind a current settings artifact to a resource",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "connectorAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connector",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "resource_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "revision_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "resource_id",
+                  "revision_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/artifacts/{id}/settings-binding": {
+      "get": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Read the artifact’s current resource binding",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Read the artifact’s current resource binding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/settings-resources/{resource}": {
+      "get": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Read latest settings snapshot and connector availability",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Read latest settings snapshot and connector availability",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/settings-resources/{resource}/audit": {
+      "get": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Read durable settings audit history",
+        "description": "Newest first, up to 100; continue with before=next_before.",
+        "responses": {
+          "200": {
+            "description": "Read durable settings audit history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/settings-resources/{resource}/commands": {
+      "post": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Queue a user-approved settings command",
+        "description": "The trusted host Save/action sends an exact frozen proposal. Default TTL 300 seconds; session maximum 300. Offline queueing is opt-in for stable settings.apply only. A surface requires its current bound revision, or a valid surface_lease_id opened while that exact revision was current. Historical documents cannot obtain new leases. Idempotent retries return the original command even after lease expiry. A 202 means queued, not saved.",
+        "responses": {
+          "202": {
+            "description": "Queue a user-approved settings command",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "$ref": "#/components/schemas/SettingsCommand"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "command",
+                    "created"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "client_key": {
+                    "type": "string"
+                  },
+                  "proposal": {
+                    "$ref": "#/components/schemas/SettingsProposal"
+                  },
+                  "artifact_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "revision_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "surface_lease_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "ttl_seconds": {
+                    "type": "integer",
+                    "minimum": 15,
+                    "maximum": 86400
+                  },
+                  "send_when_connected": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "client_key",
+                  "proposal"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/settings-resources/{resource}/draft": {
+      "get": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Read a saved proposal draft",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Read a saved proposal draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Save a draft without scheduling execution",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Save a draft without scheduling execution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsProposal"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Discard a proposal draft",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Discard a proposal draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/connectors/{connector}/commands/claim": {
+      "post": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Claim the next command with a renewable lease",
+        "description": "wait=0..25 seconds. Subscribe-before-query plus polling recovers lost notifications. At most one executing command per resource. Response includes command, resource, reconcile_only. Attempts >1 require local-journal reconciliation, never blind repetition.",
+        "responses": {
+          "200": {
+            "description": "Claim the next command with a renewable lease",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "connectorAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connector",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 25
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "instance": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "instance"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/commands/{command}/renew": {
+      "post": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Renew the current fenced execution lease",
+        "description": "Extends by 60 seconds only while the connector, generation ownership and command deadline remain valid.",
+        "responses": {
+          "200": {
+            "description": "Renew the current fenced execution lease",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "connectorAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "command",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "claim_token": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "instance": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "claim_token",
+                  "instance"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/commands/{command}/result": {
+      "post": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Persist an execution outcome",
+        "description": "Exact retry is idempotent; old claim tokens are fenced. Result includes before/after versions and per-field saved/runtime_applied/effective_when facts. B2 publication failure must not undo a local save.",
+        "responses": {
+          "200": {
+            "description": "Persist an execution outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "connectorAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "command",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "claim_token": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "instance": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "succeeded",
+                      "rejected",
+                      "conflicted",
+                      "unknown"
+                    ]
+                  },
+                  "result": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "claim_token",
+                  "instance",
+                  "status",
+                  "result"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/commands/{command}": {
+      "get": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Read durable command status and result",
+        "description": "",
+        "responses": {
+          "200": {
+            "description": "Read durable command status and result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "command": {
+                      "$ref": "#/components/schemas/SettingsCommand"
+                    }
+                  },
+                  "required": [
+                    "command"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "command",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/commands/{command}/cancel": {
+      "post": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Cancel a command that has not started",
+        "description": "Executing commands cannot be cancelled by this endpoint; no rollback is implied.",
+        "responses": {
+          "200": {
+            "description": "Cancel a command that has not started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "command",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/artifacts/{id}/settings-surface": {
+      "post": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Open a current settings editing session",
+        "description": "Only a current bound revision can open. Returns lease with id, resource_id, generation and expires_at (30 minutes). Keep its id only in the trusted host, never the iframe. Publication can advance while this editor remains open; each command still checks ownership, binding, generation, grants and settings version. At most 32 active editing sessions per account.",
+        "responses": {
+          "201": {
+            "description": "Open a current settings editing session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "lease": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "resource_id": {
+                          "type": "string",
+                          "format": "uuid"
+                        },
+                        "generation": {
+                          "type": "string"
+                        },
+                        "expires_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "resource_id",
+                        "generation",
+                        "expires_at"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "lease"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "revision_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "revision_id"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3678,6 +5960,11 @@
         "in": "cookie",
         "name": "fc_session",
         "description": "Browser session set by POST /auth/login. State-changing requests must be same-origin."
+      },
+      "connectorAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Scoped fcc_ installation credential. Can only read its own pairing status, heartbeat, publish granted resources/bindings, claim, renew and acknowledge its commands."
       }
     },
     "schemas": {
@@ -3719,7 +6006,10 @@
                   "method_not_allowed",
                   "storage_unavailable",
                   "attachments_disabled",
-                  "busy"
+                  "busy",
+                  "upload_in_progress",
+                  "storage_quota",
+                  "connector_offline"
                 ]
               },
               "message": {
@@ -5003,6 +7293,483 @@
           "kind": "tool",
           "ttl_seconds": 120
         }
+      },
+      "ArtifactChunk": {
+        "type": "object",
+        "properties": {
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1048576
+          }
+        },
+        "required": [
+          "sha256",
+          "size"
+        ],
+        "additionalProperties": false
+      },
+      "ArtifactFile": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "viewer",
+              "source",
+              "asset",
+              "derived",
+              "context"
+            ]
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 536870912
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "chunks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactChunk"
+            }
+          }
+        },
+        "required": [
+          "path",
+          "role",
+          "content_type",
+          "size",
+          "sha256",
+          "chunks"
+        ],
+        "additionalProperties": false
+      },
+      "ArtifactManifest": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "const": "finalechat.website/v1"
+          },
+          "producer": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "version"
+            ],
+            "additionalProperties": false
+          },
+          "entrypoint": {
+            "type": "string"
+          },
+          "settings_entrypoint": {
+            "type": "string"
+          },
+          "dataset": {
+            "type": "object"
+          },
+          "viewer": {
+            "type": "object"
+          },
+          "captured_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "files": {
+            "type": "array",
+            "maxItems": 4096,
+            "items": {
+              "$ref": "#/components/schemas/ArtifactFile"
+            }
+          }
+        },
+        "required": [
+          "format",
+          "producer",
+          "entrypoint",
+          "dataset",
+          "captured_at",
+          "files"
+        ],
+        "additionalProperties": false
+      },
+      "SettingsGrant": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "project",
+              "project_local",
+              "user",
+              "profile",
+              "session"
+            ]
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "preference",
+                "credential_reference",
+                "permissions",
+                "executable",
+                "cost"
+              ]
+            }
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "scope",
+          "operations",
+          "classes"
+        ],
+        "additionalProperties": false
+      },
+      "SettingsShape": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "string",
+              "boolean",
+              "integer",
+              "number",
+              "array",
+              "object"
+            ]
+          },
+          "enum": {
+            "type": "array",
+            "items": {}
+          },
+          "minimum": {
+            "type": "number"
+          },
+          "maximum": {
+            "type": "number"
+          },
+          "max_length": {
+            "type": "integer",
+            "maximum": 32768
+          },
+          "items": {
+            "$ref": "#/components/schemas/SettingsShape"
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SettingsShape"
+            }
+          },
+          "required": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "additionalProperties": false
+      },
+      "SettingsField": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/SettingsShape"
+          },
+          "writable": {
+            "type": "boolean"
+          },
+          "unset": {
+            "type": "boolean"
+          },
+          "locked_reason": {
+            "type": "string"
+          },
+          "class": {
+            "type": "string"
+          },
+          "effective_when": {
+            "enum": [
+              "immediate",
+              "next_turn",
+              "next_task",
+              "new_or_resumed_session",
+              "restart_required",
+              "unknown"
+            ]
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "schema",
+          "writable",
+          "unset",
+          "class",
+          "effective_when"
+        ],
+        "additionalProperties": false
+      },
+      "SettingsDescriptor": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "const": "finalechat.settings/v1"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "adapter_version": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingsField"
+            }
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "operation": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "class": {
+                  "type": "string"
+                },
+                "parameters": {
+                  "$ref": "#/components/schemas/SettingsShape"
+                }
+              },
+              "required": [
+                "operation",
+                "label",
+                "class",
+                "parameters"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "format",
+          "schema_version",
+          "adapter_version",
+          "fields"
+        ],
+        "additionalProperties": false
+      },
+      "SettingsSnapshot": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "object"
+          },
+          "effective": {
+            "type": "object"
+          },
+          "runtime_known": {
+            "type": "boolean"
+          },
+          "runtime_version": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "version",
+          "context",
+          "saved",
+          "effective",
+          "runtime_known"
+        ],
+        "additionalProperties": false
+      },
+      "SettingsProposal": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "expected_version": {
+            "type": "string"
+          },
+          "generation": {
+            "type": "string"
+          },
+          "edits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "enum": [
+                    "set",
+                    "unset"
+                  ]
+                },
+                "key": {
+                  "type": "string"
+                },
+                "value": {}
+              },
+              "required": [
+                "op",
+                "key"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "parameters": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "operation",
+          "schema_version",
+          "expected_version"
+        ],
+        "additionalProperties": false
+      },
+      "SettingsCommand": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "connector_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "artifact_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/SettingsProposal"
+          },
+          "proposal_sha256": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "executing",
+              "succeeded",
+              "rejected",
+              "conflicted",
+              "expired",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "claim_token": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "claim_instance": {
+            "type": "string"
+          },
+          "lease_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "attempts": {
+            "type": "integer"
+          },
+          "result": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "description": "Lease credentials appear only in connector claim/renew responses. An attempt above 1 permits reconciliation only, never blind repetition of an uncertain action."
       }
     }
   }

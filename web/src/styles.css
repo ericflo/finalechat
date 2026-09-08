@@ -530,3 +530,40 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .composer .attach-btn:hover { background: var(--accent-soft); color: var(--accent); }
 .composer .attach-btn svg { width: 22px; height: 22px; }
 .composer-wrap.dragging { outline: 2px dashed var(--accent); outline-offset: -6px; }
+/* Saved integration websites and trusted settings controls. */
+.thread-artifacts, .artifact-actions, .artifact-history { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.thread-artifacts { padding: 6px 16px 10px; overflow-x: auto; }
+.artifact-page { max-width: 1400px; }
+.artifact-toolbar { padding: 16px; display: grid; gap: 12px; }
+.artifact-toolbar > span { color: var(--text-3); font-size: 13px; }
+.artifact-toolbar summary, .settings-audit summary { cursor: pointer; padding: 8px 0; }
+.artifact-history { padding: 8px 0; max-height: 200px; overflow: auto; }
+.artifact-files { display: grid; gap: 8px; max-height: 260px; overflow: auto; padding: 12px 0; }
+.artifact-files a { overflow-wrap: anywhere; }
+.artifact-files small { color: var(--text-3); }
+.artifact-frame { display: block; width: 100%; height: 70dvh; min-height: 380px; border: 0; background: #fff; }
+.artifact-notice { padding: 12px 16px; background: var(--surface-2, #25262a); border-radius: 10px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.artifact-error { color: var(--red, #d34b4b); padding: 8px 16px; overflow-wrap: anywhere; }
+.settings-control { padding: 16px; border-top: 1px solid var(--border, #444); background: var(--surface, #15171a); display: grid; gap: 14px; }
+.settings-target { display: grid; gap: 6px; }
+.settings-target span, .settings-field small { color: var(--text-3); font-size: 13px; }
+.proposal-review { padding: 14px; border: 1px solid var(--border, #555); border-radius: 10px; display: grid; gap: 12px; }
+.proposal-edit { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 2fr); gap: 5px 12px; }
+.proposal-edit code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.proposal-edit small { grid-column: 1 / -1; color: var(--text-3); }
+.settings-control pre, .settings-audit pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; font-size: 12px; }
+.offline-choice { display: flex; align-items: center; gap: 8px; }
+.offline-choice input, .connector-row input[type=checkbox] { width: auto; }
+.generic-settings { padding: 16px; display: grid; gap: 12px; }
+.settings-field { border-bottom: 1px solid var(--border, #444); padding-bottom: 16px; display: grid; gap: 7px; }
+.settings-field p { font-size: 13px; margin: 0; }
+.settings-field .btn { justify-self: start; }
+.settings-field select, .generic-settings > input { width: 100%; padding: 10px; background: var(--surface, #15171a); color: inherit; border: 1px solid var(--border, #555); border-radius: 8px; }
+.settings-audit { margin: 20px 0; }
+.connector-list { padding: 16px; }
+.connector-list > p, .connector-row p { color: var(--text-3); font-size: 13px; }
+.connector-row { padding: 16px 0; border-top: 1px solid var(--border, #444); display: grid; gap: 8px; }
+.connector-row fieldset { margin: 8px 0; padding: 12px; border: 1px solid var(--border, #555); border-radius: 8px; }
+.connector-row .btn { justify-self: start; }
+.grant-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; padding-top: 12px; font-size: 13px; }
+.grant-options label, .connector-row legend label { display: flex; align-items: center; gap: 8px; }

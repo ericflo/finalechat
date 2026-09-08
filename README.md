@@ -81,6 +81,18 @@ try attachments without B2.
 | `FINALECHAT_SHUTDOWN_DELAY` | `3s` | How long `/readyz` fails before connections close on shutdown, so a load balancer drains first |
 | `FINALECHAT_LOG_JSON` / `FINALECHAT_LOG_LEVEL` | `true` / `info` | Logging |
 
+## Native session archives and settings
+
+Claude Code and Codex can publish permanent native-session websites and expose
+scoped settings controls in FinaleChat. Archives preserve immutable revisions and
+downloadable original JSONL files. Settings use a separately paired outbound
+connector, a durable command queue, and FinaleChat's own Save button.
+
+See [integration setup, lifecycle, verification and recovery](docs/integrations.md)
+and the [artifact protocol](docs/design/session-artifacts.md). The standalone CLI
+is generated from the integration sources with `make cli`; `make test-cli`
+checks that the generated file is synchronized.
+
 ## Deploy
 
 A push to `main` runs the Woodpecker pipeline in `.woodpecker.yaml` (Go suite

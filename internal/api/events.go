@@ -97,6 +97,12 @@ func (s *Server) expandEvent(r *http.Request, ev bus.Event) (map[string]any, err
 	p := principalFrom(r.Context())
 	ctx := r.Context()
 	out := map[string]any{"at": ev.At}
+	if ev.Type == bus.ConnectorUpdated || ev.Type == bus.ResourceUpdated || ev.Type == bus.CommandUpdated {
+		out["connector_id"] = ev.ConnectorID
+		out["resource_id"] = ev.ResourceID
+		out["command_id"] = ev.CommandID
+		return out, nil
+	}
 	if ev.Type == bus.SettingsUpdated {
 		user, err := s.store.GetUser(ctx, p.user.ID)
 		if err != nil {
@@ -132,6 +138,8 @@ func (s *Server) expandEvent(r *http.Request, ev bus.Event) (map[string]any, err
 	}
 	out["thread"] = thread
 	switch ev.Type {
+	case bus.ArtifactUpdated, bus.ArtifactDeleted:
+		out["artifact_id"] = ev.ArtifactID
 	case bus.MessageDeleted:
 		out["message_id"] = ev.MessageID
 	case bus.MessageCreated:

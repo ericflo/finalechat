@@ -111,6 +111,23 @@ under the message. Download it, then read the image file:
 finalechat fetch <id> -o /tmp/IMG_0421.png
 ```
 
+## Native session artifacts and settings
+
+For a project the user wants to archive, `finalechat install claude-code
+--artifacts --project .` or `finalechat install codex --artifacts --project .`
+enables proactive native transcript websites. Settings control is paired
+separately with `finalechat connector pair claude-code --project .` or
+`finalechat connector pair codex --project .`; the user approves exact scopes
+in FinaleChat. Keep general API tokens out of artifacts. Settings changes are
+typed connector commands submitted by FinaleChat's trusted Save control, not
+instructions for a model to edit arbitrary files.
+
+Use `artifact export`, `artifact verify`, and `artifact restore` to inspect or
+recover native source files. Recovery uses a new directory and does not start
+the agent or repeat tool effects. Saved defaults do not prove a running
+session adopted them. See the CLI's subcommand help and the repository's
+`docs/integrations.md` for provider scopes and lifecycle details.
+
 ## Exit codes
 
 - `0`: answered, or a reply arrived.

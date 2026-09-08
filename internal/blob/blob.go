@@ -30,6 +30,9 @@ type Store interface {
 	Get(ctx context.Context, key string) (io.ReadCloser, string, int64, error)
 	// Delete removes the object version; a missing object is not an error.
 	Delete(ctx context.Context, key, id string) error
+	// DeleteAll removes every version of a unique object name, including
+	// uploads whose successful response was lost before metadata was saved.
+	DeleteAll(ctx context.Context, key string) error
 	// Name describes the backend for logs and health output.
 	Name() string
 }
@@ -75,3 +78,5 @@ func (m *Memory) Delete(_ context.Context, key, _ string) error {
 }
 
 func (m *Memory) Name() string { return "memory" }
+
+func (m *Memory) DeleteAll(ctx context.Context, key string) error { return m.Delete(ctx, key, "") }

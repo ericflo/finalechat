@@ -28,6 +28,7 @@ type Server struct {
 	questionLimiter *rateLimiter
 	uploadLimiter   *rateLimiter
 	activityLimiter *rateLimiter
+	artifactLimiter *rateLimiter
 	started         time.Time
 	shutdown        chan struct{}
 	draining        atomic.Bool
@@ -36,12 +37,12 @@ type Server struct {
 // Features lists the optional capabilities agents can feature-detect on
 // GET /me and GET /auth/status.
 func (s *Server) Features() []string {
-	f := []string{"activity", "idempotency", "dismiss"}
+	f := []string{"activity", "idempotency", "dismiss", "settings-control.v1"}
 	if s.push.Enabled() {
 		f = append(f, "push")
 	}
 	if s.blobs != nil {
-		f = append(f, "attachments")
+		f = append(f, "attachments", "artifacts.v1")
 	}
 	return f
 }
@@ -60,6 +61,7 @@ func New(cfg config.Config, st *store.Store, b *bus.Bus, p *push.Sender, blobs b
 		questionLimiter: newRateLimiter(30),
 		uploadLimiter:   newRateLimiter(30),
 		activityLimiter: newRateLimiter(300),
+		artifactLimiter: newRateLimiter(600),
 		started:         time.Now().UTC().Truncate(time.Second),
 		shutdown:        make(chan struct{}),
 	}
@@ -110,12 +112,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /AGENTS.md", s.document("AGENTS.md", "text/markdown; charset=utf-8", false))
 	mux.HandleFunc("GET /agents.md", s.document("AGENTS.md", "text/markdown; charset=utf-8", false))
 	mux.HandleFunc("GET /llms.txt", s.document("AGENTS.md", "text/plain; charset=utf-8", false))
+	mux.HandleFunc("GET /docs/integrations.md", s.document("docs/integrations.md", "text/markdown; charset=utf-8", false))
 	mux.HandleFunc("GET /api", s.apiIndex)
 	mux.HandleFunc("GET /api/{$}", s.apiIndex)
 	mux.HandleFunc("GET /api/openapi.json", s.document("docs/openapi.json", "application/json; charset=utf-8", false))
 	mux.HandleFunc("GET /openapi.json", s.document("docs/openapi.json", "application/json; charset=utf-8", false))
 	mux.HandleFunc("GET /install.sh", s.document("cli/install.sh", "text/x-sh; charset=utf-8", false))
 	mux.HandleFunc("GET /cli/finalechat", s.document("cli/finalechat", "text/x-python; charset=utf-8", true))
+	mux.HandleFunc("GET /sdk/finale-artifact.js", s.document("sdk/finale-artifact.js", "text/javascript; charset=utf-8", false))
 	mux.HandleFunc("GET /skill/SKILL.md", s.document("skill/finalechat/SKILL.md", "text/markdown; charset=utf-8", false))
 	mux.HandleFunc("GET /skill/finalechat/SKILL.md", s.document("skill/finalechat/SKILL.md", "text/markdown; charset=utf-8", false))
 
@@ -160,6 +164,8 @@ func (s *Server) Handler() http.Handler {
 	authed.HandleFunc("GET /api/v1/attachments/{id}", s.serveAttachment(false))
 	authed.HandleFunc("HEAD /api/v1/attachments/{id}", s.serveAttachment(false))
 	authed.HandleFunc("GET /api/v1/attachments/{id}/thumb", s.serveAttachment(true))
+	s.artifactRoutes(authed)
+	s.controlRoutes(authed)
 
 	authed.HandleFunc("GET /api/v1/questions", s.handleListQuestions)
 	authed.HandleFunc("GET /api/v1/questions/{id}", s.handleGetQuestion)
@@ -216,6 +222,12 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 		}
 	})
 	go s.every(ctx, 5*time.Minute, 4*time.Minute, s.pruneOrphanAttachments)
+	go s.every(ctx, 5*time.Minute, 4*time.Minute, s.pruneArtifactObjects)
+	go s.every(ctx, 10*time.Second, 10*time.Second, func(ctx context.Context) {
+		if err := s.store.ExpireSettingsCommands(ctx); err != nil {
+			s.log.Error("expire settings commands", "error", err)
+		}
+	})
 	<-ctx.Done()
 }
 

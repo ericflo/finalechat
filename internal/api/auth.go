@@ -19,7 +19,8 @@ const sessionCookie = "fc_session"
 type principal struct {
 	user *store.User
 	// token is set when the caller authenticated with an API token.
-	token *store.APIToken
+	token     *store.APIToken
+	connector *store.Connector
 	// sessionHash is set when the caller authenticated with a browser session.
 	sessionHash []byte
 }
@@ -58,6 +59,23 @@ func (s *Server) resolvePrincipal(r *http.Request) (*principal, error) {
 			return nil, &apiError{Status: http.StatusUnauthorized, Code: "unauthorized", Message: "Use `Authorization: Bearer <token>`."}
 		}
 		secret := strings.TrimSpace(parts[1])
+		if strings.HasPrefix(secret, "fcc_") {
+			if !strings.HasPrefix(r.URL.Path, "/api/v1/connectors/") && !strings.HasPrefix(r.URL.Path, "/api/v1/commands/") {
+				return nil, errForbidden
+			}
+			c, err := s.store.ResolveConnector(r.Context(), auth.HashToken(secret))
+			if err == store.ErrNotFound {
+				return nil, errUnauthorized
+			}
+			if err != nil {
+				return nil, err
+			}
+			u, err := s.store.GetUser(r.Context(), c.UserID)
+			if err != nil {
+				return nil, err
+			}
+			return &principal{user: u, connector: c}, nil
+		}
 		if !auth.LooksLikeAPIToken(secret) {
 			return nil, &apiError{Status: http.StatusUnauthorized, Code: "invalid_token", Message: "The API token is malformed. Tokens start with fc_ and are created in Settings → Agents."}
 		}
@@ -88,10 +106,15 @@ func (s *Server) resolvePrincipal(r *http.Request) (*principal, error) {
 // requireAuth rejects unauthenticated requests and enforces same-origin
 // checks for cookie-authenticated mutations.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
+	connectorRoutes := s.connectorHandler()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := principalFrom(r.Context())
 		if p == nil {
 			writeError(w, errUnauthorized)
+			return
+		}
+		if p.connector != nil {
+			connectorRoutes.ServeHTTP(w, r)
 			return
 		}
 		if p.sessionHash != nil && !isSafeMethod(r.Method) && !s.sameOrigin(r) {
@@ -329,7 +352,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 // sessionOnly rejects API tokens for routes that belong to the app.
 func (s *Server) sessionOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if p := principalFrom(r.Context()); p != nil && p.viaToken() {
+		if p := principalFrom(r.Context()); p == nil || p.sessionHash == nil {
 			writeError(w, &apiError{Status: http.StatusForbidden, Code: "forbidden", Message: "This route is for the app; API tokens cannot use it."})
 			return
 		}

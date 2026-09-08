@@ -60,6 +60,8 @@ func writeError(w http.ResponseWriter, err error) {
 		ae = errNotFound
 	case errors.Is(err, store.ErrConflict):
 		ae = errConflict
+	case errors.Is(err, store.ErrConnectorOffline):
+		ae = &apiError{Status: http.StatusConflict, Code: "connector_offline", Message: "The connector is offline or another process owns its lease. Save a draft or reconnect it."}
 	case errors.Is(err, store.ErrInvalidState):
 		ae = &apiError{Status: http.StatusConflict, Code: "invalid_state", Message: "The resource is not in a state that allows this operation."}
 	default:
