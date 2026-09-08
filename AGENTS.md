@@ -306,6 +306,8 @@ behaviour, for example by waiting on questions longer.
 
 Integrations can publish immutable session websites independently of chat mirroring. Feature-detect `artifacts.v1` and `settings-control.v1` in `GET /me`. Register an artifact with `PUT /threads/{ref}/artifacts/{key}`, check/upload its SHA-256 chunks, then commit a `finalechat.website/v1` manifest using a stable `client_key` and `previous_revision_id`. Every committed revision remains downloadable; HTML previews are sandboxed and receive a bounded MessageChannel bridge. The full contract and limits are in [the API reference](https://www.finalechat.com/api/).
 
+Other integrations can use `finalechat artifact upload ./prepared-website --thread ext:SESSION_ID --source session.jsonl --append-only-sources`. It packages a self-contained HTML entrypoint and declared source files, computes hashes, and journals upload retries. Use `artifact pack ./prepared-website -o ./new-package` to prepare an offline package first. A directory containing `manifest.json` retains its existing metadata and file roles; omit packaging overrides for that directory. Full usage is in [docs/integrations.md](docs/integrations.md).
+
 The CLI supports both native integrations:
 
 ```sh

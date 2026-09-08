@@ -102,7 +102,7 @@ def integration_path(provider, project):
 
 
 def portable_path(name):
-    if not isinstance(name, str) or not name or len(name.encode()) > 1024:
+    if not isinstance(name, str) or not name or len(name.encode()) > 512:
         return False
     if any(c in name for c in "\\:%?#") or any(ord(c) < 32 or ord(c) == 127 for c in name):
         return False
@@ -259,12 +259,30 @@ def verify_website(directory):
     files = manifest.get("files", [])
     if manifest.get("format") != "finalechat.website/v1" or not isinstance(files, list) or not 1 <= len(files) <= 4096:
         raise CLIError("Unsupported or invalid artifact manifest.")
+    producer = manifest.get("producer", {})
+    if not isinstance(producer, dict) or not isinstance(producer.get("name"), str) or not 1 <= len(producer["name"].encode()) <= 120 or not isinstance(producer.get("version"), str) or len(producer["version"].encode()) > 200:
+        raise CLIError("Invalid artifact producer name or version.")
+    if not isinstance(manifest.get("dataset"), dict):
+        raise CLIError("Artifact dataset metadata must be an object.")
+    try:
+        captured = datetime.fromisoformat(manifest["captured_at"].replace("Z", "+00:00"))
+        if captured.tzinfo is None:
+            raise ValueError()
+    except (KeyError, AttributeError, TypeError, ValueError):
+        raise CLIError("Artifact capture time must include a timezone.") from None
     seen, total, chunk_count = set(), 0, 0
     for record in files:
+        if not isinstance(record, dict):
+            raise CLIError("Invalid artifact file record.")
         name = record.get("path")
-        if not portable_path(name) or name.casefold() in seen:
+        if not portable_path(name) or name.casefold() in seen or name.casefold() == "manifest.json":
             raise CLIError("Unsafe or duplicate archive filename.")
         seen.add(name.casefold())
+        content_type = record.get("content_type")
+        if record.get("role") not in ("viewer", "source", "asset", "derived", "context") or not isinstance(content_type, str) or not 1 <= len(content_type.encode()) <= 200 or "\r" in content_type or "\n" in content_type:
+            raise CLIError("Invalid artifact file role or content type.")
+        if type(record.get("size")) is not int or not 0 <= record["size"] <= ARTIFACT_MAX_FILE or not isinstance(record.get("chunks"), list):
+            raise CLIError("Invalid artifact file size or chunks.")
         path = directory / name
         for part in [path, *path.parents]:
             if part == directory:
@@ -276,6 +294,8 @@ def verify_website(directory):
             if size != record.get("size"):
                 raise CLIError(f"Wrong file size: {name}")
             for chunk in record.get("chunks", []):
+                if not isinstance(chunk, dict):
+                    raise CLIError("Invalid artifact chunk record.")
                 length = chunk.get("size")
                 if type(length) is not int or not 1 <= length <= ARTIFACT_CHUNK:
                     raise CLIError("Invalid chunk size.")
@@ -290,8 +310,15 @@ def verify_website(directory):
         total += count
         if total > ARTIFACT_MAX_TOTAL or chunk_count > 16384:
             raise CLIError("Archive exceeds storage limits.")
-    if manifest.get("entrypoint") not in [f["path"] for f in files]:
-        raise CLIError("Archive entrypoint is missing.")
+    for name in seen:
+        if any(str(parent) in seen for parent in Path(name).parents if str(parent) != "."):
+            raise CLIError("Archive contains a file/directory collision.")
+    for index, entry in enumerate((manifest.get("entrypoint"), manifest.get("settings_entrypoint"))):
+        if index == 1 and not entry:
+            continue
+        record = next((f for f in files if f["path"] == entry), None)
+        if record is None or record["role"] != "viewer" or record["content_type"].split(";", 1)[0] != "text/html" or record["size"] > 8 << 20:
+            raise CLIError("Archive entrypoints must name HTML viewer files of at most 8 MiB.")
     return manifest
 
 
@@ -317,7 +344,7 @@ def recover_source_file(directory, record, destination):
 class PublicationDeleted(CLIError):
     def __init__(self, artifact_id=None):
         self.artifact_id = artifact_id
-        super().__init__("The remote artifact was deleted. Automatic publication is paused; explicitly publish this session with --recreate to create a new record.")
+        super().__init__("The remote artifact was deleted. Automatic publication is paused; explicitly publish with --recreate to create a new record.")
 
 
 class PublicationConflict(CLIError):
@@ -1116,12 +1143,20 @@ def registration_signature(registration, settings, directory):
 
 def publish_registered_session(client, registration, directory, settings, recreate=False):
     session_dir = Path(directory) / "publications" / sha256(registration["session_id"].encode())
+    return publish_capture(client, session_dir, "ext:" + registration["provider"] + ":" + registration["session_id"],
+                           "Session explorer", "session",
+                           lambda stage: build_native_export(stage, registration, settings, Path(directory) / "settings-audit.jsonl"),
+                           lambda: registration_signature(registration, settings, directory), True, recreate)
+
+
+def publish_capture(client, session_dir, thread_ref, title, key, capture, current_signature, check_sources, recreate=False):
+    """Shared durable publication lifecycle for native and third-party websites."""
+    session_dir = Path(session_dir)
     session_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     with integration_lock(session_dir / "publisher.lock", timeout=0):
         state_path = session_dir / "state.json"
         state = read_object(state_path)
         pending = session_dir / "pending.json"
-        thread_ref = "ext:" + registration["provider"] + ":" + registration["session_id"]
         intent = read_object(pending)
         if recreate:
             old_id = intent.get("artifact_id") or state.get("artifact_id")
@@ -1141,7 +1176,7 @@ def publish_registered_session(client, registration, directory, settings, recrea
             raise PublicationDeleted()
 
         def complete(stage, signature):
-            result = upload_website(client, stage, pending, thread_ref, "Session explorer", artifact_id=state.get("artifact_id"), signature=signature, check_sources=True)
+            result = upload_website(client, stage, pending, thread_ref, title, artifact_id=state.get("artifact_id"), signature=signature, check_sources=check_sources, key=key)
             record = {"signature": signature, "artifact_id": result["artifact_id"], "revision_id": result["revision_id"],
                       "thread_id": result.get("thread_id"), "settings_version": verify_website(stage)["dataset"].get("settings_version")}
             private_json(state_path, record)
@@ -1163,18 +1198,19 @@ def publish_registered_session(client, registration, directory, settings, recrea
                     except PublicationConflict:
                         intent["needs_recapture"] = True
                         private_json(pending, intent)
-            signature = registration_signature(registration, settings, directory)
+            signature = current_signature()
             if not intent and state.get("signature") == signature:
                 return state
             stage = Path(tempfile.mkdtemp(prefix="capture-", dir=str(session_dir)))
             try:
-                manifest = build_native_export(stage, registration, settings, Path(directory) / "settings-audit.jsonl")
+                manifest = capture(stage)
                 if intent:
                     # The replacement must preserve both the pending capture
                     # and the published source frontier. Never just rebase an
                     # old manifest onto the newer server head.
-                    require_source_extension(stage, manifest, verify_website(old_stage))
-                    replacement = publication_intent(client, stage, manifest, thread_ref, "Session explorer", intent["artifact_id"], signature, True)
+                    if check_sources:
+                        require_source_extension(stage, manifest, verify_website(old_stage))
+                    replacement = publication_intent(client, stage, manifest, thread_ref, title, intent["artifact_id"], signature, check_sources, key)
                     private_json(pending, replacement)
                     # New immutable source bytes and intent are durable first.
                     shutil.rmtree(old_stage)
@@ -1382,6 +1418,128 @@ def configure_integration(provider, project, **changes):
     return config
 
 
+def directory_inventory(directory):
+    """Bounded inventory of an explicitly prepared website, without symlinks."""
+    root = Path(directory)
+    if root.is_symlink() or not root.is_dir():
+        raise CLIError("The website must be a real directory.")
+    records = []
+    for parent, directories, files in os.walk(root, followlinks=False):
+        for name in sorted(directories + files):
+            path = Path(parent) / name
+            relative = path.relative_to(root).as_posix()
+            info = path.lstat()
+            if not portable_path(relative) or stat.S_ISLNK(info.st_mode):
+                raise CLIError(f"Unsafe website path: {relative}")
+            if stat.S_ISREG(info.st_mode):
+                if info.st_size > ARTIFACT_MAX_FILE:
+                    raise CLIError(f"Website file is too large: {relative}")
+                records.append((relative, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino))
+            elif not stat.S_ISDIR(info.st_mode):
+                raise CLIError(f"Website contains a non-regular file: {relative}")
+            if len(records) > 4097:
+                raise CLIError("Website contains too many files.")
+    return sorted(records)
+
+
+def capture_directory(source, target, options):
+    """Capture bytes into private staging before any account upload begins."""
+    root = Path(source).resolve()
+    before = directory_inventory(source)
+    if (root / "manifest.json").exists():
+        if options.get("source") or options.get("context") or options.get("dataset") is not None or options.get("settings_entrypoint") or options.get("entrypoint", "index.html") != "index.html" or options.get("producer", "custom-integration") != "custom-integration" or options.get("producer_version", "1") != "1":
+            raise CLIError("A manifested archive already defines its files, roles, dataset and entrypoints; omit packaging overrides.")
+        manifest = verify_website(root)
+        for record in manifest["files"]:
+            destination = Path(target) / record["path"]
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            recover_source_file(root, record, destination)
+        private_json(Path(target) / "manifest.json", manifest)
+    else:
+        export = WebsiteExport(target, options.get("producer", "custom-integration"), "", "")
+        dataset = options.get("dataset", {"format": "custom.website/v1"})
+        if not isinstance(dataset, dict):
+            raise CLIError("Website dataset metadata must be a JSON object.")
+        entrypoint = options.get("entrypoint", "index.html")
+        settings_entrypoint = options.get("settings_entrypoint")
+        export.manifest.update(dataset=dataset, entrypoint=entrypoint, viewer={})
+        export.manifest["producer"]["version"] = options.get("producer_version", "1")
+        if settings_entrypoint:
+            export.manifest["settings_entrypoint"] = settings_entrypoint
+        else:
+            export.manifest.pop("settings_entrypoint", None)
+        source_paths, context_paths = set(options.get("source") or []), set(options.get("context") or [])
+        entries = {p for p in (entrypoint, settings_entrypoint) if p}
+        names = {record[0] for record in before}
+        if source_paths & context_paths or (source_paths | context_paths) & entries:
+            raise CLIError("Each website file must have one role; entrypoints are viewers.")
+        if not (source_paths | context_paths | entries) <= names:
+            raise CLIError("A declared source, context file or entrypoint is missing.")
+        for name, size, mtime, ctime, inode in before:
+            role = "source" if name in source_paths else "context" if name in context_paths else "viewer" if name in entries else "asset"
+            content_type = "text/html" if name in entries else ("application/x-ndjson" if name.endswith(".jsonl") else mimetypes.guess_type(name)[0] or "application/octet-stream")
+            with regular_source(root / name) as (stream, opened_size):
+                def parts():
+                    remaining = opened_size
+                    while remaining:
+                        raw = stream.read(min(remaining, ARTIFACT_CHUNK))
+                        if not raw:
+                            raise CLIError("Website changed during capture; retry after the producer finishes writing.")
+                        remaining -= len(raw)
+                        yield raw
+                export.add(name, role, content_type, parts())
+                info = os.fstat(stream.fileno())
+                if (info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino) != (size, mtime, ctime, inode):
+                    raise CLIError("Website changed during capture; retry after the producer finishes writing.")
+        manifest = export.finish()
+    if directory_inventory(source) != before:
+        raise CLIError("Website changed during capture; retry after the producer finishes writing.")
+    return verify_website(target)
+
+
+def cmd_website(args):
+    source = Path(args.directory).expanduser()
+    options = {name: getattr(args, name) for name in ("entrypoint", "settings_entrypoint", "producer", "producer_version", "source", "context")}
+    if args.dataset:
+        dataset_path = Path(args.dataset).expanduser()
+        if not dataset_path.is_file():
+            raise CLIError("Dataset metadata file does not exist.")
+        options["dataset"] = read_object(dataset_path)
+    if args.artifact_command == "pack":
+        target = Path(args.output).expanduser()
+        if target.resolve().is_relative_to(source.resolve()):
+            raise CLIError("The output directory must be outside the website being captured.")
+        target.mkdir(parents=True, exist_ok=False, mode=0o700)
+        try:
+            manifest = capture_directory(source, target, options)
+        except BaseException:
+            shutil.rmtree(target)
+            raise
+        print(f"Packed {len(manifest['files'])} files into {target}. Verify or upload this directory with finalechat artifact.")
+        return EXIT_OK
+    client = client_from_args(args)
+    thread_ref = args.thread or os.environ.get("FINALECHAT_THREAD")
+    if not thread_ref:
+        raise CLIError("Website upload requires --thread or FINALECHAT_THREAD; choose the integration's exact session thread.")
+    identity = sha256(canonical_bytes([client.base_url, thread_ref, args.key]))
+    session_dir = INTEGRATION_DIR / "websites" / identity
+    if session_dir.resolve().is_relative_to(source.resolve()):
+        raise CLIError("The website cannot contain FinaleChat's private publication state.")
+    def capture(stage):
+        manifest = capture_directory(source, stage, options)
+        if args.append_only_sources and not any(f["role"] == "source" for f in manifest["files"]):
+            raise CLIError("--append-only-sources requires at least one source-role file.")
+        return manifest
+    result = publish_capture(client, session_dir, thread_ref, args.title, args.key, capture,
+                             lambda: sha256(canonical_bytes([str(source.resolve()), directory_inventory(source), options, args.append_only_sources])),
+                             args.append_only_sources, args.recreate)
+    if args.json:
+        print(json.dumps(result))
+    else:
+        print(f"Published {args.title} · artifact {result['artifact_id']} · revision {result['revision_id']}")
+    return EXIT_OK
+
+
 def cmd_artifact(args):
     if args.artifact_command in ("verify", "restore"):
         manifest = verify_website(args.directory)
@@ -1570,6 +1728,26 @@ def add_integration_parsers(sub):
 
     root = sub.add_parser("artifact", help="export, verify, recover and publish permanent session websites")
     commands = root.add_subparsers(dest="artifact_command", required=True)
+    for name in ("pack", "upload"):
+        parser = commands.add_parser(name, help="package or publish an integration's prepared website directory")
+        parser.add_argument("directory", help="prepared website directory, or an existing manifested archive")
+        parser.add_argument("--entrypoint", default="index.html", help="self-contained HTML entrypoint")
+        parser.add_argument("--settings-entrypoint", help="optional self-contained settings HTML")
+        parser.add_argument("--producer", default="custom-integration")
+        parser.add_argument("--producer-version", default="1")
+        parser.add_argument("--dataset", help="JSON file containing dataset identity and provenance metadata")
+        parser.add_argument("--source", action="append", help="relative file to preserve as a recoverable source; repeat as needed")
+        parser.add_argument("--context", action="append", help="relative context data file; repeat as needed")
+        if name == "pack":
+            parser.add_argument("-o", "--output", required=True, help="new portable archive directory outside the input")
+        else:
+            parser.add_argument("-t", "--thread", help="exact thread UUID or ext:session reference; defaults only to FINALECHAT_THREAD")
+            parser.add_argument("--key", default="session", help="stable artifact key within this thread")
+            parser.add_argument("--title", default="Session explorer")
+            parser.add_argument("--append-only-sources", action="store_true", help="require every published source file to remain a byte prefix of the next capture")
+            parser.add_argument("--recreate", action="store_true", help="explicitly create a new record after remote deletion")
+            parser.add_argument("--json", action="store_true", help="print durable artifact, revision and thread identifiers as JSON")
+        parser.set_defaults(func=cmd_website)
     for name in ("enable", "disable", "track", "export", "publish"):
         parser = commands.add_parser(name)
         provider_project(parser)

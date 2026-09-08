@@ -8,6 +8,33 @@ Opening **Edit current settings** creates a 30-minute editing session for that e
 
 Deleting an artifact or its thread also cancels queued commands submitted from that artifact. An already claimed command becomes `unknown`, and its lease and later acknowledgements are fenced: deletion cannot guarantee that a local write had not already happened. Completed results and their audit remain with the settings resource. Commands submitted independently from the resource keep their own authorization.
 
+## Websites from other integrations
+
+Prepare a directory containing a self-contained HTML entrypoint and the data it reads. Then publish it to the integration's exact session thread:
+
+```sh
+finalechat artifact upload ./prepared-website --thread ext:my-agent:SESSION_ID \
+  --key inspector --title "Session explorer" --source session.jsonl \
+  --dataset ./dataset.json --append-only-sources --json
+```
+
+`dataset.json` is an object describing the source format and identity, for example `{"format":"my-agent.events/v1","session_id":"SESSION_ID"}`. Repeat `--source` for recoverable source files and `--context` for provenance files. Add `--settings-entrypoint settings/index.html` when the integration also supplies a settings page. These paths are relative to the prepared directory. The remaining files are retained as assets. Uploading a settings page does not pair a connector or authorize it to write settings.
+
+The CLI copies the prepared files into private staging, computes whole-file and chunk hashes, uploads missing chunks, and commits a revision. It rejects symlinks, unsafe paths, invalid manifests, and files changing during capture. Prepare a dedicated output directory: every file in an unmanifested input directory is included. HTML must already embed its executable JavaScript and CSS and use the [artifact SDK](../sdk/finale-artifact.js) for data access; this command packages files but does not bundle module imports or rewrite a site's network dependencies.
+
+Run the same command again whenever the integration has an update. An unchanged capture reuses its revision. Failed uploads retain the exact capture and idempotency key for retry. `--append-only-sources` prevents a new capture from dropping or rewriting previously published source bytes; omit it for datasets whose files are intentionally replaced. A deleted remote artifact stays deleted until the same upload command includes `--recreate`. The explicit thread, server URL, and artifact key identify the durable publisher state; there is no per-directory chat-thread fallback.
+
+To inspect the portable package before uploading, or publish a manifest an integration already produced:
+
+```sh
+finalechat artifact pack ./prepared-website -o ./new-package --source session.jsonl --dataset ./dataset.json
+finalechat artifact verify ./new-package
+finalechat artifact upload ./new-package --thread ext:my-agent:SESSION_ID --key inspector --append-only-sources
+finalechat artifact restore ./new-package -o ./new-source-recovery
+```
+
+An existing `manifest.json` is preserved, and only its declared files are copied. Its metadata and roles take precedence, so omit packaging overrides when uploading or repacking it. Source recovery verifies bytes and writes a new directory; it never executes the website or starts an agent.
+
 ## Claude Code
 
 The existing hooks/MCP integration remains available:

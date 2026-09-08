@@ -89,7 +89,10 @@ downloadable original JSONL files. Settings use a separately paired outbound
 connector, a durable command queue, and FinaleChat's own Save button.
 
 See [integration setup, lifecycle, verification and recovery](docs/integrations.md)
-and the [artifact protocol](docs/design/session-artifacts.md). The standalone CLI
+and the [artifact protocol](docs/design/session-artifacts.md). Other integrations
+can package and publish a prepared website with `finalechat artifact pack` and
+`finalechat artifact upload --thread ext:SESSION_ID`; see the integration guide
+for source recovery and append-only history options. The standalone CLI
 is generated from the integration sources with `make cli`; `make test-cli`
 checks that the generated file is synchronized.
 

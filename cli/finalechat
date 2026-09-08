@@ -2672,7 +2672,7 @@ def cmd_mcp(args) -> int:
 # BEGIN GENERATED INTEGRATIONS (scripts/build-cli-integrations.py)
 INTEGRATION_ASSETS = {'sdk': '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', 'viewer': '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', 'settings': 'H4sIAAAAAAAC/51Y23LbuBm+91MgTLoVtxRtOYfNkqY8qdeZpk2zM3F6lWYSiAQlJBTAAqBlVeLMvkZfoK/Q+z7KPkk/ACQl2U633QvLJPCfzz/PHhQyN+uakYVZVtMz+0sqKuZZwEQwPVsyQ0m+oEozkwWNKcfP+1NBlywLrjlb1VKZgORSGCYAteKFWWQFu+Y5G7uXiAtuOK3GOqcVyyYgYbip2PQVUOaKGi4FAQfDxVyfHfu7ozNt1vifKCnNpgT1ZPK0viF6rQ1bjhseaSr0WDPFyzSXlVTJQ/aMfceKdEbzL3MlG1EkDyeTyZPJzAOA/4ItWVJQ9aX9djOTN2PN/w6myUyqgqkxTtqZLNabJVVzLpITQhsj0yW98Yokk8nJSX2T1rQoLNopXtrFxElnSbHk9DFO6k3FBRsvGJ8vIHX8tJePFrOn+fOWi7oxkWYVy01k2I2hitFo1hgjhdeUiwX0Mh1e/7av1+nJ6XePn6Ve8GRiDSMrXpCHTyZP8mf9xVjRgjc6eb4n9PeQsOOVN0qDfi05HKHul2vTaX5y8pt2OFtyMag3sRZRzKl/zZThcHIbl5xVhd4UXNcVXSdzxYvU/ozhPJwYNoZuzVLoRLGaUTOylh6X3ESgDYOPTp+DbjQpVRimc1onk2eQ25Pd9KrYgDj09veT8jS/xyqPHz8unp7csoqVvCOJoJ+xahB3Vsn8S+rcuvJqPjs5SYeoOCHPd5h6SavbmAf+7vGAQ05SCRuVlVyNVwpaUbFewbksXS04bKJrmrOkVszd9hw6b3VkYAdi/yBGGzOlpNp07MqSlpS1C0ah5CBRWbGb9HOjDS/X4y5LE8doPGNmxZhIacXnYgwBljrJmY0Fb/JTaPlQM6ryRc998sSybiHi5j6Rv6JeF3BJKfNGj6+55rOKRS7ebp356Lt12Mfd4fFGNsYmWnK683P+ePZdWbZnx754HJ15Y6CyTQgvssDVluArhWcxmZ55QR0sPEmrYPpjzQSBAIrmhhXEGoNfs7NjDzkFWseidljaUNPogCiJUte/TV9LaiOWmAUjml6DTs+WaEFrvZDm55/+eXZcg8z03YJpBkY9aMFK2lRGk1IqTyGXKNlAWgkyW5OXXKCuXiyoickLohohLCs6hyfJkq5JA2oFL0s4AifXtGqYjsmVAYQt7mLONLFeiixx4cB3JH/+6R+aXEGOLgyJkYTWdbUmHBJ1QQYhayVrqWkVOyWca709XPgEBGA5W8gKpsqCK3c42CDyGmlCRUFQSoziufWNhk0CGILTscvPO4joJAW/JnlFtc4CX3MCx7Z7hnsAYH3TwbiE8SDdo3cUtEUXmzrhC/Q3XunpmW6WCPv19A0iBQZAaGtIFe18Z1VXXuxG6Ka2rRC28MwRhB3+GdLDsYSRrpmgImeOlWJWvo4bGl6ueG2mx9+Sl6/evHh9+fHF23evXr64ePfx6oc/kW+PQdBD9JBHgfWVN1eAoiO0IY8yMJqirTdLeDueM3NZMfv4+/WrYsSLMBKyYNkI3nd5FWbTjccU2YCVI9kM6xAtaJjycmTBH2QZKi0rkXdFKGJ7dNF1/ivIIeYOKkRDMI0SRLRpxYz1qWxUziJWcEORu1lJK+1fdSbYivyZ1qMwLRvhHE9KmGTEws2jUeem8IAVi5dMa8TvdttxZWF7RPVa5GSgUSHnRuHGqPXmkG3q2MZ5hWACUwvgLVDByxldUW7gQpsAce/pGAYBsbRXJLOgcf+WDvTdcf/W5tSgcg44f7z68U1c22FqdMDEajYKelbHtmaw+LOWIgjDFhbwRevQAj3R2CVGCqiu1ByCfXo0sI9djm23gU3mImh3Ufzvf5FHg4nOg0s82QKC6cAVjCHZkuAPXBupbIcfylZErGmIFNUaNEHqbSMMX6J+FbJ2foA/pCi5WrLikxV0LwkOhXX20c6f6FWjneAdq7hLle1200aiqaro1HoE4Qg3emPbmOlip22PhlDogTaI4gc93dDHqBWpqxYhPOrq1MWCVwWQ4HEfGX9rmFpn1sq+nIWxK6Oxka/liqkLCp8ifKUaeXjfuGU5RD5k90krVTcbeWFu6eyuwkOyMRd51QB/5KQIQ9vEuWhYJxum1szmtBXOqRuEGHRuYlfx3rgx3ZHtK4QvpR7DPQeRu/ehFKbuX2xXgZdSZf7qC1s7mqj8MOWog/T0tG0kReaTCvVmNKCEkbNS5iHOY1lnGdYIgYgKzocykhxeu0t/5I2c3A0E1xffD3w+uCLjek56RGBWf+PGfRoz0Sy324Mju/JYXjOJ4k9hsI1DHsxoZ5Cg168bv7tLH9RBFLzyxyj3x8SrhCLpz7zcWRAMB+iTNrmKzCj4zTHrbdmB7EdPvpBYnmz43KPIe0sicoXsQ9gVLi/ULQk9lTD1751Mt+KthzmQyCOEfh/o8PzvXvE/D4LkFjEHE7YMku3b831AlaJrmEzOPlvDfthF9B2vhNvtMYdKqvETwBbVYlmbLTVggwkEZ8coGno/ys6DfkBEiXKMA9ev3gd2r5kzBdYw3QwP/5V1FwU+OnqM9HY4YT/hy2Z50Ag9Hm6y+0DvkqA3XyNBb7L7QH/ZF1ZoBEx/19v6/D4f9cUz6Zqnd1wXBPuD2j2c7oZ9EgTtkc++GLPHrmD4oyH0H/QtZrt94IFWyh90kFL4qBnZmcRmtIBbsz3NXauGMTs30bmrblD26vL15cW7AMnxf8Va6BjstWXhZhcbwOTXxI8jZ39i2HUJNSBacG6Nnbxx+D0DVyr1fqmMNvhJdq+yTlwl9BU0sXhtmF5L3k/abL/l/QqCEOoOwdS1TjuOXdqhaxRc2l3QxhSgrJncBhL8br9doM/udwb/DaGro3YzHpoL9mJWfESSYrDpy3HfFLk9+vQCawVnOsE04q8Zdpbcjt4fsUWKvjm/qKpR8BE+IUHYfgoPmX26cq1iR8O3Dow93RYVtH8Vlz3dfrWy4L84fQzS7DWe8Pw8+Iv4Iuwmdtx3CjtdfQpdCepD/ptvDiO+f3cZ1FdxsGR9m/HL1q7NBG72ZDZJ8ornX3yS/I9+93l6193D7NR1OqRqTlVxW4Qf/DGx3CBHB3WfJAU6p2F7pfnrHPdixikWdWTdxDvMYx0EgO08d2vAH8i6Gf/+ub2H2WD29Qt/Mkzasdtjg8jn8MduvUvuG9kOQSJ2UzP7NeAuzhAtPSi28J7xALQ7Q1wGfgtK3sdx7K3oN/RR+AEe+8oChJJ7z7y7P5/2xdRb3NLx3zPCA7915oJxxGt7/ZJXlnPsiVvKKAodjOhJRHazGs4Ha0rxlmkkE4YYrL0CW+jmq2vJhQdB2nXAsYdr4ztHbiZs8pyxAol17teX3TcR+5lEsdx+2CtSQofPHxoLIgz8W71bRLje30Vi8paVcMnizqJDZgx1DhuMkAbJ5+I+Rpt7y+zn7r1vIyCunMrAqOQqRtq3g13sWrSO7RcVO9UJFy8wCYrC8Or2294tC14UTPgB0WWN319bUDzabf7H7kP90X8ASOo30rkXAAA='}
 INTEGRATION_ASSETS_DIGEST = '8037f9d40e04609b5eb7f4407b1fd2d49a7fb86901f8a05229a7cd2a1a02b2df'
-INTEGRATION_ADAPTER_DIGEST = '576aa5f878e614626f67cdf1ee60b30e2810b4fd6d92415c321b92ecbaa598a4'
+INTEGRATION_ADAPTER_DIGEST = '45104ccc490ccb087b8d1198abb0f4d66b2041f6a70060f835ba5d1967011335'
 """Source for the integrations embedded in the single-file CLI.
 
 Run scripts/build-cli-integrations.py after editing this file or cli/assets.
@@ -2777,7 +2777,7 @@ def integration_path(provider, project):
 
 
 def portable_path(name):
-    if not isinstance(name, str) or not name or len(name.encode()) > 1024:
+    if not isinstance(name, str) or not name or len(name.encode()) > 512:
         return False
     if any(c in name for c in "\\:%?#") or any(ord(c) < 32 or ord(c) == 127 for c in name):
         return False
@@ -2934,12 +2934,30 @@ def verify_website(directory):
     files = manifest.get("files", [])
     if manifest.get("format") != "finalechat.website/v1" or not isinstance(files, list) or not 1 <= len(files) <= 4096:
         raise CLIError("Unsupported or invalid artifact manifest.")
+    producer = manifest.get("producer", {})
+    if not isinstance(producer, dict) or not isinstance(producer.get("name"), str) or not 1 <= len(producer["name"].encode()) <= 120 or not isinstance(producer.get("version"), str) or len(producer["version"].encode()) > 200:
+        raise CLIError("Invalid artifact producer name or version.")
+    if not isinstance(manifest.get("dataset"), dict):
+        raise CLIError("Artifact dataset metadata must be an object.")
+    try:
+        captured = datetime.fromisoformat(manifest["captured_at"].replace("Z", "+00:00"))
+        if captured.tzinfo is None:
+            raise ValueError()
+    except (KeyError, AttributeError, TypeError, ValueError):
+        raise CLIError("Artifact capture time must include a timezone.") from None
     seen, total, chunk_count = set(), 0, 0
     for record in files:
+        if not isinstance(record, dict):
+            raise CLIError("Invalid artifact file record.")
         name = record.get("path")
-        if not portable_path(name) or name.casefold() in seen:
+        if not portable_path(name) or name.casefold() in seen or name.casefold() == "manifest.json":
             raise CLIError("Unsafe or duplicate archive filename.")
         seen.add(name.casefold())
+        content_type = record.get("content_type")
+        if record.get("role") not in ("viewer", "source", "asset", "derived", "context") or not isinstance(content_type, str) or not 1 <= len(content_type.encode()) <= 200 or "\r" in content_type or "\n" in content_type:
+            raise CLIError("Invalid artifact file role or content type.")
+        if type(record.get("size")) is not int or not 0 <= record["size"] <= ARTIFACT_MAX_FILE or not isinstance(record.get("chunks"), list):
+            raise CLIError("Invalid artifact file size or chunks.")
         path = directory / name
         for part in [path, *path.parents]:
             if part == directory:
@@ -2951,6 +2969,8 @@ def verify_website(directory):
             if size != record.get("size"):
                 raise CLIError(f"Wrong file size: {name}")
             for chunk in record.get("chunks", []):
+                if not isinstance(chunk, dict):
+                    raise CLIError("Invalid artifact chunk record.")
                 length = chunk.get("size")
                 if type(length) is not int or not 1 <= length <= ARTIFACT_CHUNK:
                     raise CLIError("Invalid chunk size.")
@@ -2965,8 +2985,15 @@ def verify_website(directory):
         total += count
         if total > ARTIFACT_MAX_TOTAL or chunk_count > 16384:
             raise CLIError("Archive exceeds storage limits.")
-    if manifest.get("entrypoint") not in [f["path"] for f in files]:
-        raise CLIError("Archive entrypoint is missing.")
+    for name in seen:
+        if any(str(parent) in seen for parent in Path(name).parents if str(parent) != "."):
+            raise CLIError("Archive contains a file/directory collision.")
+    for index, entry in enumerate((manifest.get("entrypoint"), manifest.get("settings_entrypoint"))):
+        if index == 1 and not entry:
+            continue
+        record = next((f for f in files if f["path"] == entry), None)
+        if record is None or record["role"] != "viewer" or record["content_type"].split(";", 1)[0] != "text/html" or record["size"] > 8 << 20:
+            raise CLIError("Archive entrypoints must name HTML viewer files of at most 8 MiB.")
     return manifest
 
 
@@ -2992,7 +3019,7 @@ def recover_source_file(directory, record, destination):
 class PublicationDeleted(CLIError):
     def __init__(self, artifact_id=None):
         self.artifact_id = artifact_id
-        super().__init__("The remote artifact was deleted. Automatic publication is paused; explicitly publish this session with --recreate to create a new record.")
+        super().__init__("The remote artifact was deleted. Automatic publication is paused; explicitly publish with --recreate to create a new record.")
 
 
 class PublicationConflict(CLIError):
@@ -3791,12 +3818,20 @@ def registration_signature(registration, settings, directory):
 
 def publish_registered_session(client, registration, directory, settings, recreate=False):
     session_dir = Path(directory) / "publications" / sha256(registration["session_id"].encode())
+    return publish_capture(client, session_dir, "ext:" + registration["provider"] + ":" + registration["session_id"],
+                           "Session explorer", "session",
+                           lambda stage: build_native_export(stage, registration, settings, Path(directory) / "settings-audit.jsonl"),
+                           lambda: registration_signature(registration, settings, directory), True, recreate)
+
+
+def publish_capture(client, session_dir, thread_ref, title, key, capture, current_signature, check_sources, recreate=False):
+    """Shared durable publication lifecycle for native and third-party websites."""
+    session_dir = Path(session_dir)
     session_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     with integration_lock(session_dir / "publisher.lock", timeout=0):
         state_path = session_dir / "state.json"
         state = read_object(state_path)
         pending = session_dir / "pending.json"
-        thread_ref = "ext:" + registration["provider"] + ":" + registration["session_id"]
         intent = read_object(pending)
         if recreate:
             old_id = intent.get("artifact_id") or state.get("artifact_id")
@@ -3816,7 +3851,7 @@ def publish_registered_session(client, registration, directory, settings, recrea
             raise PublicationDeleted()
 
         def complete(stage, signature):
-            result = upload_website(client, stage, pending, thread_ref, "Session explorer", artifact_id=state.get("artifact_id"), signature=signature, check_sources=True)
+            result = upload_website(client, stage, pending, thread_ref, title, artifact_id=state.get("artifact_id"), signature=signature, check_sources=check_sources, key=key)
             record = {"signature": signature, "artifact_id": result["artifact_id"], "revision_id": result["revision_id"],
                       "thread_id": result.get("thread_id"), "settings_version": verify_website(stage)["dataset"].get("settings_version")}
             private_json(state_path, record)
@@ -3838,18 +3873,19 @@ def publish_registered_session(client, registration, directory, settings, recrea
                     except PublicationConflict:
                         intent["needs_recapture"] = True
                         private_json(pending, intent)
-            signature = registration_signature(registration, settings, directory)
+            signature = current_signature()
             if not intent and state.get("signature") == signature:
                 return state
             stage = Path(tempfile.mkdtemp(prefix="capture-", dir=str(session_dir)))
             try:
-                manifest = build_native_export(stage, registration, settings, Path(directory) / "settings-audit.jsonl")
+                manifest = capture(stage)
                 if intent:
                     # The replacement must preserve both the pending capture
                     # and the published source frontier. Never just rebase an
                     # old manifest onto the newer server head.
-                    require_source_extension(stage, manifest, verify_website(old_stage))
-                    replacement = publication_intent(client, stage, manifest, thread_ref, "Session explorer", intent["artifact_id"], signature, True)
+                    if check_sources:
+                        require_source_extension(stage, manifest, verify_website(old_stage))
+                    replacement = publication_intent(client, stage, manifest, thread_ref, title, intent["artifact_id"], signature, check_sources, key)
                     private_json(pending, replacement)
                     # New immutable source bytes and intent are durable first.
                     shutil.rmtree(old_stage)
@@ -4057,6 +4093,128 @@ def configure_integration(provider, project, **changes):
     return config
 
 
+def directory_inventory(directory):
+    """Bounded inventory of an explicitly prepared website, without symlinks."""
+    root = Path(directory)
+    if root.is_symlink() or not root.is_dir():
+        raise CLIError("The website must be a real directory.")
+    records = []
+    for parent, directories, files in os.walk(root, followlinks=False):
+        for name in sorted(directories + files):
+            path = Path(parent) / name
+            relative = path.relative_to(root).as_posix()
+            info = path.lstat()
+            if not portable_path(relative) or stat.S_ISLNK(info.st_mode):
+                raise CLIError(f"Unsafe website path: {relative}")
+            if stat.S_ISREG(info.st_mode):
+                if info.st_size > ARTIFACT_MAX_FILE:
+                    raise CLIError(f"Website file is too large: {relative}")
+                records.append((relative, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino))
+            elif not stat.S_ISDIR(info.st_mode):
+                raise CLIError(f"Website contains a non-regular file: {relative}")
+            if len(records) > 4097:
+                raise CLIError("Website contains too many files.")
+    return sorted(records)
+
+
+def capture_directory(source, target, options):
+    """Capture bytes into private staging before any account upload begins."""
+    root = Path(source).resolve()
+    before = directory_inventory(source)
+    if (root / "manifest.json").exists():
+        if options.get("source") or options.get("context") or options.get("dataset") is not None or options.get("settings_entrypoint") or options.get("entrypoint", "index.html") != "index.html" or options.get("producer", "custom-integration") != "custom-integration" or options.get("producer_version", "1") != "1":
+            raise CLIError("A manifested archive already defines its files, roles, dataset and entrypoints; omit packaging overrides.")
+        manifest = verify_website(root)
+        for record in manifest["files"]:
+            destination = Path(target) / record["path"]
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            recover_source_file(root, record, destination)
+        private_json(Path(target) / "manifest.json", manifest)
+    else:
+        export = WebsiteExport(target, options.get("producer", "custom-integration"), "", "")
+        dataset = options.get("dataset", {"format": "custom.website/v1"})
+        if not isinstance(dataset, dict):
+            raise CLIError("Website dataset metadata must be a JSON object.")
+        entrypoint = options.get("entrypoint", "index.html")
+        settings_entrypoint = options.get("settings_entrypoint")
+        export.manifest.update(dataset=dataset, entrypoint=entrypoint, viewer={})
+        export.manifest["producer"]["version"] = options.get("producer_version", "1")
+        if settings_entrypoint:
+            export.manifest["settings_entrypoint"] = settings_entrypoint
+        else:
+            export.manifest.pop("settings_entrypoint", None)
+        source_paths, context_paths = set(options.get("source") or []), set(options.get("context") or [])
+        entries = {p for p in (entrypoint, settings_entrypoint) if p}
+        names = {record[0] for record in before}
+        if source_paths & context_paths or (source_paths | context_paths) & entries:
+            raise CLIError("Each website file must have one role; entrypoints are viewers.")
+        if not (source_paths | context_paths | entries) <= names:
+            raise CLIError("A declared source, context file or entrypoint is missing.")
+        for name, size, mtime, ctime, inode in before:
+            role = "source" if name in source_paths else "context" if name in context_paths else "viewer" if name in entries else "asset"
+            content_type = "text/html" if name in entries else ("application/x-ndjson" if name.endswith(".jsonl") else mimetypes.guess_type(name)[0] or "application/octet-stream")
+            with regular_source(root / name) as (stream, opened_size):
+                def parts():
+                    remaining = opened_size
+                    while remaining:
+                        raw = stream.read(min(remaining, ARTIFACT_CHUNK))
+                        if not raw:
+                            raise CLIError("Website changed during capture; retry after the producer finishes writing.")
+                        remaining -= len(raw)
+                        yield raw
+                export.add(name, role, content_type, parts())
+                info = os.fstat(stream.fileno())
+                if (info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino) != (size, mtime, ctime, inode):
+                    raise CLIError("Website changed during capture; retry after the producer finishes writing.")
+        manifest = export.finish()
+    if directory_inventory(source) != before:
+        raise CLIError("Website changed during capture; retry after the producer finishes writing.")
+    return verify_website(target)
+
+
+def cmd_website(args):
+    source = Path(args.directory).expanduser()
+    options = {name: getattr(args, name) for name in ("entrypoint", "settings_entrypoint", "producer", "producer_version", "source", "context")}
+    if args.dataset:
+        dataset_path = Path(args.dataset).expanduser()
+        if not dataset_path.is_file():
+            raise CLIError("Dataset metadata file does not exist.")
+        options["dataset"] = read_object(dataset_path)
+    if args.artifact_command == "pack":
+        target = Path(args.output).expanduser()
+        if target.resolve().is_relative_to(source.resolve()):
+            raise CLIError("The output directory must be outside the website being captured.")
+        target.mkdir(parents=True, exist_ok=False, mode=0o700)
+        try:
+            manifest = capture_directory(source, target, options)
+        except BaseException:
+            shutil.rmtree(target)
+            raise
+        print(f"Packed {len(manifest['files'])} files into {target}. Verify or upload this directory with finalechat artifact.")
+        return EXIT_OK
+    client = client_from_args(args)
+    thread_ref = args.thread or os.environ.get("FINALECHAT_THREAD")
+    if not thread_ref:
+        raise CLIError("Website upload requires --thread or FINALECHAT_THREAD; choose the integration's exact session thread.")
+    identity = sha256(canonical_bytes([client.base_url, thread_ref, args.key]))
+    session_dir = INTEGRATION_DIR / "websites" / identity
+    if session_dir.resolve().is_relative_to(source.resolve()):
+        raise CLIError("The website cannot contain FinaleChat's private publication state.")
+    def capture(stage):
+        manifest = capture_directory(source, stage, options)
+        if args.append_only_sources and not any(f["role"] == "source" for f in manifest["files"]):
+            raise CLIError("--append-only-sources requires at least one source-role file.")
+        return manifest
+    result = publish_capture(client, session_dir, thread_ref, args.title, args.key, capture,
+                             lambda: sha256(canonical_bytes([str(source.resolve()), directory_inventory(source), options, args.append_only_sources])),
+                             args.append_only_sources, args.recreate)
+    if args.json:
+        print(json.dumps(result))
+    else:
+        print(f"Published {args.title} · artifact {result['artifact_id']} · revision {result['revision_id']}")
+    return EXIT_OK
+
+
 def cmd_artifact(args):
     if args.artifact_command in ("verify", "restore"):
         manifest = verify_website(args.directory)
@@ -4245,6 +4403,26 @@ def add_integration_parsers(sub):
 
     root = sub.add_parser("artifact", help="export, verify, recover and publish permanent session websites")
     commands = root.add_subparsers(dest="artifact_command", required=True)
+    for name in ("pack", "upload"):
+        parser = commands.add_parser(name, help="package or publish an integration's prepared website directory")
+        parser.add_argument("directory", help="prepared website directory, or an existing manifested archive")
+        parser.add_argument("--entrypoint", default="index.html", help="self-contained HTML entrypoint")
+        parser.add_argument("--settings-entrypoint", help="optional self-contained settings HTML")
+        parser.add_argument("--producer", default="custom-integration")
+        parser.add_argument("--producer-version", default="1")
+        parser.add_argument("--dataset", help="JSON file containing dataset identity and provenance metadata")
+        parser.add_argument("--source", action="append", help="relative file to preserve as a recoverable source; repeat as needed")
+        parser.add_argument("--context", action="append", help="relative context data file; repeat as needed")
+        if name == "pack":
+            parser.add_argument("-o", "--output", required=True, help="new portable archive directory outside the input")
+        else:
+            parser.add_argument("-t", "--thread", help="exact thread UUID or ext:session reference; defaults only to FINALECHAT_THREAD")
+            parser.add_argument("--key", default="session", help="stable artifact key within this thread")
+            parser.add_argument("--title", default="Session explorer")
+            parser.add_argument("--append-only-sources", action="store_true", help="require every published source file to remain a byte prefix of the next capture")
+            parser.add_argument("--recreate", action="store_true", help="explicitly create a new record after remote deletion")
+            parser.add_argument("--json", action="store_true", help="print durable artifact, revision and thread identifiers as JSON")
+        parser.set_defaults(func=cmd_website)
     for name in ("enable", "disable", "track", "export", "publish"):
         parser = commands.add_parser(name)
         provider_project(parser)
