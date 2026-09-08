@@ -91,7 +91,7 @@
     });
   }
   window.finale = Object.freeze({ version: 1, ready, get connected() { return connected; }, on, manifest: getManifest, read, text, lines, chunks, openLocalFiles,
-    settings: Object.freeze({ read: () => rpc("settings.read"), propose: (proposal) => rpc("settings.propose", proposal), onResult: (fn) => on("settings.result", fn) }),
+    settings: Object.freeze({ read: () => rpc("settings.read"), propose: (proposal) => rpc("settings.propose", proposal), clear: () => rpc("settings.propose", null), onResult: (fn) => on("settings.result", fn) }),
     reveal: (anchor) => rpc("thread.reveal", anchor),
   });
 })();

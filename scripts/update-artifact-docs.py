@@ -126,7 +126,10 @@ uses explicit set/unset edits. The adapter revalidates against fresh native stat
 Keep credentials out of snapshots, proposals and results.
 
 Settings pages call `finale.settings.read()` and `finale.settings.propose(p)` to
-stage a proposal; the trusted FinaleChat Save/action controls submit it. Saved
+stage a proposal; the trusted FinaleChat Save/action controls submit it. Call
+`finale.settings.clear()` when new edits invalidate a staged proposal; clearing
+does not submit a command. Match `onResult` outcomes to their proposals and
+preserve newer drafts when results arrive late. Saved
 historical surfaces remain read only until the user opens current settings.
 Drafts do not execute. Explicit send-when-connected applies only to stable
 settings edits with a deadline. Durable commands have fenced renewable leases,

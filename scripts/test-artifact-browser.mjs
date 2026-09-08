@@ -120,6 +120,10 @@ try {
   await child.evaluate(async () => { const view = await finale.settings.read(); window.proposal = { operation: "settings.apply", schema_version: view.resource.descriptor.schema_version, expected_version: view.resource.snapshot.version, generation: "", edits: [{ op: "set", key: "/count", value: 6 }] }; await finale.settings.propose(window.proposal); });
   await save.waitFor();
   assert.equal(commands.length, 1, "iframe staged proposal submitted without human Save");
+  await child.evaluate(() => finale.settings.clear());
+  assert.equal(await save.count(), 0, "clearing iframe draft left a proposal ready to submit");
+  assert.equal(commands.length, 1, "clearing iframe draft submitted a command");
+  await child.evaluate(() => finale.settings.propose(window.proposal));
   await child.evaluate(() => finale.settings.propose({ ...window.proposal, edits: [{ op: "set", key: "/count", value: 100 }] }).catch(() => {}));
   assert.equal(await save.count(), 0, "invalid iframe input left an older proposal ready to submit");
   await child.evaluate(() => finale.settings.propose(window.proposal));

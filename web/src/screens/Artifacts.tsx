@@ -72,7 +72,7 @@ export function ArtifactScreen({ id, thread, selectedRevision, surface }: { id: 
     loadedFrame.current = frame.current;
     bridge.current = connectArtifactFrame(frame.current, id, revision, settings && editing ? {
       "settings.read": () => { const s = currentState.current; if (!s.editing || !s.view) throw new Error("Current settings are not ready."); return { ...s.view, editable: s.view.connector.state === "active" && !!s.lease && Date.parse(s.lease.expires_at) > Date.now() && s.lease.generation === s.view.resource.generation }; },
-      "settings.propose": (raw) => { const s = currentState.current; setProposal(null); if (!s.editing || !s.view || s.view.connector.state !== "active" || !s.lease || Date.parse(s.lease.expires_at) <= Date.now() || s.lease.generation !== s.view.resource.generation) throw new Error("This surface is read only."); const p = validateProposal(raw, s.view.resource); setProposal(p); return { staged: true }; },
+      "settings.propose": (raw) => { const s = currentState.current; setProposal(null); if (!s.editing || !s.view || s.view.connector.state !== "active" || !s.lease || Date.parse(s.lease.expires_at) <= Date.now() || s.lease.generation !== s.view.resource.generation) throw new Error("This surface is read only."); if (raw === null) return { staged: false }; const p = validateProposal(raw, s.view.resource); setProposal(p); return { staged: true }; },
     } : {});
   };
   const result = (command: SettingsCommand) => { bridge.current?.notify("settings.result", command); };
