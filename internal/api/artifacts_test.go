@@ -26,6 +26,9 @@ func artifactFixture(t *testing.T) (string, artifact.Manifest, map[string][]byte
 	out := a.must(200, "PUT", "/api/v1/threads/ext:artifact-"+uuid.NewString()+"/artifacts/session", map[string]any{"title": "Session archive"})
 	base := "/api/v1/artifacts/" + str(sub(out, "artifact"), "id")
 	files := map[string][]byte{"index.html": []byte("<!doctype html><script>document.title='archive'</script><p>Viewer</p>"), "settings/index.html": []byte("<!doctype html><p>Settings</p>"), "sessions/0001.jsonl": []byte("{\"seq\":1,\"text\":\"猫\"}\n{\"seq\":2}\n"), "empty.jsonl": {}}
+	// Chunks deduplicate across this owner's artifacts. Give each fixture a
+	// fresh chunk so missing-upload checks do not depend on test order.
+	files["index.html"] = append(files["index.html"], []byte("<!--"+uuid.NewString()+"-->")...)
 	m := artifact.Manifest{Format: artifact.Format, Producer: artifact.Producer{Name: "test", Version: "1"}, Entrypoint: "index.html", SettingsEntrypoint: "settings/index.html", CapturedAt: time.Now().UTC(), Dataset: map[string]any{"format": "test.jsonl/v1", "session_id": "sample"}, Files: []artifact.File{}}
 	for _, p := range []string{"index.html", "settings/index.html", "sessions/0001.jsonl", "empty.jsonl"} {
 		b := files[p]

@@ -67,7 +67,32 @@ func (s *Server) revisionFor(r *http.Request) (*store.Artifact, *store.ArtifactR
 		}
 	}
 	rev, err := s.store.GetArtifactRevision(r.Context(), a.UserID, a.ID, id)
-	return a, rev, err
+	if err != nil {
+		return a, nil, err
+	}
+	if value := r.URL.Query().Get("viewer"); value != "" {
+		if r.URL.Query().Get("surface") == "settings" {
+			return a, nil, errValidation("viewer replacement cannot open a settings surface")
+		}
+		viewerID, err := parseUUID(value)
+		if err != nil {
+			return a, nil, err
+		}
+		viewer, err := s.store.GetArtifactRevision(r.Context(), a.UserID, a.ID, viewerID)
+		if err != nil {
+			return a, nil, err
+		}
+		manifest, err := artifact.Reinterpret(rev.Manifest, viewer.Manifest, rev.ID.String(), viewer.ID.String())
+		if err != nil {
+			return a, nil, errValidation("%v", err)
+		}
+		combined := *rev
+		combined.Manifest = manifest
+		raw, _ := json.Marshal(manifest)
+		combined.ManifestSHA256 = artifact.Digest(raw)
+		rev = &combined
+	}
+	return a, rev, nil
 }
 
 func (s *Server) artifactEvent(ctx context.Context, a *store.Artifact, typ string) {

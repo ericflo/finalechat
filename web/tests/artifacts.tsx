@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { GenericSettingsForm, SettingsControls } from "../src/components/IntegrationSettings";
 import { ArtifactScreen } from "../src/screens/Artifacts";
 import { type ResourceView, type SettingsProposal } from "../src/lib/artifacts";
+import { useRoute } from "../src/lib/router";
 
 const fixture: ResourceView = {
   online: true,
@@ -29,4 +30,10 @@ function Controls() {
   return <><GenericSettingsForm resource={view.resource} proposal={proposal} onProposal={setProposal} /><SettingsControls view={view} proposal={proposal} onProposal={setProposal} /></>;
 }
 
-createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("artifact") ? <ArtifactScreen id="artifact" thread="thread" selectedRevision={null} surface="settings" /> : <Controls />);
+const initial = new URLSearchParams(location.search);
+function ArtifactFixture() {
+  const route = useRoute();
+  const surface = route.search.get("surface") || (route.path === "/tests/artifacts.html" ? "settings" : null);
+  return <ArtifactScreen id="artifact" thread="thread" selectedRevision={route.search.get("revision")} selectedViewer={route.search.get("viewer")} surface={surface} />;
+}
+createRoot(document.getElementById("root")!).render(initial.has("artifact") ? <ArtifactFixture /> : <Controls />);

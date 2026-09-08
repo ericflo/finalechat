@@ -1028,6 +1028,22 @@ one iframe document. Files are scoped to its mounted artifact/revision. There
 is no generic HTTP proxy, credential access or iframe-triggered command queue.
 Downloads are inert; preview documents get their own restrictive response CSP.
 
+The trusted container pins a revision until the user enables Follow latest.
+Following preserves presentation state and stops when the viewer files or
+dataset identity change. `finale.viewState.read()` and `.write(value)` share up
+to 16 KiB of JSON with the current container, scoped to this artifact. This
+ephemeral state survives iframe replacement while the container stays open;
+it is not an account setting or a durable archive edit. Viewers should validate
+their own state version/session identity and restore filters, scroll and event
+position. The shipped viewers use it automatically.
+
+To reinterpret fixed data, select a viewer from another saved revision of the
+same artifact. The optional `viewer=REVISION_ID` query works on the manifest,
+file, preview and ZIP download routes. Dataset format/schema must agree and the
+combined layout must validate. Only viewer-role files change; the manifest
+records both source and renderer revision IDs and disables settings entrypoints.
+The original data, original downloads and current revision remain unchanged.
+
 Pair control independently from upload. API tokens may request pairing but
 only a signed-in user may approve resource keys, scopes, operations and classes.
 The resulting `fcc_` token cannot use chat, upload, account or browser commands.

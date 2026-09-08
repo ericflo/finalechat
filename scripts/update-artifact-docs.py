@@ -64,6 +64,9 @@ op["parameters"] += [{"name":x,"in":"query","schema":{"type":"integer","minimum"
 op["responses"]["200"]["content"]={"application/octet-stream":{"schema":{"type":"string","format":"binary"}}}
 op=endpoint("GET","/artifacts/{id}/revisions/{revision}/preview","Load a sandboxed website entrypoint",security="browser",description="Optional surface=settings selects settings_entrypoint. This is a separate opaque-origin document protected by response CSP and iframe sandbox=allow-scripts. Scripts have no general API/fetch bridge.");op["parameters"].append({"name":"surface","in":"query","schema":{"enum":["settings"]}});op["responses"]["200"]["content"]={"text/html":{"schema":string}}
 op=endpoint("GET","/artifacts/{id}/revisions/{revision}/download","Download the portable ZIP archive",description="Contains manifest.json and every exact file under portable paths.");op["responses"]["200"]["content"]={"application/zip":{"schema":{"type":"string","format":"binary"}}}
+for suffix in ["", "/files/{file}", "/preview", "/download"]:
+    op=doc["paths"]["/artifacts/{id}/revisions/{revision}"+suffix]["get"]
+    op["parameters"].append({"name":"viewer","in":"query","schema":uuid,"description":"Explicit renderer revision from the same artifact. Requires equal declared dataset format/schema. Replaces only viewer-role files; every source/context/asset/derived file remains from the selected data revision. Does not commit a revision or change current. Incompatible file layouts return 422. Composed manifests record both revision IDs and have no settings entrypoint; incompatible with surface=settings. Omit to read the original archive."})
 
 endpoint("POST","/connectors","Request pairing and receive a scoped credential",record({"name":string,"provider":string,"requested_grants":array(ref("SettingsGrant"))},["name","provider","requested_grants"]),status="201",description="Pending pairing expires in 15 minutes. Returns connector, one-time secret and approval_url. An API token cannot approve its own request.")
 endpoint("GET","/connectors","List paired and pending installations",security="browser")
@@ -116,6 +119,22 @@ after the host connects or a local archive directory is chosen. The SDK exposes
 one iframe document. Files are scoped to its mounted artifact/revision. There
 is no generic HTTP proxy, credential access or iframe-triggered command queue.
 Downloads are inert; preview documents get their own restrictive response CSP.
+
+The trusted container pins a revision until the user enables Follow latest.
+Following preserves presentation state and stops when the viewer files or
+dataset identity change. `finale.viewState.read()` and `.write(value)` share up
+to 16 KiB of JSON with the current container, scoped to this artifact. This
+ephemeral state survives iframe replacement while the container stays open;
+it is not an account setting or a durable archive edit. Viewers should validate
+their own state version/session identity and restore filters, scroll and event
+position. The shipped viewers use it automatically.
+
+To reinterpret fixed data, select a viewer from another saved revision of the
+same artifact. The optional `viewer=REVISION_ID` query works on the manifest,
+file, preview and ZIP download routes. Dataset format/schema must agree and the
+combined layout must validate. Only viewer-role files change; the manifest
+records both source and renderer revision IDs and disables settings entrypoints.
+The original data, original downloads and current revision remain unchanged.
 
 Pair control independently from upload. API tokens may request pairing but
 only a signed-in user may approve resource keys, scopes, operations and classes.

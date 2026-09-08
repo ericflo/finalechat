@@ -4271,6 +4271,15 @@
               "type": "string"
             },
             "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "viewer",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Explicit renderer revision from the same artifact. Requires equal declared dataset format/schema. Replaces only viewer-role files; every source/context/asset/derived file remains from the selected data revision. Does not commit a revision or change current. Incompatible file layouts return 422. Composed manifests record both revision IDs and have no settings entrypoint; incompatible with surface=settings. Omit to read the original archive."
           }
         ]
       }
@@ -4361,6 +4370,15 @@
               "type": "integer",
               "minimum": 0
             }
+          },
+          {
+            "name": "viewer",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Explicit renderer revision from the same artifact. Requires equal declared dataset format/schema. Replaces only viewer-role files; every source/context/asset/derived file remains from the selected data revision. Does not commit a revision or change current. Incompatible file layouts return 422. Composed manifests record both revision IDs and have no settings entrypoint; incompatible with surface=settings. Omit to read the original archive."
           }
         ]
       }
@@ -4431,6 +4449,15 @@
                 "settings"
               ]
             }
+          },
+          {
+            "name": "viewer",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Explicit renderer revision from the same artifact. Requires equal declared dataset format/schema. Replaces only viewer-role files; every source/context/asset/derived file remains from the selected data revision. Does not commit a revision or change current. Incompatible file layouts return 422. Composed manifests record both revision IDs and have no settings entrypoint; incompatible with surface=settings. Omit to read the original archive."
           }
         ]
       }
@@ -4496,6 +4523,15 @@
               "type": "string"
             },
             "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "viewer",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Explicit renderer revision from the same artifact. Requires equal declared dataset format/schema. Replaces only viewer-role files; every source/context/asset/derived file remains from the selected data revision. Does not commit a revision or change current. Incompatible file layouts return 422. Composed manifests record both revision IDs and have no settings entrypoint; incompatible with surface=settings. Omit to read the original archive."
           }
         ]
       }

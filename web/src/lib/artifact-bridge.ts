@@ -4,7 +4,7 @@ type Handler = (params: unknown) => unknown | Promise<unknown>;
 
 /** The parent creates a fresh channel for one iframe document, so a page
  * cannot acquire a bridge merely by sending messages with origin "null". */
-export function connectArtifactFrame(frame: HTMLIFrameElement, artifactID: string, revision: ArtifactRevision, handlers: Record<string, Handler> = {}) {
+export function connectArtifactFrame(frame: HTMLIFrameElement, artifactID: string, revision: ArtifactRevision, handlers: Record<string, Handler> = {}, viewer?: string | null) {
   const target = frame.contentWindow;
   if (!target) throw new Error("Viewer is unavailable.");
   const channel = new MessageChannel();
@@ -22,7 +22,8 @@ export function connectArtifactFrame(frame: HTMLIFrameElement, artifactID: strin
       const offset = p.offset === undefined ? 0 : p.offset;
       const length = p.length === undefined ? file.size : p.length;
       if (typeof offset !== "number" || typeof length !== "number" || !Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || length > 1048576 || offset + length > file.size) throw new Error("Read up to 1 MiB at a time within the file.");
-      const res = await fetch(`${fileURL(artifactID, revision.id, file.path)}?offset=${offset}&length=${length}`, { credentials: "same-origin", signal: abort.signal, cache: "no-store" });
+      const source = fileURL(artifactID, revision.id, file.path, viewer);
+      const res = await fetch(`${source}${viewer ? "&" : "?"}offset=${offset}&length=${length}`, { credentials: "same-origin", signal: abort.signal, cache: "no-store" });
       if (!res.ok) throw new Error(`Could not read the archived file (${res.status}).`);
       const bytes = await res.arrayBuffer();
       if (bytes.byteLength !== length) throw new Error("Incomplete archived file.");

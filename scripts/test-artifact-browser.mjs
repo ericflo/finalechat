@@ -16,9 +16,10 @@ const { chromium } = await import(path.isAbsolute(moduleName) ? pathToFileURL(mo
 const sdk = await readFile(path.join(root, "sdk/finale-artifact.js"), "utf8");
 const digest = (raw) => createHash("sha256").update(raw).digest("hex");
 const content = "{\"event\":\"fixture\"}\n";
-const manifest = { format: "finalechat.website/v1", producer: { name: "fixture", version: "1" }, entrypoint: "index.html", settings_entrypoint: "index.html", dataset: { settings_version: "v1" }, captured_at: "2026-09-07T00:00:00Z", files: [{ path: "session.jsonl", role: "source", content_type: "application/x-ndjson", size: Buffer.byteLength(content), sha256: digest(content), chunks: [{ sha256: digest(content), size: Buffer.byteLength(content) }] }] };
+const manifest = { format: "finalechat.website/v1", producer: { name: "fixture", version: "1" }, entrypoint: "index.html", settings_entrypoint: "index.html", dataset: { format: "fixture/v1", session_id: "fixture-session", settings_version: "v1" }, captured_at: "2026-09-07T00:00:00Z", files: [{ path: "session.jsonl", role: "source", content_type: "application/x-ndjson", size: Buffer.byteLength(content), sha256: digest(content), chunks: [{ sha256: digest(content), size: Buffer.byteLength(content) }] }] };
 const revision = { id: "revision", artifact_id: "artifact", manifest, manifest_sha256: "fixture", created_at: manifest.captured_at };
 const website = `<meta charset="utf-8"><button onclick="finale.openLocalFiles().catch(e=>document.body.dataset.error=e.message)">Open archive</button><script>${sdk}</script><script>window.ready=finale.ready;</script>`;
+const nativeWebsite = (await readFile(path.join(root, "cli/assets/viewer.html"), "utf8")).replace("/* FINALE_ARTIFACT_SDK */", () => sdk);
 const temporary = await mkdtemp(path.join(tmpdir(), "finalechat-browser-fixtures-"));
 const server = await createServer({ root: path.join(root, "web"), configFile: false, plugins: [react()], define: { __APP_VERSION__: '"browser-test"' }, server: { host: "127.0.0.1", port: 0, fs: { allow: [root] } }, logLevel: "error" });
 let browser;
@@ -33,6 +34,16 @@ try {
   page.on("pageerror", (e) => errors.push(e.message));
   let commandResponse;
   let currentRevision = "revision";
+  let native = false;
+  const nativeContent = id => Array.from({ length: id === "revision-two" ? 251 : 250 }, (_, i) => JSON.stringify({ type: "response_item", timestamp: "2026-09-07T00:00:00Z", payload: { type: "message", role: "assistant", content: [{ text: `Native record ${i + 1}` }] } })).join("\n") + "\n";
+  const savedRevision = (id, viewer) => {
+    const m = structuredClone(manifest);
+    if (native) { const raw = nativeContent(id); m.dataset.format = "codex.rollout/v1"; m.dataset.files = ["session.jsonl"]; m.files[0] = { ...m.files[0], size: Buffer.byteLength(raw), sha256: digest(raw), chunks: [{ sha256: digest(raw), size: Buffer.byteLength(raw) }] }; }
+    const renderer = viewer || id;
+    m.files.push({ path: "index.html", role: "viewer", content_type: "text/html", size: 1, sha256: (renderer === "revision-three" ? "b" : "a").repeat(64), chunks: [] });
+    if (viewer) { delete m.settings_entrypoint; m.viewer = { source_revision_id: id, renderer_revision_id: viewer }; }
+    return { ...revision, id, manifest: m };
+  };
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
     if (url.origin !== base) { outbound.push(url.origin); return route.abort(); }
@@ -47,12 +58,13 @@ try {
       await new Promise((resolve) => { commandResponse = resolve; });
       return json({ created: true, command: { id: "command", resource_id: "resource", status: "succeeded", proposal: body.proposal, result: { effects: [{ effective_when: "new_or_resumed_session", runtime_applied: false }], undo: body.proposal.operation === "settings.apply" ? { format: "finalechat.settings-undo/v1", command_id: "command", restore_sha256: "a".repeat(64), operation: "settings.apply", edits: [{ op: "set", key: "/count", value: 2 }] } : undefined } } });
     }
-    if (p === "/api/v1/artifacts/artifact") return json({ artifact: { id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }, revision: { ...revision, id: currentRevision } });
+    if (p === "/api/v1/artifacts/artifact") return json({ artifact: { id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }, revision: savedRevision(currentRevision) });
     if (p.endsWith("/settings-binding")) return json({ binding: { artifact_id: "artifact", resource_id: "resource", revision_id: currentRevision, generation: "" } });
     if (p.endsWith("/settings-surface")) return json({ lease: { id: "surface-lease", resource_id: "resource", generation: "", expires_at: "2030-01-01T00:00:00Z" } });
-    if (p.endsWith("/revisions")) return json({ revisions: [] });
-    if (p.endsWith("/preview")) return route.fulfill({ contentType: "text/html", body: website, headers: { "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'" } });
-    if (p.endsWith("/files/session.jsonl")) { reads.push(p); return route.fulfill({ body: content }); }
+    if (p.endsWith("/revisions")) return json({ revisions: ["revision-two", "revision"].map(id => ({ id, created_at: manifest.captured_at, captured_at: manifest.captured_at, producer: manifest.producer, dataset: manifest.dataset })) });
+    if (/\/revisions\/[^/]+$/.test(p)) return json({ revision: savedRevision(p.split("/").pop(), url.searchParams.get("viewer")) });
+    if (p.endsWith("/preview")) return route.fulfill({ contentType: "text/html", body: native ? nativeWebsite : website, headers: { "Content-Security-Policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'" } });
+    if (p.endsWith("/files/session.jsonl")) { reads.push(p + url.search); return route.fulfill({ body: native ? nativeContent(p.split("/").at(-3)) : content }); }
     throw new Error(`Unexpected fixture API request: ${p}`);
   });
 
@@ -137,6 +149,82 @@ try {
   await child.evaluate(() => { location.href = "about:blank"; });
   await page.getByText("The viewer navigated away. Reopen this saved revision to reconnect it.", { exact: true }).waitFor();
   console.log("PASS opaque sandbox, historical reads, scoped files, staged-only iframe, invalid proposal clearing, publication during editing, navigation disconnect");
+
+  currentRevision = "revision";
+  await page.goto(`${base}/tests/artifacts.html?artifact=1&surface=explorer`);
+  const explorer = page.locator('iframe[title="Session explorer"]');
+  await explorer.waitFor();
+  child = page.frames().find(f => f.parentFrame());
+  await child.evaluate(() => window.ready);
+  const inspection = { view: "events", search: "needle", scroll: 1500, page: 2, until: 37 };
+  await child.evaluate(value => finale.viewState.write(value), inspection);
+  assert.deepEqual(await child.evaluate(() => finale.viewState.read()), inspection);
+  assert.match(await child.evaluate(() => finale.viewState.write("猫".repeat(6000)).then(() => "accepted", e => e.message)), /16 KiB/);
+  assert.deepEqual(await child.evaluate(() => finale.viewState.read()), inspection, "oversized state replaced the saved inspection");
+  const follow = page.getByRole("checkbox", { name: "Follow latest", exact: true });
+  await follow.check();
+  assert.equal(await child.evaluate(() => finale.text("session.jsonl")), content, "following the current revision disconnected the viewer");
+  currentRevision = "revision-two";
+  await page.clock.fastForward(16000);
+  await page.waitForFunction(() => document.querySelector('iframe[title="Session explorer"]')?.getAttribute("src").includes("revision-two/preview"));
+  child = page.frames().find(f => f.parentFrame());
+  await child.evaluate(() => window.ready);
+  assert.deepEqual(await child.evaluate(() => finale.viewState.read()), inspection, "following a new revision discarded inspection state");
+  assert.equal(await follow.isChecked(), true);
+  await page.getByLabel("Viewer for this dataset").selectOption("revision");
+  await page.waitForFunction(() => document.querySelector('iframe[title="Session explorer"]')?.getAttribute("src").includes("revision-two/preview?viewer=revision"));
+  child = page.frames().find(f => f.parentFrame());
+  await child.evaluate(() => window.ready);
+  assert.deepEqual(await child.evaluate(() => finale.viewState.read()), inspection);
+  assert.equal(await follow.isDisabled(), true);
+  assert.deepEqual(await child.evaluate(() => finale.manifest().then(m => m.viewer)), { source_revision_id: "revision-two", renderer_revision_id: "revision" });
+  assert.match(await child.evaluate(() => finale.settings.read().then(() => "allowed", e => e.message)), /permission/);
+  assert.equal(await child.evaluate(() => finale.text("session.jsonl")), content);
+  assert.ok(reads.at(-1).includes("viewer=revision"), "composed viewer reads lost their selected renderer");
+  assert.match(await page.getByRole("link", { name: "Download with selected viewer" }).getAttribute("href"), /revision-two\/download\?viewer=revision$/);
+  assert.match(await page.getByRole("link", { name: "Download original archive" }).getAttribute("href"), /revision-two\/download$/);
+  await page.getByLabel("Viewer for this dataset").selectOption("");
+  await page.waitForFunction(() => !new URL(location.href).searchParams.has("viewer") && document.querySelector('iframe[title="Session explorer"]')?.getAttribute("src") === "/api/v1/artifacts/artifact/revisions/revision-two/preview");
+  let followReads = 0;
+  const unpinnedLoaded = page.waitForResponse(response => new URL(response.url()).pathname === "/api/v1/artifacts/artifact" && ++followReads === 2);
+  await follow.check();
+  await page.waitForFunction(() => !new URL(location.href).searchParams.has("revision"));
+  await unpinnedLoaded;
+  await explorer.waitFor();
+  child = page.frames().find(f => f.parentFrame());
+  await child.evaluate(() => window.ready);
+  currentRevision = "revision-three";
+  await page.clock.fastForward(16000);
+  await page.getByText("The newer archive uses a different viewer or dataset. Open it explicitly to switch.", { exact: true }).waitFor();
+  assert.equal(await follow.isChecked(), false);
+  assert.match(await explorer.getAttribute("src"), /revision-two\/preview$/);
+  console.log("PASS compatible follow, bounded inspection state, explicit viewer replacement, original downloads, changed-viewer pause");
+
+  native = true; currentRevision = "revision";
+  await page.goto(`${base}/tests/artifacts.html?artifact=1&surface=explorer`);
+  frame = page.frameLocator('iframe[title="Session explorer"]');
+  await frame.locator('#status').filter({ hasText: '250 native events' }).waitFor();
+  await frame.getByRole('button', { name: 'Events', exact: true }).click();
+  await frame.getByLabel('Search events', { exact: true }).fill('Native record');
+  await frame.getByRole('slider', { name: 'Captured events' }).fill('123');
+  await frame.getByRole('button', { name: 'Next', exact: true }).click();
+  await page.clock.fastForward(250);
+  child = page.frames().find(f => f.parentFrame());
+  let nativeState = await child.evaluate(() => finale.viewState.read());
+  assert.equal(nativeState.page, 1); assert.equal(nativeState.until, 123);
+  await follow.check();
+  currentRevision = 'revision-two';
+  await page.clock.fastForward(16000);
+  await frame.locator('#status').filter({ hasText: '251 native events' }).waitFor();
+  await frame.getByRole('button', { name: 'Events', exact: true, pressed: true }).waitFor();
+  assert.equal(await frame.getByLabel('Search events', { exact: true }).inputValue(), 'Native record');
+  assert.equal(await frame.getByRole('slider', { name: 'Captured events' }).inputValue(), '123');
+  assert.equal(await frame.locator('#page').innerText(), '123 matching records · 2 / 2');
+  await frame.getByRole('button', { name: 'Files', exact: true }).click();
+  assert.equal(await frame.getByRole('button', { name: 'Download file', exact: true }).count(), 0, 'sandbox offered a download that the browser blocks');
+  assert.equal(await frame.locator('#error').innerText(), '');
+  console.log('PASS shipped native viewer keeps search, timeline and page through follow updates; downloads use trusted host controls');
+  native = false;
 
   await writeFile(path.join(temporary, "manifest.json"), JSON.stringify(manifest));
   await writeFile(path.join(temporary, "session.jsonl"), content);

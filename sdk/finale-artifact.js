@@ -3,7 +3,7 @@
  * with finale.openLocalFiles(). No web server, CDN or network is required. */
 (() => {
   "use strict";
-  let port, nonce, seq = 0, connected = false, manifest, localFiles = new Map(), verified = new Set();
+  let port, nonce, seq = 0, connected = false, manifest, connectedManifest, localFiles = new Map(), verified = new Set(), localViewState = null;
   const pending = new Map(), listeners = new Map();
   let readyResolve;
   const ready = new Promise((resolve) => { readyResolve = resolve; });
@@ -31,7 +31,9 @@
     });
   }
   function on(name, fn) { if (!listeners.has(name)) listeners.set(name, new Set()); listeners.get(name).add(fn); return () => listeners.get(name).delete(fn); }
-  async function getManifest() { if (connected) return rpc("artifact.manifest"); if (manifest) return manifest; throw new Error("Choose the extracted archive directory first."); }
+  // The channel belongs to one immutable revision. Cache its manifest so
+  // streaming files does not spend a bridge request on every chunk's metadata.
+  async function getManifest() { if (connected) { connectedManifest ||= rpc("artifact.manifest").catch(error => { connectedManifest = undefined; throw error; }); return structuredClone(await connectedManifest); } if (manifest) return manifest; throw new Error("Choose the extracted archive directory first."); }
   async function read(path, options = {}) {
     const m = await getManifest(), file = m.files.find((f) => f.path === path);
     if (!file) throw new Error("File is not in this archive.");
@@ -92,6 +94,7 @@
   }
   window.finale = Object.freeze({ version: 1, ready, get connected() { return connected; }, on, manifest: getManifest, read, text, lines, chunks, openLocalFiles,
     settings: Object.freeze({ read: () => rpc("settings.read"), propose: (proposal) => rpc("settings.propose", proposal), clear: () => rpc("settings.propose", null), onResult: (fn) => on("settings.result", fn) }),
+    viewState: Object.freeze({ read: () => connected ? rpc("artifact.view-state.read") : Promise.resolve(localViewState), write: (value) => { if (connected) return rpc("artifact.view-state.write", value); localViewState = value; return Promise.resolve(); } }),
     reveal: (anchor) => rpc("thread.reveal", anchor),
   });
 })();

@@ -1,7 +1,7 @@
 import { request } from "./api";
 
 export interface ArtifactFile { path: string; role: "viewer" | "source" | "asset" | "derived" | "context"; content_type: string; size: number; sha256: string; chunks: { sha256: string; size: number }[] }
-export interface ArtifactManifest { format: string; producer: { name: string; version: string }; entrypoint: string; settings_entrypoint?: string; captured_at: string; dataset: Record<string, unknown>; files: ArtifactFile[] }
+export interface ArtifactManifest { format: string; producer: { name: string; version: string }; entrypoint: string; settings_entrypoint?: string; captured_at: string; dataset: Record<string, unknown>; viewer?: Record<string, unknown>; files: ArtifactFile[] }
 export interface Artifact { id: string; thread_id: string; key: string; title: string; current_revision_id: string | null; updated_at: string; created_at: string }
 export interface ArtifactRevision { id: string; artifact_id: string; manifest: ArtifactManifest; manifest_sha256: string; created_at: string }
 export interface RevisionInfo { id: string; created_at: string; captured_at: string; producer: ArtifactManifest["producer"]; dataset: Record<string, unknown> }
@@ -23,7 +23,7 @@ const b = "/api/v1";
 export const artifactAPI = {
   list: (thread: string) => request<{ artifacts: Artifact[] }>("GET", `${b}/threads/${thread}/artifacts`),
   get: (id: string) => request<{ artifact: Artifact; revision?: ArtifactRevision }>("GET", `${b}/artifacts/${id}`),
-  revision: (id: string, revision: string) => request<{ revision: ArtifactRevision }>("GET", `${b}/artifacts/${id}/revisions/${revision}`),
+  revision: (id: string, revision: string, viewer?: string | null) => request<{ revision: ArtifactRevision }>("GET", `${b}/artifacts/${id}/revisions/${revision}${viewer ? `?viewer=${encodeURIComponent(viewer)}` : ""}`),
   revisions: (id: string, before?: string) => request<{ revisions: RevisionInfo[]; next_before?: string }>("GET", `${b}/artifacts/${id}/revisions${before ? `?before=${encodeURIComponent(before)}` : ""}`),
   binding: (id: string) => request<{ binding: SettingsBinding }>("GET", `${b}/artifacts/${id}/settings-binding`),
   openSettings: (id: string, revision: string) => request<{ lease: SettingsSurfaceLease }>("POST", `${b}/artifacts/${id}/settings-surface`, { revision_id: revision }),
@@ -46,7 +46,7 @@ export const controlAPI = {
 
 export const effectLabel: Record<string, string> = { immediate: "Immediately", next_turn: "Next turn", next_task: "Next task", new_or_resumed_session: "New or resumed sessions", restart_required: "After restart", unknown: "Runtime effect unconfirmed" };
 export const scopeLabel: Record<string, string> = { project: "Project defaults", project_local: "Local project defaults", user: "User defaults", profile: "Profile", session: "This runtime session" };
-export function fileURL(id: string, revision: string, path: string) { return `${b}/artifacts/${id}/revisions/${revision}/files/${path.split("/").map(encodeURIComponent).join("/")}`; }
+export function fileURL(id: string, revision: string, path: string, viewer?: string | null) { return `${b}/artifacts/${id}/revisions/${revision}/files/${path.split("/").map(encodeURIComponent).join("/")}${viewer ? `?viewer=${encodeURIComponent(viewer)}` : ""}`; }
 
 export function validateShape(shape: Shape, value: unknown): string | null {
   if (shape.enum && !shape.enum.some((x) => JSON.stringify(x) === JSON.stringify(value))) return "Choose one of the available values.";
