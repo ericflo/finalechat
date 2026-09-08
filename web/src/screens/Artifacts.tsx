@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { ConfirmSheet, Link } from "../components/Common";
+import { createPortal } from "react-dom";
+import { ConfirmSheet, Link, Sheet } from "../components/Common";
 import { GenericSettingsForm, SettingsControls, useSettingsResource } from "../components/IntegrationSettings";
-import { IconDownload, IconMore } from "../components/Icons";
+import { IconClock, IconDownload, IconMore } from "../components/Icons";
 import { TopBar } from "../components/TopBar";
 import { APIError } from "../lib/api";
-import { artifactAPI, controlAPI, fileURL, validateProposal, type Artifact, type ArtifactRevision, type RevisionInfo, type SessionSettingsLink, type SettingsBinding, type SettingsCommand, type SettingsProposal, type SettingsSurfaceLease } from "../lib/artifacts";
+import { artifactAPI, fileURL, validateProposal, type Artifact, type ArtifactRevision, type RevisionInfo, type SettingsBinding, type SettingsCommand, type SettingsProposal, type SettingsSurfaceLease } from "../lib/artifacts";
 import { connectArtifactFrame } from "../lib/artifact-bridge";
 import { navigate } from "../lib/router";
 import { fullDateTime } from "../lib/time";
@@ -12,19 +13,19 @@ import { validateAnchor } from "../lib/source-anchor";
 
 export function ThreadArtifacts({ thread, onAvailable }: { thread: string; onAvailable?: (available: boolean) => void }) {
   const [items, setItems] = useState<Artifact[]>([]);
-  const [resources, setResources] = useState<SessionSettingsLink[]>([]);
+  const [choosing, setChoosing] = useState(false);
   useEffect(() => {
     let alive = true;
-    setItems([]); setResources([]); onAvailable?.(false);
+    setItems([]); setChoosing(false); onAvailable?.(false);
     const refresh = () => {
-      void artifactAPI.list(thread).then((r) => { if (alive) { setItems(r.artifacts.filter(a => a.key !== "agent-settings")); onAvailable?.(r.artifacts.some(a => a.key !== "agent-settings" && !!a.current_revision_id)); } }).catch(() => {});
-      void controlAPI.forThread(thread).then((r) => { if (alive) setResources(r.resources); }).catch(() => { if (alive) setResources([]); });
+      void artifactAPI.list(thread).then((r) => { if (alive) { const saved = r.artifacts.filter(a => a.key !== "agent-settings" && !!a.current_revision_id); setItems(saved); onAvailable?.(saved.length > 0); } }).catch(() => {});
     };
     refresh(); const timer = window.setInterval(refresh, 15000);
     return () => { alive = false; window.clearInterval(timer); };
   }, [thread, onAvailable]);
-  if (!items.length && !resources.length) return null;
-  return <div className="thread-artifacts" aria-label="Session artifacts and settings">{items.map((a) => <Link key={a.id} className="btn small" href={`/t/${thread}/artifacts/${a.id}`}>{a.title}{!a.current_revision_id ? " · Uploading…" : ""}</Link>)}{resources.map((r) => <Link key={r.id} className="btn small" href={`/t/${thread}?panel=settings`} title={r.label}>Live session settings{r.available ? "" : " · Unavailable"}</Link>)}</div>;
+  if (!items.length) return null;
+  const open = (a: Artifact) => { setChoosing(false); navigate(`/t/${thread}/artifacts/${a.id}`); };
+  return <><button type="button" className="icon-btn" aria-label="Session explorer" title="Session explorer" onClick={() => items.length === 1 ? open(items[0]!) : setChoosing(true)}><IconClock aria-hidden="true" /></button>{choosing && createPortal(<Sheet label="Session archives" onClose={() => setChoosing(false)}>{items.map(a => <button key={a.id} type="button" className="item" onClick={() => open(a)}><IconClock aria-hidden="true" />{a.title}</button>)}</Sheet>, document.body)}</>;
 }
 
 function compatibleUpdate(a: ArtifactRevision, b: ArtifactRevision) {

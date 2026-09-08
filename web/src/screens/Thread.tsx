@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../components/Attachments";
 import { Avatar, ConfirmSheet, CopyButton, Sheet, sheetsOpen } from "../components/Common";
-import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBranch, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconSend, IconServer, IconTrash } from "../components/Icons";
+import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBranch, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconSend, IconServer, IconSettings, IconTrash } from "../components/Icons";
 import { api } from "../lib/api";
 import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
 import { QuestionCard } from "../components/QuestionCard";
@@ -257,11 +257,11 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
         subtitle={subtitle}
         backTo="/"
         right={
-          <><button type="button" className="btn small thread-settings-trigger" onClick={() => navigate(`/t/${id}?panel=settings`)}>Settings</button><button type="button" className="icon-btn" aria-label="Thread options" onClick={() => setMenu(true)}>
+          <>{thread && <ThreadArtifacts key={id} thread={id} onAvailable={setHasArtifacts} />}<button type="button" className="icon-btn" aria-label="Settings" title="Thread settings" onClick={() => navigate(`/t/${id}?panel=settings`)}><IconSettings aria-hidden="true" /></button><button type="button" className="icon-btn" aria-label="Thread options" onClick={() => setMenu(true)}>
             <IconMore />
           </button></>
         }
-        below={thread ? <><MetaStrip thread={thread} /><ThreadArtifacts thread={id} onAvailable={setHasArtifacts} /></> : null}
+        below={thread ? <MetaStrip thread={thread} /> : null}
       />
       <div ref={listRef} className="messages" onClick={onListClick}>
         {focusedMessage && !items.some(it => it.kind === "message" && it.m.id === focusedMessage.id) && <section aria-label="Selected archived message"><p>Selected message · {fullDateTime(focusedMessage.created_at)}</p><MessageBubble m={focusedMessage} grouped={false} showMeta={true} inspectThread={hasArtifacts ? thread : undefined} onOpen={(items, index) => setViewing({ items, index })} /><button className="btn small" onClick={() => navigate(`/t/${id}`)}>Return to recent conversation</button></section>}

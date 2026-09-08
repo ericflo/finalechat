@@ -3,7 +3,7 @@ import "../src/styles.css";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { GenericSettingsForm, SettingsControls } from "../src/components/IntegrationSettings";
-import { ArtifactScreen, ThreadArtifacts } from "../src/screens/Artifacts";
+import { ArtifactScreen } from "../src/screens/Artifacts";
 import { type ResourceView, type SettingsProposal } from "../src/lib/artifacts";
 import { useRoute } from "../src/lib/router";
 import { ResourceSettingsScreen } from "../src/screens/Connectors";
@@ -63,6 +63,7 @@ function RuntimeFixture() {
   const route = useRoute();
   if (route.path === "/t/thread") return <ThreadScreen id="thread" highlightQuestion={null} settingsOpen={route.search.get("panel") === "settings"} />;
   if (route.path === "/settings/resources/resource") return <ResourceSettingsScreen id="resource" />;
-  return <ThreadArtifacts thread="thread" />;
+  if (route.path.includes("/artifacts/")) return <ArtifactFixture />;
+  return <ThreadScreen id="thread" highlightQuestion={null} />;
 }
 createRoot(document.getElementById("root")!).render(initial.has("thread") ? <ThreadFixture /> : initial.has("runtime") ? <RuntimeFixture /> : initial.has("navigation") ? <NavigationFixture /> : initial.has("artifact") ? <ArtifactFixture /> : <Controls />);

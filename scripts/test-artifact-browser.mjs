@@ -35,6 +35,7 @@ try {
   let commandResponse;
   let currentRevision = "revision";
   let native = false;
+  let extraArchive = true;
   const nativeContent = id => Array.from({ length: id === "revision-two" ? 251 : 250 }, (_, i) => JSON.stringify({ type: "response_item", timestamp: "2026-09-07T00:00:00Z", payload: i === 249 ? { type: "function_call_output", call_id: "mcp-send", output: "Sent to thread 01a08000-0000-7000-8000-000000000000 (fixture); message id 01a08000-0000-7000-8000-000000000123" } : { type: "message", id: `native-${i + 1}`, role: "assistant", content: [{ text: `Native record ${i + 1}` }] } })).join("\n") + "\n";
   const savedRevision = (id, viewer) => {
     const m = structuredClone(manifest);
@@ -54,7 +55,7 @@ try {
     if (p === "/api/v1/threads/thread/settings") return json({ resources: [{id:"resource",label:"Fixture live session",scope:"session",provider:"fixture",available:true}] });
     if (p === "/api/v1/threads/thread/settings-resources") return json({ resources: (await page.evaluate(() => window.fixture.resource.scope)) === "session" ? [{ id: "resource", label: "Fixture live session", generation: "runtime-one", available: true }] : [] });
     if (p.endsWith("/audit")) return json({ audit: [] });
-    if (p === "/api/v1/threads/thread/artifacts") return json({ artifacts: [{ id: "settings-only", key: "agent-settings", thread_id: "thread", title: "Settings", current_revision_id: "settings-revision" }, { id: "other-website", key: "notes", thread_id: "thread", title: "Notes", current_revision_id: "notes-revision" }, { id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }] });
+    if (p === "/api/v1/threads/thread/artifacts") return json({ artifacts: [{ id: "settings-only", key: "agent-settings", thread_id: "thread", title: "Settings", current_revision_id: "settings-revision" }, ...(extraArchive ? [{ id: "other-website", key: "notes", thread_id: "thread", title: "Notes", current_revision_id: "notes-revision" }] : []), { id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }] });
     if (p.startsWith("/api/v1/messages/")) return json({ message: await page.evaluate(() => window.messageFixture) });
     if (p === "/api/v1/threads/thread") return json({ thread: await page.evaluate(() => window.threadFixture) });
     if (p === "/api/v1/threads/thread/messages") return json({ messages: [], has_more: false });
@@ -277,7 +278,33 @@ try {
 
   await writeFile(path.join(temporary, "manifest.json"), JSON.stringify(manifest));
   await page.goto(`${base}/tests/artifacts.html?runtime=1`);
-  await page.getByRole("link", { name: "Live session settings", exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const header = page.locator('.topbar-inner');
+  const sessionIcon = header.getByRole('button', { name: 'Session explorer', exact: true });
+  await sessionIcon.waitFor();
+  assert.equal(await sessionIcon.innerText(), '');
+  const gear = header.getByRole('button', { name: 'Settings', exact: true });
+  assert.equal(await gear.innerText(), '');
+  const row = await header.boundingBox(), icon = await sessionIcon.boundingBox();
+  assert.ok(icon.width <= 40 && icon.y >= row.y && icon.y + icon.height <= row.y + row.height);
+  assert.equal(await page.locator('.thread-artifacts').count(), 0);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await sessionIcon.click();
+  const archives = page.getByRole('dialog', { name: 'Session archives', exact: true });
+  await archives.waitFor();
+  const backdrop = await page.locator('.sheet-backdrop').boundingBox();
+  assert.equal(backdrop.height, 844, 'archive picker was confined to the sticky header');
+  assert.equal(await archives.getByRole('button').count(), 2);
+  await archives.getByRole('button', { name: 'Fixture archive', exact: true }).click();
+  await page.locator('iframe[title="Session explorer"]').waitFor();
+  extraArchive = false;
+  await page.goto(`${base}/tests/artifacts.html?runtime=1`);
+  await sessionIcon.click();
+  await page.locator('iframe[title="Session explorer"]').waitFor();
+  assert.equal(await page.getByRole('dialog', { name: 'Session archives', exact: true }).count(), 0);
+  await page.goto(`${base}/tests/artifacts.html?runtime=1`);
+  await gear.click();
+  console.log('PASS compact phone header, direct archive icon, multiple archive picker and settings gear');
   await page.getByRole("button", {name:"Advanced",exact:true}).click();
   await page.getByLabel("Concurrency", { exact: true }).fill("6");
   await page.getByText("Unsaved changes", {exact:true}).waitFor();
