@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ConfirmSheet, Link } from "../components/Common";
 import { GenericSettingsForm, SettingsControls, useSettingsResource } from "../components/IntegrationSettings";
+import { IconDownload, IconMore } from "../components/Icons";
 import { TopBar } from "../components/TopBar";
 import { APIError } from "../lib/api";
 import { artifactAPI, controlAPI, fileURL, validateProposal, type Artifact, type ArtifactRevision, type RevisionInfo, type SessionSettingsLink, type SettingsBinding, type SettingsCommand, type SettingsProposal, type SettingsSurfaceLease } from "../lib/artifacts";
@@ -46,6 +47,7 @@ export function ArtifactScreen({ id, thread, selectedRevision, selectedViewer = 
   const [archivedSettingsVersion, setArchivedSettingsVersion] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [remove, setRemove] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [follow, setFollow] = useState(false);
   const [viewerNotice, setViewerNotice] = useState("");
   const [chatMessage, setChatMessage] = useState<string | null>(null);
@@ -140,18 +142,19 @@ export function ArtifactScreen({ id, thread, selectedRevision, selectedViewer = 
   };
   const more = async () => { try { const r = await artifactAPI.revisions(id, before); setHistory((h) => [...h, ...r.revisions]); setBefore(r.next_before); } catch (e) { setError(e instanceof Error ? e.message : "Could not load history."); } };
 
-  return <div className="page artifact-page"><TopBar title={artifact?.title || "Saved session"} backTo="/" />
-    <div className="artifact-toolbar">
-      {revision && <><span>Captured {fullDateTime(revision.manifest.captured_at)} · {revision.manifest.producer.name}</span><div className="artifact-actions"><button className={`btn small ${!settings ? "primary" : ""}`} onClick={() => navigate(url(selectedRevision, false))}>Explore session</button>{revision.manifest.settings_entrypoint && <button className={`btn small ${settings ? "primary" : ""}`} onClick={() => navigate(url(selectedRevision, true))}>Settings</button>}<a className="btn small" href={`/api/v1/artifacts/${id}/revisions/${revision.id}/download${viewerQuery}`}>{selectedViewer ? "Download with selected viewer" : "Download archive"}</a>{selectedViewer && <a className="btn small" href={`/api/v1/artifacts/${id}/revisions/${revision.id}/download`}>Download original archive</a>}</div></>}
+  return <div className="page artifact-page"><TopBar title={artifact?.title || "Saved session"} subtitle={revision ? fullDateTime(revision.manifest.captured_at) : undefined} backTo="/" right={<>{revision && <a className="icon-btn" aria-label={selectedViewer ? "Download with selected viewer" : "Download archive"} title="Download archive" href={`/api/v1/artifacts/${id}/revisions/${revision.id}/download${viewerQuery}`}><IconDownload aria-hidden="true" /></a>}{!settings && <button type="button" className="icon-btn" aria-label="Archive options" title="Archive options" aria-expanded={optionsOpen} aria-controls="archive-options" onClick={() => setOptionsOpen(v => !v)}><IconMore aria-hidden="true" /></button>}</>} />
+    <div id="archive-options" className="artifact-toolbar" hidden={!settings && !optionsOpen}>
+      {settings && <button className="btn small" onClick={() => navigate(url(selectedRevision, false))}>Explore session</button>}
+      {selectedViewer && revision && <a className="btn small" href={`/api/v1/artifacts/${id}/revisions/${revision.id}/download`}>Download original archive</a>}
       {revision && !settings && <div className="artifact-actions"><label><input type="checkbox" checked={follow} disabled={!!selectedViewer} onChange={event => void beginFollow(event.target.checked)} /> Follow latest</label>{typeof revision.manifest.dataset.format === "string" && <label>Viewer <select aria-label="Viewer for this dataset" value={selectedViewer || ""} onChange={event => { setFollow(false); navigate(url(revision.id, false, event.target.value || null)); }}><option value="">Original viewer for this data</option>{history.filter(r => r.dataset.format === revision.manifest.dataset.format && JSON.stringify(r.dataset.schema) === JSON.stringify(revision.manifest.dataset.schema)).map(r => <option key={r.id} value={r.id}>{r.producer.name} {r.producer.version} · {fullDateTime(r.captured_at)}</option>)}</select></label>}</div>}
       {selectedViewer && <p className="artifact-notice">This keeps the selected dataset and uses viewer files from another saved revision. Current settings control is available through the original viewer.</p>}
-      {viewerNotice && <p className="artifact-notice">{viewerNotice}</p>}
-      {chatMessage && <p className="artifact-notice"><Link className="btn small" href={`/t/${thread}?m=${encodeURIComponent(chatMessage)}`}>Show matching chat message</Link><button className="btn small" onClick={() => setChatMessage(null)}>Dismiss</button></p>}
       <details><summary>Saved revisions and files</summary><div className="artifact-history">{history.map((r) => <button key={r.id} className="btn small" onClick={() => { setFollow(false); navigate(url(r.id, settings)); }}>{fullDateTime(r.captured_at)}{r.id === artifact?.current_revision_id ? " · Latest" : ""}</button>)}{before && <button className="btn small" onClick={() => void more()}>Earlier revisions</button>}</div>{revision && <div className="artifact-files">{revision.manifest.files.map((f) => <a key={f.path} href={fileURL(id, revision.id, f.path, selectedViewer)}>{f.path} <small>{f.size.toLocaleString()} bytes · {f.role}</small></a>)}</div>}<button className="btn small danger" onClick={() => setRemove(true)}>Delete artifact and history</button></details>
-      {revision && !isCurrent && <div className="artifact-notice">{editing ? "A newer archive is available. This editor remains connected to the same settings resource until its editing session expires." : "You are viewing a historical revision."} <button className="btn small" onClick={() => navigate(url(artifact?.current_revision_id || null, settings))}>Open latest revision</button></div>}
       {settings && !editing && <div className="artifact-notice">This is a saved settings snapshot.{canEdit ? <button className="btn primary" disabled={opening} onClick={() => void beginEdit()}>{opening ? "Opening…" : "Edit current settings"}</button> : " Current control is unavailable for this revision."}</div>}
       {settings && editing && <div className="artifact-actions"><button className="btn small" onClick={() => setGeneric((v) => !v)}>{generic ? "Integration settings page" : "Standard settings form"}</button><button className="btn small" onClick={() => { setEditing(false); setProposal(null); }}>Return to snapshot</button></div>}
     </div>
+    {viewerNotice && <p className="artifact-notice">{viewerNotice}</p>}
+    {chatMessage && <p className="artifact-notice"><Link className="btn small" href={`/t/${thread}?m=${encodeURIComponent(chatMessage)}`}>Show matching chat message</Link><button className="btn small" onClick={() => setChatMessage(null)}>Dismiss</button></p>}
+    {revision && !isCurrent && <div className="artifact-notice">{editing ? "A newer archive is available. This editor remains connected to the same settings resource until its editing session expires." : "You are viewing a historical revision."} <button className="btn small" onClick={() => navigate(url(artifact?.current_revision_id || null, settings))}>Open latest revision</button></div>}
     {(error || settingsError) && <p role="alert" className="artifact-error">{error || settingsError}</p>}
     {!revision && !error && <p className="artifact-notice">{artifact ? "The integration has not finished publishing its first revision." : "Loading saved session…"}</p>}
     {revision && !(editing && generic) && (!editing || view) && <iframe key={`${revision.id}:${selectedViewer}:${settings}:${editing}`} ref={frame} title={settings ? "Integration settings" : "Session explorer"} className="artifact-frame" sandbox="allow-scripts" referrerPolicy="no-referrer" allow="camera 'none'; microphone 'none'; geolocation 'none'; clipboard-read 'none'; clipboard-write 'none'" src={`/api/v1/artifacts/${id}/revisions/${revision.id}/preview${viewerQuery}${settings ? (viewerQuery ? "&" : "?") + "surface=settings" : ""}`} onLoad={mount} />}

@@ -172,6 +172,12 @@ try {
   assert.deepEqual(await child.evaluate(() => finale.viewState.read()), inspection);
   assert.match(await child.evaluate(() => finale.viewState.write("猫".repeat(6000)).then(() => "accepted", e => e.message)), /16 KiB/);
   assert.deepEqual(await child.evaluate(() => finale.viewState.read()), inspection, "oversized state replaced the saved inspection");
+  const options = page.getByRole('button', { name: 'Archive options', exact: true });
+  assert.equal(await options.getAttribute('aria-expanded'), 'false');
+  const previewBounds = await page.locator('iframe[title="Session explorer"]').boundingBox();
+  assert.ok(previewBounds.y < 150, 'archive controls displaced the explorer');
+  assert.equal(await page.getByRole('button', { name: 'Settings', exact: true }).count(), 0);
+  await options.click();
   const follow = page.getByRole("checkbox", { name: "Follow latest", exact: true });
   await follow.check();
   assert.equal(await child.evaluate(() => finale.text("session.jsonl")), content, "following the current revision disconnected the viewer");
@@ -223,6 +229,7 @@ try {
   child = page.frames().find(f => f.parentFrame());
   let nativeState = await child.evaluate(() => finale.viewState.read());
   assert.equal(nativeState.page, 1); assert.equal(nativeState.until, 123);
+  await options.click();
   await follow.check();
   currentRevision = 'revision-two';
   await page.clock.fastForward(16000);
