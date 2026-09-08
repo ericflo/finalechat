@@ -1,6 +1,6 @@
-**Proposal: settings artifacts with a durable command channel**
+**Design: settings artifacts with a durable command channel**
 
-Status: implementation in progress; see [the implementation checklist](implementation-progress.md). Extends [durable session artifacts](session-artifacts.md).
+Status: implemented locally; see [validation and implementation limits](implementation-progress.md). Extends [durable session artifacts](session-artifacts.md).
 
 Implementation refinement: the trusted host opens a 30-minute resource-bound editing lease while a settings revision is current. It can keep that same editor active across proactive transcript publications. Newly opened historical documents remain read-only. Commands retain the original source revision and recheck owner, binding, active connector, runtime generation, grants, schema and expected settings version; the iframe never receives the editing lease identifier. This prevents routine archive publication from interrupting a user mid-edit without granting historical pages ambient control.
 
@@ -158,8 +158,8 @@ For eagent, retain the current rule that new provider endpoints and key-variable
 | Provider | Persistent settings | Running-session settings | Implementation |
 | --- | --- | --- | --- |
 | eagent | Project config, presets/bundles, prompt overrides, model/fallback/effort choices, concurrency/timeouts/narration options, mirror/archive preferences | Separate session grant controls live task concurrency and narrator check/quiet timing, with native acknowledgements and process-generation fencing. Other settings remain defaults for new/resumed sessions. | Shared config service and portable `config.js` editor; durable project writer and scheduler-owned session queue. |
-| Claude Code | User, project and project-local settings, subject to managed policy and actual merge rules | Reload behavior varies by field. Do not equate a file save with a live model/effort switch. | Extend the existing CLI/hooks integration with a scoped companion, versioned schema and file-change observation. |
-| Codex | Supported user config writes and declared project/profile settings | Supported overrides on subsequent turns only when this adapter controls that thread through a compatible API | Add a dedicated adapter; use native config APIs and their validation when available. |
+| Claude Code | Declared user, project and project-local fields, preserving unknown keys and subject to native managed policy | Saved defaults; runtime adoption is unconfirmed. No live model/effort switch is claimed. | Existing CLI/hooks integration plus scoped companion, versioned descriptors and conditional file writes. |
+| Codex | Declared user defaults through native conditional writes; project/profile/managed origins are observed and locked | Runtime adoption is unconfirmed; this adapter does not own another terminal or desktop session. | Native App Server config/read, configRequirements/read and config/batchWrite; stored rollout import. |
 
 Claude Code documents settings-file watching for many fields; model and effort require their session mechanisms, and some settings take effect after a clear/restart. Its precedence and array merging also vary from a simple last-writer-wins map. Publish behavior per field and tested product version, and observe `ConfigChange` where available rather than inventing a blanket reload promise. [Claude Code settings](https://code.claude.com/docs/en/settings).
 

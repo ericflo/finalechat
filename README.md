@@ -83,7 +83,7 @@ try attachments without B2.
 
 ## Native session archives and settings
 
-Claude Code and Codex can publish permanent native-session websites and expose
+Eagent, Claude Code and Codex can publish permanent native-session websites and expose
 scoped settings controls in FinaleChat. Archives preserve immutable revisions and
 downloadable original JSONL files. Settings use a separately paired outbound
 connector, a durable command queue, and FinaleChat's own Save button.
@@ -94,7 +94,9 @@ can package and publish a prepared website with `finalechat artifact pack` and
 `finalechat artifact upload --thread ext:SESSION_ID`; see the integration guide
 for source recovery and append-only history options. The standalone CLI
 is generated from the integration sources with `make cli`; `make test-cli`
-checks that the generated file is synchronized.
+checks that the generated file is synchronized. `make test-native` additionally
+exercises installed Claude Code and Codex against local fixture APIs in temporary
+homes, including tools, hooks/MCP, exact export, resume and installer preservation.
 
 ## Deploy
 

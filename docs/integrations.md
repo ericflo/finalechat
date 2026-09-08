@@ -137,3 +137,13 @@ Eagent additionally supports `eagent connector pair-session SESSION_ID` from the
 `make test-native` exercises installed Claude Code and Codex in temporary homes against local fake model and FinaleChat APIs. It checks real local tool execution, Claude hook mirroring and phone answers, Codex MCP authentication and per-call thread routing, exact native source export, resume without rewriting the captured prefix, and preservation of unrelated hooks/settings/MCP registrations on reinstall and uninstall. It also runs the optional native Codex configuration API tests. Missing native clients are skipped. Synthetic provider usage in these fixtures is not a billed model request.
 
 Verified with Claude Code 2.1.263 and Codex 0.153.4. The Claude fixture uses the native streaming input/approval channel to expose `AskUserQuestion`; ordinary print mode does not advertise that interactive tool. A phone answer is delivered as an explained native tool denial, so the model sees the answer and the terminal question does not run. The adapter does not claim to change the running model or effort through saved defaults.
+
+## Capability boundaries
+
+| Integration | Remote defaults | Live controls | Kept local or unavailable |
+| --- | --- | --- | --- |
+| eagent | Full shared project editor: routes/models/fallbacks, prompts, bundles, scheduling and mirror/archive preferences | Separately paired task concurrency and narrator timing, acknowledged by the running harness | Credentials, arbitrary files, and hot changes to model routes |
+| Claude Code | Declared user/project/project-local model, effort, presentation, permission and sandbox preferences | Saved defaults only; native runtime adoption remains unconfirmed | Credentials, hooks/helper commands, unknown fields and unobservable cloud/MDM policy |
+| Codex | Declared user model, effort, context, presentation, sandbox/approval and history defaults through native APIs | Saved defaults only; no ownership of another desktop/terminal thread | Credentials/MCP helpers, direct project/profile writes and unsupported native values |
+
+Unknown settings remain in their native files. Permission-related preferences require their own paired capability class and remain subject to the native product's policy. Native version and provenance accompany snapshots; a saved result states when the adapter expects the change to take effect without claiming to have observed another process. Archives preserve original session data independently of native settings API availability. Eagent local export also tolerates invalid project defaults and labels its missing settings context; network publication waits for a valid configuration to resolve the intended destination and opt-in.

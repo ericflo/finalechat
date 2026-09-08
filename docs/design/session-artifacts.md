@@ -1,6 +1,6 @@
-**Proposal: durable, versioned session artifacts**
+**Design: durable, versioned session artifacts**
 
-Status: implementation in progress; see [the implementation checklist](implementation-progress.md). This replaces the proposed live proxy between FinaleChat and eagent. Paths below refer to `/home/ericflo/Development/finalechat` and `/home/ericflo/Development/stream-agent-duel/eagent_final`.
+Status: implemented locally; see [validation and implementation limits](implementation-progress.md). This replaces the proposed live proxy between FinaleChat and eagent. Paths below refer to `/home/ericflo/Development/finalechat` and `/home/ericflo/Development/stream-agent-duel/eagent_final`.
 
 The optional [interactive settings extension](interactive-settings.md) adds custom settings artifacts, scoped live bindings and a durable command channel. Historical inspection remains available independently of remote control.
 
@@ -8,7 +8,7 @@ The user opens **Under the hood** in a FinaleChat thread and sees an interactive
 
 The enduring object is the dataset. A viewer is a versioned interpretation of that dataset. Publishing a new viewer can reuse all existing data; publishing new data can reuse the existing viewer.
 
-**What the current code provides**
+**Starting point when this design was written**
 
 - The running eagent session `1788827736789` explicitly identifies FinaleChat thread `01a07e71-1c61-700c-9f0f-fd91b2e5e89e` in its `phone` metadata. Its project is `SoundboxingWork`. No heuristic matching is needed.
 - `eagent/internal/harness/phone.go` already publishes narrator messages with `meta.seq`, and records a `phone.thread` event locally. These are useful anchors for opening a particular moment from chat.
