@@ -252,9 +252,54 @@ class IntegrationTests(unittest.TestCase):
         for argv in (["install", "codex", "--no-mcp"], ["connector", "pair", "claude-code", "--scope", "project_local"], ["artifact", "verify", "/tmp/archive"], ["artifact", "publish", "codex", "fixture-session", "--recreate"]):
             self.assertTrue(callable(G["build_parser"]().parse_args(argv).func))
 
+    def test_codex_mcp_calls_route_to_their_own_native_session(self):
+        first = "01a08000-0000-7000-8000-000000000001"
+        second = "01a08000-0000-7000-8000-000000000002"
+        def meta(thread):
+            return {"threadId": thread, "x-codex-turn-metadata": {"thread_id": thread}}
+        with patch.dict(os.environ, FINALECHAT_THREAD=""):
+            self.assertEqual(G["mcp_target"]({}, meta(first)).ref, "ext:codex:" + first)
+            self.assertEqual(G["mcp_target"]({}, meta(second)).ref, "ext:codex:" + second)
+            self.assertEqual(G["mcp_target"]({"thread": "ext:explicit"}, meta(first)).ref, "ext:explicit")
+            fallback = G["ThreadTarget"]("ext:fallback")
+            with patch.dict(G, resolve_target=lambda *a, **kw: fallback):
+                for value in (None, {}, {"threadId": first}, meta("../../wrong"), dict(meta(first), threadId=second)):
+                    self.assertEqual(G["mcp_target"]({}, value).ref, "ext:fallback")
+        with patch.dict(os.environ, FINALECHAT_THREAD="ext:environment"):
+            self.assertEqual(G["mcp_target"]({}, meta(first)).ref, "ext:environment")
+
 
 @unittest.skipUnless(os.environ.get("FINALECHAT_TEST_NATIVE_CODEX") == "1" and shutil.which("codex"), "opt in to installed Codex API tests")
 class NativeCodexTests(unittest.TestCase):
+    def test_native_mcp_install_reinstall_and_remove_preserve_local_policy(self):
+        with tempfile.TemporaryDirectory(prefix="finalechat-native-mcp-test-") as directory:
+            root = Path(directory)
+            native = root / "native-home"
+            native.mkdir()
+            path = native / "config.toml"
+            path.write_text('model = "fixture-only"\n[mcp_servers.unrelated]\ncommand = "true"\n'
+                            '[mcp_servers.finalechat]\ncommand = "old-fixture"\nenv_vars = ["CUSTOM_FIXTURE"]\n'
+                            '[mcp_servers.finalechat.tools.finalechat_send]\napproval_mode = "prompt"\n')
+            environment = dict(os.environ, CODEX_HOME=str(native))
+            rpc_class = G["CodexRPC"]
+            factory = lambda project, executable="codex": rpc_class(project, executable=executable, environment=environment)
+            with patch.dict(G, CodexRPC=factory):
+                for _ in range(2):
+                    G["configure_codex_mcp"](root, shutil.which("codex"))
+                with factory(root) as rpc:
+                    result = rpc.call("config/read", {"cwd": str(root), "includeLayers": True})
+                    user = next(layer["config"] for layer in result["layers"] if layer["name"]["type"] == "user")
+                    server = user["mcp_servers"]["finalechat"]
+                    self.assertEqual(user["model"], "fixture-only")
+                    self.assertEqual(user["mcp_servers"]["unrelated"]["command"], "true")
+                    self.assertEqual(server["tools"]["finalechat_send"]["approval_mode"], "prompt")
+                    self.assertTrue({"CUSTOM_FIXTURE", "FINALECHAT_TOKEN", "FINALECHAT_URL", "FINALECHAT_THREAD",
+                                     "XDG_CONFIG_HOME", "XDG_CACHE_HOME"} <= set(server["env_vars"]))
+                G["configure_codex_mcp"](root, shutil.which("codex"), remove=True)
+                self.assertNotIn("mcp_servers.finalechat", path.read_text())
+                self.assertIn("mcp_servers.unrelated", path.read_text())
+                self.assertIn('model = "fixture-only"', path.read_text())
+
     def test_real_native_config_write_unset_conflict_and_secret_exclusion(self):
         with tempfile.TemporaryDirectory(prefix="finalechat-native-codex-test-") as directory:
             root = Path(directory)

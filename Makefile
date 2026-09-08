@@ -6,7 +6,7 @@ BIN := bin/finalechat
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 DEV_DB_URL ?= postgres://finalechat:finalechat@127.0.0.1:55432/finalechat?sslmode=disable
 
-.PHONY: all build cli web web-dev run test test-go test-web test-browser test-cli fmt vet check dev-db dev-db-stop icons clean
+.PHONY: all build cli web web-dev run test test-go test-web test-browser test-native test-cli fmt vet check dev-db dev-db-stop icons clean
 
 all: build
 
@@ -62,6 +62,13 @@ test-web: web/node_modules
 ## Isolated Chromium fixture checks; install Playwright separately (see docs/integrations.md).
 test-browser: web/node_modules
 	node scripts/test-artifact-browser.mjs
+
+## Optional installed clients, isolated homes, local fake model and chat APIs.
+test-native:
+	python3 scripts/build-cli-integrations.py --check
+	python3 -I scripts/test-native-claude.py
+	python3 -I scripts/test-native-codex.py
+	FINALECHAT_TEST_NATIVE_CODEX=1 python3 -m unittest discover -s cli -p test_integrations.py
 
 test-cli:
 	python3 scripts/build-cli-integrations.py --check

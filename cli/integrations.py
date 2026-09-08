@@ -1699,15 +1699,44 @@ def cmd_connector(args):
     return EXIT_OK
 
 
+def configure_codex_mcp(project, executable, remove=False):
+    """Use native conditional edits so reinstall retains tool approval policy.
+
+    Codex filters an MCP process's environment. Forward names, never secret
+    values, and retain any explicitly configured native environment allowlist.
+    """
+    with CodexRPC(Path(project).resolve(), executable=executable) as rpc:
+        native = rpc.call("config/read", {"cwd": str(Path(project).resolve()), "includeLayers": True})
+        path = Path(rpc.info["codexHome"]) / "config.toml"
+        layer = next((item for item in native.get("layers") or []
+                      if item["name"]["type"] == "user" and not item["name"].get("profile")), None)
+        if layer is None or Path(layer["name"]["file"]).resolve() != path.resolve():
+            raise CLIError("Codex did not identify its user configuration for MCP registration.")
+        server = (layer["config"].get("mcp_servers") or {}).get("finalechat") or {}
+        if not isinstance(server, dict):
+            raise CLIError("The existing finalechat MCP entry must be inspected locally.")
+        if remove:
+            edits = [{"keyPath": "mcp_servers.finalechat", "mergeStrategy": "replace", "value": None}]
+        else:
+            if server.get("url"):
+                raise CLIError("A different HTTP MCP server is registered as finalechat; rename or remove it locally before installing this stdio integration.")
+            forwarded = server.get("env_vars") or []
+            if not isinstance(forwarded, list) or any(not isinstance(name, str) for name in forwarded):
+                raise CLIError("The existing MCP environment allowlist must be inspected locally.")
+            forwarded = sorted(set(forwarded) | {"FINALECHAT_TOKEN", "FINALECHAT_URL", "FINALECHAT_THREAD",
+                                               "FINALECHAT_AGENT", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"})
+            edits = [{"keyPath": "mcp_servers.finalechat." + name, "mergeStrategy": "replace", "value": value}
+                     for name, value in {"command": sys.executable, "args": [cli_path(), "mcp"], "env_vars": forwarded}.items()]
+        rpc.call("config/batchWrite", {"edits": edits, "filePath": str(path),
+                                       "expectedVersion": layer["version"], "reloadUserConfig": False})
+
+
 def install_codex_integration(args, remove=False):
     executable = shutil.which("codex")
     if not executable:
         raise CLIError("Install Codex before registering its integration.")
     if not args.no_mcp:
-        command = [executable, "mcp", "remove", "finalechat"] if remove else [executable, "mcp", "add", "finalechat", "--", sys.executable, cli_path(), "mcp"]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
-        if result.returncode != 0:
-            raise CLIError("Codex MCP registration failed; run codex mcp list to inspect the local configuration.")
+        configure_codex_mcp(args.project, executable, remove=remove)
     if remove:
         configure_integration("codex", args.project, enabled=False, artifacts=False)
         print("Removed Codex MCP registration and stopped this project's companion.")
