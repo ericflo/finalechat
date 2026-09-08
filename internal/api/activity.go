@@ -33,18 +33,21 @@ type activityRequest struct {
 	activityBody
 }
 
-// parseActivity validates a status line. A blank text yields (nil, nil),
-// which callers treat as "clear".
-func parseActivity(b activityBody) (*store.ActivityInput, error) {
+// parseActivity validates a status line. A blank text yields a nil input,
+// which callers treat as "clear", with the seq the clear should record.
+func parseActivity(b activityBody) (in *store.ActivityInput, clearSeq int64, err error) {
+	if b.Seq < 0 {
+		return nil, 0, errValidation("seq must not be negative.")
+	}
 	text := oneLine(b.Text)
 	if text == "" {
-		return nil, nil
+		return nil, b.Seq, nil
 	}
 	if !utf8.ValidString(text) {
-		return nil, errValidation("activity text must be valid UTF-8.")
+		return nil, 0, errValidation("activity text must be valid UTF-8.")
 	}
 	if utf8.RuneCountInString(text) > store.MaxActivityTextRunes {
-		return nil, errValidation("activity text must be at most %d characters; a status is one short line.", store.MaxActivityTextRunes)
+		return nil, 0, errValidation("activity text must be at most %d characters; a status is one short line.", store.MaxActivityTextRunes)
 	}
 	kind := strings.ToLower(strings.TrimSpace(b.Kind))
 	switch kind {
@@ -52,19 +55,16 @@ func parseActivity(b activityBody) (*store.ActivityInput, error) {
 		kind = store.ActivityWorking
 	case store.ActivityThinking, store.ActivityWorking, store.ActivityTyping, store.ActivityWaiting, store.ActivityTool:
 	default:
-		return nil, errValidation("activity kind must be one of %s.", strings.Join(store.ActivityKinds, ", "))
+		return nil, 0, errValidation("activity kind must be one of %s.", strings.Join(store.ActivityKinds, ", "))
 	}
 	ttl := defaultActivityTTL
 	if b.TTLSeconds != nil {
 		if *b.TTLSeconds < 1 || time.Duration(*b.TTLSeconds)*time.Second > maxActivityTTL {
-			return nil, errValidation("ttl_seconds must be between 1 and %d.", int(maxActivityTTL/time.Second))
+			return nil, 0, errValidation("ttl_seconds must be between 1 and %d.", int(maxActivityTTL/time.Second))
 		}
 		ttl = time.Duration(*b.TTLSeconds) * time.Second
 	}
-	if b.Seq < 0 {
-		return nil, errValidation("seq must not be negative.")
-	}
-	return &store.ActivityInput{Text: text, Kind: kind, TTL: ttl, Seq: b.Seq}, nil
+	return &store.ActivityInput{Text: text, Kind: kind, TTL: ttl, Seq: b.Seq}, 0, nil
 }
 
 // POST /api/v1/threads/{thread}/activity
@@ -81,7 +81,7 @@ func (s *Server) handleSetActivity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	in, err := parseActivity(req.activityBody)
+	in, clearSeq, err := parseActivity(req.activityBody)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -97,7 +97,7 @@ func (s *Server) handleSetActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	if in == nil {
 		had := thread.Activity != nil
-		thread, err = s.store.ClearThreadActivity(r.Context(), p.user.ID, thread.ID, req.Seq)
+		thread, err = s.store.ClearThreadActivity(r.Context(), p.user.ID, thread.ID, clearSeq)
 		if err != nil {
 			writeError(w, err)
 			return

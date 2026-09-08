@@ -71,9 +71,23 @@ const threadColumns = `t.id, t.user_id, t.external_id, t.title, t.agent, t.meta,
 	t.activity_text, t.activity_kind, t.activity_at, t.activity_since, t.activity_expires_at,
 	(t.activity_expires_at IS NOT NULL AND t.activity_expires_at > now())`
 
-// activityCleared is the SET fragment that drops a thread's status; used when
-// the agent posts, since the message is the outcome the status announced.
-const activityCleared = "activity_text = '', activity_kind = '', activity_at = NULL, activity_since = NULL, activity_expires_at = NULL"
+// activityClearedSet is the SET fragment that drops a thread's status.
+const activityClearedSet = "activity_text = '', activity_kind = '', activity_at = NULL, activity_since = NULL, activity_expires_at = NULL"
+
+// activityCleared drops a thread's status and records the clear's position:
+// seq (a parameter placeholder) raises the watermark a sequenced write must
+// exceed, and the clear's time bounds how long that watermark holds. Used by
+// explicit clears and by agent posts, since a message is the outcome its
+// status announced.
+func activityCleared(seq string) string {
+	return activityClearedSet + `, activity_cleared_seq = GREATEST(t.activity_cleared_seq, ` + seq + `::bigint),
+		activity_cleared_at = CASE WHEN ` + seq + `::bigint > t.activity_cleared_seq THEN now() ELSE t.activity_cleared_at END`
+}
+
+// clearedSeqWindow is how long a clear's watermark rejects lower-sequenced
+// writes. A straggler is seconds late, never minutes; after this a clear from
+// a faster clock (or a wrong unit) can no longer pin the status line shut.
+const clearedSeqWindow = "interval '10 minutes'"
 
 func scanThread(row pgx.Row) (*Thread, error) {
 	var t Thread
@@ -285,10 +299,10 @@ func activitySet(text, kind, ttl, seq string) string {
 // thread carries that status.
 func (s *Store) SetThreadActivity(ctx context.Context, userID, id uuid.UUID, in ActivityInput) (thread *Thread, applied bool, err error) {
 	// A write is ignored when a newer status is live, or when a clear with a
-	// higher sequence already happened (a straggler must not resurrect it).
+	// higher sequence happened recently (a straggler must not resurrect it).
 	thread, err = scanThread(s.pool.QueryRow(ctx, `UPDATE threads t SET `+activitySet("$3", "$4", "$5", "$6")+`
 		WHERE t.id = $1 AND t.user_id = $2
-			AND ($6::bigint = 0 OR $6::bigint > t.activity_cleared_seq)
+			AND ($6::bigint = 0 OR $6::bigint > t.activity_cleared_seq OR t.activity_cleared_at IS NULL OR t.activity_cleared_at < now() - `+clearedSeqWindow+`)
 			AND ($6::bigint = 0 OR t.activity_seq < $6::bigint OR t.activity_expires_at IS NULL OR t.activity_expires_at <= now())
 		RETURNING `+threadColumns, id, userID, in.Text, in.Kind, in.TTL, in.Seq))
 	if err == nil {
@@ -304,7 +318,7 @@ func (s *Store) SetThreadActivity(ctx context.Context, userID, id uuid.UUID, in 
 // ClearThreadActivity drops the status line. seq, when non-zero, records
 // the clear's position so a later-arriving write with a lower seq is ignored.
 func (s *Store) ClearThreadActivity(ctx context.Context, userID, id uuid.UUID, seq int64) (*Thread, error) {
-	return scanThread(s.pool.QueryRow(ctx, "UPDATE threads t SET "+activityCleared+", activity_cleared_seq = GREATEST(t.activity_cleared_seq, $3::bigint) WHERE t.id = $1 AND t.user_id = $2 RETURNING "+threadColumns, id, userID, seq))
+	return scanThread(s.pool.QueryRow(ctx, "UPDATE threads t SET "+activityCleared("$3")+" WHERE t.id = $1 AND t.user_id = $2 RETURNING "+threadColumns, id, userID, seq))
 }
 
 // MarkThreadRead records that the user has seen everything up to now.

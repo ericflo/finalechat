@@ -14,9 +14,12 @@ interface NotificationAction {
 
 const VERSION = __APP_VERSION__;
 const SHELL_CACHE = `fc-shell-${VERSION}`;
-const ASSET_CACHE = "fc-assets-v1";
+const ASSET_CACHE = `fc-assets-${VERSION}`;
 const MEDIA_CACHE = "fc-media-v1";
 const MEDIA_LIMIT = 160;
+// Only images, and only ones a phone can hold many of; a 10 MiB PDF is
+// fetched again rather than evicting sixty screenshots.
+const MEDIA_MAX_BYTES = 4 * 1024 * 1024;
 
 interface PushPayload {
   type: "message" | "question" | "test";
@@ -48,7 +51,7 @@ sw.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      await Promise.all(keys.filter((k) => k.startsWith("fc-shell-") && k !== SHELL_CACHE).map((k) => caches.delete(k)));
+      await Promise.all(keys.filter((k) => (k.startsWith("fc-shell-") && k !== SHELL_CACHE) || (k.startsWith("fc-assets-") && k !== ASSET_CACHE)).map((k) => caches.delete(k)));
       await trimMedia();
       await sw.clients.claim();
     })(),
@@ -68,8 +71,14 @@ sw.addEventListener("fetch", (event) => {
         const hit = await cache.match(req);
         if (hit) return hit;
         const res = await fetch(req);
-        if (res.ok && res.status === 200) {
-          void cache.put(req, res.clone()).then(trimMedia);
+        const type = res.headers.get("content-type") ?? "";
+        const size = Number(res.headers.get("content-length") ?? "0");
+        if (res.ok && res.status === 200 && type.startsWith("image/") && size <= MEDIA_MAX_BYTES) {
+          // A full quota fails the put; trim anyway so the next one fits.
+          void cache
+            .put(req, res.clone())
+            .catch(() => {})
+            .finally(trimMedia);
         }
         return res;
       }),

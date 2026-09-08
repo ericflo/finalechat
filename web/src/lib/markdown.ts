@@ -45,6 +45,12 @@ function decorateCode(html: string): string {
     .replace(/<\/pre>/g, "</pre></div>");
 }
 
+// marked labels fenced code with class="language-…", which decorateCode and
+// the styles read; keep that one class and nothing else.
+DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
+  if (data.attrName === "class" && node.tagName === "CODE" && /^language-[\w+.#-]+$/.test(data.attrValue)) data.forceKeepAttr = true;
+});
+
 export function renderMarkdown(source: string): string {
   const hit = cache.get(source);
   if (hit !== undefined) return hit;
@@ -57,8 +63,11 @@ export function renderMarkdown(source: string): string {
   const clean = DOMPurify.sanitize(html, {
     USE_PROFILES: { html: true },
     FORBID_TAGS: ["style", "form", "input", "button", "iframe", "object", "embed"],
-    // An inline style could paint over the whole app (a fake login, say).
-    FORBID_ATTR: ["style"],
+    // An inline style could paint over the whole app (a fake login, say), and
+    // so could borrowing the app's own class names (.viewer, .sheet); ids
+    // would let a link scroll the page anywhere. Only a code fence's
+    // language class survives (see the hook below).
+    FORBID_ATTR: ["style", "class", "id"],
     ADD_ATTR: ["target"],
   });
   return remember(source, decorateCode(clean));

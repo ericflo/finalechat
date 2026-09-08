@@ -45,7 +45,7 @@ export function back(fallback = "/") {
   // Only walk history we created; a deep link opened from a notification has
   // nowhere sensible to go back to except the inbox.
   if (depth > 0) {
-    depth--;
+    // popstate decrements the counter once the browser has moved.
     window.history.back();
   } else {
     navigate(fallback, { replace: true });

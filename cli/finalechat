@@ -53,6 +53,11 @@ SESSIONS_DIR = CLAUDE_CACHE / "sessions"
 
 HOOK_MARKER = "finalechat hook claude-code"
 BY_CWD_MAX_AGE = 24 * 3600
+# A session whose recorded pid is gone is kept this long: a resumed session
+# (`claude --resume`) refreshes it within seconds, and a wrong pid must
+# degrade to "most recent session here", not wipe the entry.
+BY_CWD_DEAD_GRACE = 5 * 60
+BY_PID_DIR = CLAUDE_CACHE / "by-pid"
 
 # Exit codes shared by every waiting command.
 EXIT_OK = 0
@@ -387,11 +392,15 @@ class Client:
     def post_message(self, ref: str, body: str, *, sender: str | None = None, important: bool = False,
                      notify: bool | None = None, fmt: str = "markdown", meta: dict | None = None,
                      title: str = "", agent: str = "", files: list | None = None,
-                     client_key: str | None = None) -> dict:
+                     client_key: str | None = None, activity: dict | None = None) -> dict:
         """Post a message; with `files` (list of (filename, content_type, bytes)) it is one multipart request.
-        A `client_key` makes the post safe to retry (the server dedupes it)."""
+        A `client_key` makes the post safe to retry (the server dedupes it). `activity` is the
+        status line to show after the post, or {"text": "", "seq": N} for a sequenced clear
+        (JSON posts only)."""
         payload: dict = {"body": body, "format": fmt, "importance": "important" if important else "normal",
                          "client_key": client_key or secrets.token_hex(16)}
+        if activity is not None and not files:
+            payload["activity"] = activity
         if sender:
             payload["sender"] = sender
         if notify is not None:
@@ -450,11 +459,12 @@ class Client:
 # --------------------------------------------------------------------------- #
 
 
-def wait_for_answer(client: Client, qid: str, total: int, keep_going=None) -> dict:
+def wait_for_answer(client: Client, qid: str, total: int, keep_going=None, chunk: int = POLL_CHUNK) -> dict:
     """Poll a question until it leaves the pending state or `total` seconds pass.
 
     `keep_going` is an optional callable checked between polls; returning False
-    stops early (used by hooks when remote mode is switched off).
+    stops early (used by hooks when remote mode is switched off), so a hook
+    passes a short `chunk` to notice the switch within seconds.
     """
     deadline = time.monotonic() + max(0, total)
     question = client.get_question(qid)
@@ -464,7 +474,7 @@ def wait_for_answer(client: Client, qid: str, total: int, keep_going=None) -> di
             break
         if keep_going is not None and not keep_going():
             break
-        question = client.get_question(qid, wait=min(POLL_CHUNK, max(1, remaining)))
+        question = client.get_question(qid, wait=min(chunk, max(1, remaining)))
     return question
 
 
@@ -473,8 +483,10 @@ def latest_message_id(client: Client, ref: str) -> str | None:
     return msgs[-1]["id"] if msgs else None
 
 
-def wait_for_reply(client: Client, ref: str, after: str | None, total: int, keep_going=None) -> dict | None:
-    """Block until the next user message after `after` arrives, or time out."""
+def wait_for_replies(client: Client, ref: str, after: str | None, total: int, keep_going=None) -> list:
+    """Block until user messages after `after` exist and return all of them
+    (oldest first), or an empty list on timeout. Two replies sent within a
+    second arrive together instead of the second one waiting a whole turn."""
     deadline = time.monotonic() + max(0, total)
     # Without a message to anchor on, the server anchors on its clock and
     # hands the instant back as waited_from; carrying it forward means a reply
@@ -493,6 +505,14 @@ def wait_for_reply(client: Client, ref: str, after: str | None, total: int, keep
         if after is None and resp.get("waited_from"):
             after_time = str(resp["waited_from"])
         msgs = resp.get("messages") or []
+        if resp.get("anchor_unknown"):
+            # The thread was deleted and recreated under the same id, so
+            # the page ran from its start: those are old messages, not the
+            # reply. Anchor on the newest and wait for what comes next.
+            after = msgs[-1].get("id") if msgs else None
+            if after is None:
+                after_time = None
+            continue
         # A "user" message posted by an agent (a mirrored terminal prompt) is
         # not the user replying from the app, and a tombstone is nothing at
         # all; keep waiting past both.
@@ -502,7 +522,29 @@ def wait_for_reply(client: Client, ref: str, after: str | None, total: int, keep
             continue
         msgs = [m for m in msgs if m.get("origin") != "token" and not m.get("deleted")]
         if msgs:
-            return msgs[0]
+            return msgs
+
+
+def wait_for_reply(client: Client, ref: str, after: str | None, total: int, keep_going=None) -> dict | None:
+    """Block until the next user message after `after` arrives, or time out."""
+    msgs = wait_for_replies(client, ref, after, total, keep_going=keep_going)
+    return msgs[0] if msgs else None
+
+
+def join_replies(replies: list) -> str:
+    """One instruction from every reply the user sent, in order, with a hint
+    for each attachment. A single reply reads as before."""
+    parts = []
+    for m in replies:
+        body = str(m.get("body") or "").strip()
+        if not body and message_attachments(m):
+            body = "(no text)"
+        if not body:
+            continue
+        parts.append(body + attachment_hint(m))
+    if len(parts) <= 1:
+        return parts[0] if parts else ""
+    return "\n" + "\n".join(f"{i}. {p}" for i, p in enumerate(parts, 1))
 
 
 def format_answer(question: dict) -> str:
@@ -742,7 +784,8 @@ def read_by_cwd_pointer(path: str | None = None) -> dict | None:
     now = time.time()
     live = {sid: s for sid, s in sessions.items()
             if isinstance(s, dict) and s.get("external_id") and now - float(s.get("updated_at") or 0) <= BY_CWD_MAX_AGE
-            and (not s.get("pid") or _pid_alive(int(s.get("pid") or 0)))}
+            and (not s.get("pid") or _pid_alive(int(s.get("pid") or 0))
+                 or now - float(s.get("updated_at") or 0) <= BY_CWD_DEAD_GRACE)}
     if len(live) != len(sessions):
         try:
             _save_sessions(target, live, path or os.getcwd())
@@ -773,18 +816,80 @@ def clear_by_cwd_pointer(cwd: str, session_id: str) -> None:
             pass
 
 
+def _claude_pid() -> int:
+    """The Claude Code process this hook or command belongs to: Claude Code
+    tells its children with CLAUDE_PID; a hook's parent is it otherwise."""
+    try:
+        pid = int(os.environ.get("CLAUDE_PID") or 0)
+    except ValueError:
+        pid = 0
+    return pid if pid > 0 and _pid_alive(pid) else os.getppid()
+
+
 def write_by_cwd_pointer(cwd: str, external_id: str, session_id: str) -> None:
-    """Record (or refresh) a session for this directory. The hook's parent is
-    the Claude Code process, which is what later CLI runs find in their own
-    ancestry."""
+    """Record (or refresh) a session for this directory and for its Claude
+    Code process. The pid is always taken afresh: a resumed session runs in
+    a new process, and its first hook must repoint the map at once."""
+    pid = _claude_pid()
     target = BY_CWD_DIR / f"{cwd_key(cwd)}.json"
     sessions = _load_sessions(target)
     entry = sessions.get(session_id) or {}
-    entry.update({"external_id": external_id, "updated_at": time.time()})
-    if not entry.get("pid"):
-        entry["pid"] = os.getppid()
+    entry.update({"external_id": external_id, "updated_at": time.time(), "pid": pid})
     sessions[session_id] = entry
     _save_sessions(target, sessions, cwd)
+    # The by-pid index answers "which session am I inside?" for a command
+    # run from any directory, including a subdirectory of the session's.
+    try:
+        BY_PID_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = BY_PID_DIR / f"{pid}.tmp"
+        with tmp.open("w") as fh:
+            json.dump({"external_id": external_id, "session_id": session_id, "cwd": os.path.abspath(cwd),
+                       "updated_at": time.time()}, fh)
+        tmp.replace(BY_PID_DIR / f"{pid}.json")
+    except OSError:
+        pass
+
+
+def read_by_pid_pointer() -> dict | None:
+    """The session whose Claude Code process is an ancestor of this one, if
+    any hook of it has run; the nearest ancestor wins."""
+    if not BY_PID_DIR.is_dir():
+        return None
+    for pid in _ancestor_pids_ordered():
+        path = BY_PID_DIR / f"{pid}.json"
+        if not path.is_file():
+            continue
+        try:
+            with path.open() as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("external_id"):
+            return {"external_id": str(data["external_id"]), "session_id": str(data.get("session_id") or "")}
+    return None
+
+
+def _ancestor_pids_ordered() -> list:
+    """Ancestors nearest first (the set form is what the cwd map wants)."""
+    pids: list = []
+    pid = os.getppid()
+    for _ in range(64):
+        if pid <= 1 or pid in pids:
+            break
+        pids.append(pid)
+        parent = 0
+        try:
+            with open(f"/proc/{pid}/stat") as fh:
+                stat = fh.read()
+            parent = int(stat.rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            try:
+                out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True, timeout=2).stdout
+                parent = int(out.strip() or 0)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                parent = 0
+        pid = parent
+    return pids
 
 
 class ThreadTarget:
@@ -805,18 +910,46 @@ def default_agent(fallback: str = "Terminal") -> str:
 
 def resolve_target(explicit: str | None = None, title: str | None = None, agent: str | None = None,
                    fallback_agent: str = "Terminal", fallback_prefix: str = "cli") -> ThreadTarget:
+    """Which thread a command means, in order: an explicit ref, $FINALECHAT_THREAD,
+    the Claude Code session this process runs inside (Claude Code names it in
+    $CLAUDE_CODE_SESSION_ID; failing that, a session whose process is an
+    ancestor of ours), the most recent live session in this directory or a
+    parent of it, and last a thread per directory."""
     cwd = os.getcwd()
     if explicit:
         return ThreadTarget(explicit, title or "", agent or "")
     env = os.environ.get("FINALECHAT_THREAD")
     if env:
         return ThreadTarget(env, title or "", agent or "")
-    pointer = read_by_cwd_pointer(cwd)
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
+    if session:
+        return ThreadTarget("ext:claude-code:" + session, title or "", agent or "")
+    pointer = read_by_pid_pointer()
     if pointer:
         return ThreadTarget("ext:" + pointer["external_id"], title or "", agent or "")
+    directory = os.path.abspath(cwd)
+    while True:
+        pointer = read_by_cwd_pointer(directory)
+        if pointer:
+            return ThreadTarget("ext:" + pointer["external_id"], title or "", agent or "")
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            break
+        directory = parent
     ext = f"ext:{fallback_prefix}:{hostname()}:{os.path.abspath(cwd)}"
+    if sys.stderr.isatty():
+        print(f"finalechat: no agent session found here; using this directory's thread ({ext})", file=sys.stderr)
     return ThreadTarget(ext, title or os.path.basename(os.path.abspath(cwd)) or "Terminal",
                         agent or default_agent(fallback_agent))
+
+
+def missing_thread(err: APIError, target: ThreadTarget) -> APIError:
+    """A 404 on a thread route, with the ref and what creates one."""
+    if err.status != 404:
+        return err
+    return APIError(404, err.code or "not_found",
+                    f"No thread {target.ref} yet. `finalechat say` (or finalechat_send) creates it; "
+                    f"`finalechat threads` lists the ones that exist.", err.retry_after)
 
 
 # --------------------------------------------------------------------------- #
@@ -988,7 +1121,10 @@ def cmd_threads(args) -> int:
 def cmd_read(args) -> int:
     client = client_from_args(args)
     target = resolve_target(args.ref or args.thread)
-    resp = client.list_messages(target.ref, limit=args.limit)
+    try:
+        resp = client.list_messages(target.ref, limit=args.limit)
+    except APIError as err:
+        raise missing_thread(err, target) from None
     messages = resp.get("messages") or []
     if args.json:
         print_json(resp)
@@ -1074,13 +1210,22 @@ def cmd_status(args) -> int:
     client = client_from_args(args)
     target = resolve_target(args.thread, args.title, args.agent)
     text = " ".join(args.text or []).strip()
-    if args.clear:
-        resp = client.clear_activity(target.ref)
-    elif text:
-        resp = client.set_activity(target.ref, text, kind=args.kind, ttl=args.ttl, seq=args.seq,
-                                   title=target.title, agent=target.agent)
-    else:
-        thread = client.get_thread(target.ref)
+    # Every writer of a thread's status line shares one clock (nanoseconds),
+    # the hooks included, so a slow earlier write can never overtake this one
+    # and a clear cannot be undone by a straggler.
+    seq = args.seq or time.time_ns()
+    try:
+        if args.clear:
+            resp = client.clear_activity(target.ref, seq=seq)
+        elif text:
+            resp = client.set_activity(target.ref, text, kind=args.kind, ttl=args.ttl, seq=seq,
+                                       title=target.title, agent=target.agent)
+        else:
+            resp = None
+            thread = client.get_thread(target.ref)
+    except APIError as err:
+        raise missing_thread(err, target) from None
+    if resp is None:
         if args.json:
             print_json(thread)
         else:
@@ -1170,9 +1315,12 @@ def cmd_wait(args) -> int:
     client = client_from_args(args)
     target = resolve_target(args.thread)
     after = args.after
-    if after is None:
-        after = latest_message_id(client, target.ref)
-    message = wait_for_reply(client, target.ref, after, args.timeout)
+    try:
+        if after is None:
+            after = latest_message_id(client, target.ref)
+        message = wait_for_reply(client, target.ref, after, args.timeout)
+    except APIError as err:
+        raise missing_thread(err, target) from None
     if message is None:
         print("No reply within the timeout.", file=sys.stderr)
         return EXIT_TIMEOUT
@@ -1209,11 +1357,12 @@ def cmd_remote(args) -> int:
 
 
 def cli_path() -> str:
-    """Absolute path of this executable, for hook commands."""
+    """Absolute path of this script, for hook and MCP commands."""
     invoked = os.path.realpath(os.path.abspath(sys.argv[0]))
     if os.path.isfile(invoked):
-        # The file this process is running; hooks re-invoke it through the
-        # interpreter, so it need not be executable itself.
+        # The file this process is running. Hooks and the MCP server invoke
+        # it through the interpreter (see hook_command), so it need not be
+        # executable and its path may contain spaces.
         return invoked
     candidate = shutil.which("finalechat")
     if candidate:
@@ -1245,7 +1394,10 @@ def hook_spec(command: str) -> dict:
 
 def is_our_entry(entry: dict) -> bool:
     for hook in entry.get("hooks") or []:
-        if isinstance(hook, dict) and HOOK_MARKER in str(hook.get("command", "")):
+        command = str(hook.get("command", "")) if isinstance(hook, dict) else ""
+        # Older installs wrote the bare path; newer ones quote it, so the
+        # marker's two halves may be a quote apart.
+        if HOOK_MARKER in command or ("finalechat" in command and command.rstrip().endswith("hook claude-code")):
             return True
     return False
 
@@ -1278,11 +1430,18 @@ def write_settings(path: Path, data: dict) -> Path | None:
     return backup
 
 
+def hook_command() -> str:
+    """The shell command Claude Code runs for hooks: this interpreter and this
+    file, quoted, so a copy that is not executable or lives under a path with
+    a space still runs (HOOK_MARKER is what `uninstall` looks for)."""
+    return " ".join(shlex.quote(p) for p in [sys.executable, cli_path()]) + " hook claude-code"
+
+
 def cmd_install(args) -> int:
     if args.target != "claude-code":
         raise CLIError("Only `claude-code` is supported right now.")
     settings_path = Path(args.settings).expanduser()
-    command = f"{cli_path()} hook claude-code"
+    command = hook_command()
     data = load_settings(settings_path)
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
@@ -1321,7 +1480,7 @@ def install_mcp(cli: str) -> None:
         if check.returncode == 0:
             subprocess.run([claude, "mcp", "remove", "--scope", "user", "finalechat"],
                            capture_output=True, text=True, timeout=30)
-        result = subprocess.run([claude, "mcp", "add", "--scope", "user", "finalechat", "--", cli, "mcp"],
+        result = subprocess.run([claude, "mcp", "add", "--scope", "user", "finalechat", "--", *shlex.split(cli), "mcp"],
                                 capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
             print("  MCP: registered the `finalechat` server (user scope)")
@@ -1451,7 +1610,7 @@ def status_enabled() -> bool:
     return os.environ.get("FINALECHAT_STATUS", "").strip().lower() not in ("0", "off", "false", "no")
 
 
-def spawn_status(ref: str, text: str, kind: str, ttl: int, title: str, agent: str) -> None:
+def spawn_status(ref: str, text: str, kind: str, ttl: int, title: str, agent: str, seq: int | None = None) -> None:
     """Set the thread's status line from a detached process, so a hook
     returns to Claude Code at once instead of waiting on the network."""
     text = truncate(" ".join(text.split()), 200)
@@ -1460,7 +1619,7 @@ def spawn_status(ref: str, text: str, kind: str, ttl: int, title: str, agent: st
     # The sequence number is taken now, so a slow earlier write can never
     # overtake a newer one on the server.
     argv = [sys.executable, cli_path(), "status", text, "--kind", kind, "--ttl", str(ttl), "-t", ref,
-            "--seq", str(time.time_ns())]
+            "--seq", str(seq or time.time_ns())]
     if title:
         argv += ["--title", title]
     if agent:
@@ -1470,6 +1629,59 @@ def spawn_status(ref: str, text: str, kind: str, ttl: int, title: str, agent: st
                          start_new_session=True, close_fds=True)
     except OSError as err:
         hook_log(f"status spawn failed: {err}")
+
+
+def agent_spoke_for_itself(payload: dict) -> bool:
+    """Whether the tool call that just finished was the agent setting its own
+    status (the MCP tool, or `finalechat status` in a shell), which the
+    hook's "Thinking…" reset must not overwrite."""
+    name = str(payload.get("tool_name") or "")
+    if name.startswith("mcp__finalechat__"):
+        return True
+    if name == "Bash":
+        inp = payload.get("tool_input")
+        command = str((inp or {}).get("command") or "") if isinstance(inp, dict) else ""
+        try:
+            words = shlex.split(command.splitlines()[0]) if command.strip() else []
+        except ValueError:
+            words = command.split()
+        return bool(words) and os.path.basename(words[0]) == "finalechat"
+    return False
+
+
+def remember_tool_seq(session_id: str, tool_use_id: str, seq: int) -> None:
+    """Keep the PreToolUse status's seq so PostToolUse can order its reset
+    just after it: a status the agent set meanwhile (seq = now) stays newer."""
+    if not tool_use_id:
+        return
+    state = load_session_state(session_id)
+    seqs = state.get("tool_seq") if isinstance(state.get("tool_seq"), dict) else {}
+    seqs[tool_use_id] = seq
+    for key in list(seqs)[:-32]:
+        seqs.pop(key, None)
+    state["tool_seq"] = seqs
+    try:
+        save_session_state(session_id, state)
+    except OSError:
+        pass
+
+
+def take_tool_seq(session_id: str, tool_use_id: str) -> int | None:
+    if not tool_use_id:
+        return None
+    state = load_session_state(session_id)
+    seqs = state.get("tool_seq") if isinstance(state.get("tool_seq"), dict) else {}
+    seq = seqs.pop(tool_use_id, None)
+    if seq is not None:
+        state["tool_seq"] = seqs
+        try:
+            save_session_state(session_id, state)
+        except OSError:
+            pass
+    try:
+        return int(seq) if seq is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def clear_status(client: Client, ref: str) -> None:
@@ -1488,8 +1700,13 @@ def clear_status(client: Client, ref: str) -> None:
 # anywhere (AWS_SECRET_ACCESS_KEY, DB_PASSWORD, --api-key); a separator is
 # required so `grep secret path` and `kubectl get secret name` stay readable.
 SECRET_PATTERNS = [
+    # Any Authorization header: keep the scheme, blank the credential.
+    (re.compile(r"(?i)((?:proxy-)?authorization\s*:\s*(?:[A-Za-z][A-Za-z0-9-]*\s+)?)[^\s'\"]{4,}"), r"\1••••"),
     (re.compile(r"(?i)\b(bearer\s+)[A-Za-z0-9._~+/=-]{8,}"), r"\1••••"),
-    (re.compile(r"(?i)(?<![A-Za-z0-9])([A-Za-z0-9_-]*(?:authorization|token|api[_-]?key|secret|passw(?:or)?d|pwd|credential)[A-Za-z0-9_-]*\s*[=:]\s*)['\"]?(?!bearer\b)[^\s'\"]{4,}"), r"\1••••"),
+    # `name=value` always; `name: value` only when the value looks like a
+    # credential (a digit, or twelve characters or more), so prose such as
+    # "Fix token: expire after one hour" is left alone.
+    (re.compile(r"(?i)(?<![A-Za-z0-9])([A-Za-z0-9_-]*(?:authorization|token|api[_-]?key|secret|passw(?:or)?d|pwd|credential)[A-Za-z0-9_-]*\s*(?:=|:(?=\s*['\"]?(?:[^\s'\"]*[0-9]|[^\s'\"]{12,})))\s*)['\"]?(?!bearer\b)[^\s'\"]{4,}"), r"\1••••"),
     (re.compile(r"\b(?:fc|sk|ghp|gho|ghs|glpat)[-_][A-Za-z0-9_-]{6,}|\bxox[abp]-[A-Za-z0-9-]{6,}|\bAKIA[0-9A-Z]{16}\b"), "••••"),
     (re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://••••@"),
     (re.compile(r"(?<==)['\"]?[A-Fa-f0-9]{32,}\b"), "••••"),
@@ -1523,6 +1740,15 @@ REDACTION_CASES = [
     ("kubectl get secret my-app -o yaml", "kubectl get secret my-app -o yaml"),
     ("echo 'the token expires tomorrow'", "echo 'the token expires tomorrow'"),
     ("go test ./...", "go test ./..."),
+    ("curl -H 'Authorization: Basic dXNlcjpodW50ZXIy' https://x", "curl -H 'Authorization: Basic ••••' https://x"),
+    ('curl -H "Authorization: Token 9f2c1a7b3e" https://x', 'curl -H "Authorization: Token ••••" https://x'),
+    ('curl -H "Authorization: ApiKey abcdefgh" https://x', 'curl -H "Authorization: ApiKey ••••" https://x'),
+    ('curl -H "Proxy-Authorization: Basic Zm9vOmJhcg==" https://x', 'curl -H "Proxy-Authorization: Basic ••••" https://x'),
+    ('curl -H "X-Api-Key: aBcDeFgHiJkLmNoP" https://x', 'curl -H "X-Api-Key: ••••" https://x'),
+    ("password: hunter2 in the yaml", "password: •••• in the yaml"),
+    ("git commit -m 'Fix token: expire after one hour'", "git commit -m 'Fix token: expire after one hour'"),
+    ("Handle password: reset emails", "Handle password: reset emails"),
+    ("api_key: rotate weekly", "api_key: rotate weekly"),
 ]
 
 
@@ -1543,6 +1769,53 @@ def cmd_selftest(args) -> int:
     if "-o '/tmp/Screen Shot 2026.png'" not in hint:
         failures += 1
         print(f"attachment_hint is not shell-safe: {hint!r}", file=sys.stderr)
+
+    class Stub(Client):
+        """Answers list_messages from a script and records every request."""
+
+        def __init__(self, pages):
+            super().__init__("http://stub", "fc_stub")
+            self.pages = list(pages)
+            self.calls: list = []
+
+        def request(self, method, path, body=None, params=None, timeout=15.0, retries=None):  # noqa: D401
+            self.calls.append((method, path, dict(params or {}), body))
+            if method == "GET" and path.endswith("/messages"):
+                return self.pages.pop(0) if self.pages else {"messages": [], "timed_out": True}
+            return {"thread": {}}
+
+    stub = Stub([{"messages": [
+        {"id": "m1", "body": "run the tests", "origin": "session"},
+        {"id": "m2", "body": "mirrored", "origin": "token"},
+        {"id": "m3", "body": "and skip e2e", "origin": "session"},
+    ]}])
+    got = wait_for_replies(stub, "ext:x", "m0", 5)
+    if [m["id"] for m in got] != ["m1", "m3"]:
+        failures += 1
+        print(f"wait_for_replies should return every real reply: {got!r}", file=sys.stderr)
+    joined = join_replies(got)
+    if "1. run the tests" not in joined or "2. and skip e2e" not in joined:
+        failures += 1
+        print(f"join_replies should number several replies: {joined!r}", file=sys.stderr)
+    stub = Stub([{"messages": [{"id": "old", "body": "stale", "origin": "session"}], "anchor_unknown": True},
+                 {"messages": [{"id": "new", "body": "fresh", "origin": "session"}]}])
+    got = wait_for_replies(stub, "ext:x", "gone", 5)
+    if [m["id"] for m in got] != ["new"] or stub.calls[-1][2].get("after") != "old":
+        failures += 1
+        print(f"an unknown anchor must re-anchor on the newest message, got {got!r} via {stub.calls!r}", file=sys.stderr)
+    stub = Stub([])
+    stub.clear_activity("ext:x", seq=200)
+    stub.clear_activity("ext:x", seq=time.time_ns())
+    seqs = [c[2].get("seq") for c in stub.calls if c[0] == "DELETE"]
+    if seqs[0] != 200 or not seqs[1]:
+        failures += 1
+        print(f"status clears must carry their seq: {seqs!r}", file=sys.stderr)
+    if not agent_spoke_for_itself({"tool_name": "Bash", "tool_input": {"command": "finalechat status 'Deploying, ~5 min' --ttl 300"}}):
+        failures += 1
+        print("a finalechat status command must count as the agent speaking for itself", file=sys.stderr)
+    if agent_spoke_for_itself({"tool_name": "Bash", "tool_input": {"command": "go test ./... && finalechat say done"}}):
+        failures += 1
+        print("a command that merely mentions finalechat later is not the agent's own status", file=sys.stderr)
     print("selftest: ok" if not failures else f"selftest: {failures} failure(s)")
     return EXIT_OK if not failures else EXIT_USAGE
 
@@ -1633,7 +1906,17 @@ def hook_claude_code() -> int:
         prompt = str(payload.get("prompt") or "").strip()
         if not prompt or prompt.startswith("/"):
             return EXIT_OK
-        client.post_message(ref, prompt, sender="user", meta={"via": "claude-code"}, title=title, agent=agent)
+        resp = client.post_message(ref, prompt, sender="user", meta={"via": "claude-code"}, title=title, agent=agent)
+        # The first turn's Stop hook anchors its "anything sent meanwhile?"
+        # check on this mirrored prompt.
+        prompt_id = (resp.get("message") or {}).get("id")
+        if prompt_id:
+            state = load_session_state(session_id)
+            state["last_prompt_id"] = prompt_id
+            try:
+                save_session_state(session_id, state)
+            except OSError as err:
+                hook_log(f"state write failed: {err}")
         spawn_status(ref, "Thinking…", "thinking", 120, title, agent)
         return EXIT_OK
 
@@ -1651,21 +1934,33 @@ def hook_claude_code() -> int:
         spawn_status(ref, "Waiting for you in the terminal", "waiting", 300, title, agent)
         return EXIT_OK
 
+    tool_use_id = str(payload.get("tool_use_id") or "")
     if event == "PreToolUse":
         if payload.get("tool_name") == "AskUserQuestion":
             return hook_ask_user_question(client, payload, ref, title, agent)
-        spawn_status(ref, tool_status_text(payload), "tool", 120, title, agent)
+        seq = time.time_ns()
+        spawn_status(ref, tool_status_text(payload), "tool", 120, title, agent, seq=seq)
+        remember_tool_seq(session_id, tool_use_id, seq)
         return EXIT_OK
 
     if event == "PostToolUse":
-        spawn_status(ref, "Thinking…", "thinking", 120, title, agent)
+        if agent_spoke_for_itself(payload):
+            # The agent just set its own status; a "Thinking…" now would
+            # overwrite it within a second.
+            take_tool_seq(session_id, tool_use_id)
+            return EXIT_OK
+        # Ordered right after this tool's own status, so a status the agent
+        # set while the tool ran (seq = now) stays newer and the reset comes
+        # back applied:false.
+        pre = take_tool_seq(session_id, tool_use_id)
+        spawn_status(ref, "Thinking…", "thinking", 120, title, agent, seq=(pre + 1) if pre else None)
         return EXIT_OK
 
     if event == "SessionEnd":
         reason = str(payload.get("reason") or "").strip()
         body = "Session ended" + (f" ({reason})" if reason else "")
         client.post_message(ref, body, sender="system", fmt="text", meta={"kind": "session_end"},
-                            title=title, agent=agent)
+                            title=title, agent=agent, activity={"text": "", "seq": time.time_ns()})
         return EXIT_OK
 
     return EXIT_OK
@@ -1684,21 +1979,56 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
     if uuid and state.get("last_posted_uuid") == uuid:
         clear_status(client, ref)
         return EXIT_OK
-    # Posting the reply clears the status line on the server. The key makes a
-    # retry (or a re-run after a lost cache) return the same message.
+    # The last message Claude has heard from the user through this thread:
+    # anything sent after it, while Claude was still working, is owed to
+    # Claude now rather than lost.
+    anchor = state.get("last_reply_id") or state.get("last_message_id") or state.get("last_prompt_id")
+    remote = client.remote_mode()
+    # Posting the reply clears the status line on the server (with a
+    # sequence, so a status still in flight cannot bring it back). The key
+    # makes a retry (or a re-run after a lost cache) return the same message.
     resp = client.post_message(ref, text, meta={"via": "claude-code", "transcript_uuid": uuid or ""},
                                title=title, agent=agent,
-                               client_key=f"stop:{session_id}:{uuid}" if uuid else None)
+                               client_key=f"stop:{session_id}:{uuid}" if uuid else None,
+                               activity={"text": "", "seq": time.time_ns()})
     message = resp.get("message") or {}
     thread = resp.get("thread") or {}
     state.update({"last_posted_uuid": uuid, "thread_id": thread.get("id"), "last_message_id": message.get("id")})
     save_session_state(session_id, state)
 
-    if not client.remote_mode():
+    if not remote:
         return EXIT_OK
     total = env_seconds("FINALECHAT_REPLY_WAIT", 1500)
     if total <= 0:
         return EXIT_OK
+
+    def deliver(replies: list) -> int:
+        body = join_replies(replies)
+        if not body:
+            return EXIT_OK
+        state["last_reply_id"] = replies[-1].get("id")
+        save_session_state(session_id, state)
+        # Claude picks the reply up and starts working again.
+        if status_enabled():
+            try:
+                client.set_activity(ref, "Thinking…", kind="thinking", ttl=120, seq=time.time_ns())
+            except CLIError:
+                pass
+        reason = "The user replied from their phone via Finalechat: " + body
+        sys.stdout.write(json.dumps({"decision": "block", "reason": reason}) + "\n")
+        sys.stdout.flush()
+        return EXIT_OK
+
+    if anchor:
+        try:
+            page = client.list_messages(ref, after=anchor, sender="user", limit=50)
+        except CLIError as err:
+            hook_log(f"pending check failed: {err}")
+            page = {}
+        pending = [] if page.get("anchor_unknown") else [
+            m for m in page.get("messages") or [] if m.get("origin") != "token" and not m.get("deleted")]
+        if pending:
+            return deliver(pending)
 
     def waiting_status() -> None:
         # Refreshed on every poll chunk, so the TTL is just over one chunk: a
@@ -1717,28 +2047,11 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
         return True
 
     waiting_status()
-    reply = wait_for_reply(client, ref, message.get("id"), total, keep_going=keep_going)
-    if reply is None:
+    replies = wait_for_replies(client, ref, message.get("id") or anchor, total, keep_going=keep_going)
+    if not replies:
         clear_status(client, ref)
         return EXIT_OK
-    body = str(reply.get("body") or "").strip()
-    if not body and not message_attachments(reply):
-        return EXIT_OK
-    if not body:
-        body = "(no text)"
-    state["last_reply_id"] = reply.get("id")
-    save_session_state(session_id, state)
-    # Claude picks the reply up and starts working again.
-    if status_enabled():
-        try:
-            client.set_activity(ref, "Thinking…", kind="thinking", ttl=120, seq=time.time_ns())
-        except CLIError:
-            pass
-    reason = f"The user replied from their phone via Finalechat: {body}" + attachment_hint(reply)
-    output = {"decision": "block", "reason": reason}
-    sys.stdout.write(json.dumps(output) + "\n")
-    sys.stdout.flush()
-    return EXIT_OK
+    return deliver(replies)
 
 
 def answer_attachment_hints(client: Client, ref: str, created: list) -> str:
@@ -1818,7 +2131,10 @@ def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, 
     unanswered = []
     for item, question in created:
         remaining = int(deadline - time.monotonic())
-        latest = wait_for_answer(client, question["id"], max(0, remaining), keep_going=client.remote_mode)
+        # Short chunks: a remote-mode switch is noticed within seconds, and the
+        # terminal prompt appears instead of waiting out the whole timeout.
+        latest = wait_for_answer(client, question["id"], max(0, remaining), keep_going=client.remote_mode,
+                                 chunk=HOOK_WAIT_CHUNK)
         if latest.get("status") == "answered":
             answers.append((item, latest))
         else:
@@ -1968,6 +2284,9 @@ def mcp_tools() -> list[dict]:
                              "default": "working", "description": "What sort of activity it is."},
                     "ttl_seconds": {"type": "integer", "default": 45, "minimum": 1, "maximum": 600,
                                     "description": "Seconds until the status lapses unless set again."},
+                    "seq": {"type": "integer", "minimum": 0,
+                            "description": "Ordering for concurrent writers (a nanosecond timestamp); "
+                                           "taken from the clock when omitted."},
                     "thread": thread_prop,
                 },
                 "required": ["text"],
@@ -2144,16 +2463,18 @@ def mcp_call(client: Client, name: str, arguments: dict):
     if name == "finalechat_status":
         text = " ".join(str(arguments.get("text") or "").split())
         target = mcp_target(arguments)
+        # One clock with the hooks and the CLI, so nothing overtakes it.
+        seq = int(arguments.get("seq") or 0) or time.time_ns()
         if not text:
             try:
-                client.clear_activity(target.ref)
+                client.clear_activity(target.ref, seq=seq)
             except APIError as err:
                 if err.status != 404:
                     raise
             return "Status cleared."
         kind = str(arguments.get("kind") or "working")
         ttl = max(1, min(600, int(arguments.get("ttl_seconds") or 45)))
-        client.set_activity(target.ref, text, kind=kind, ttl=ttl, title=target.title, agent=target.agent)
+        client.set_activity(target.ref, text, kind=kind, ttl=ttl, seq=seq, title=target.title, agent=target.agent)
         return f"Status shown: {text} (lapses in {ttl}s or at your next message)"
 
     if name == "finalechat_delete_message":
@@ -2166,12 +2487,15 @@ def mcp_call(client: Client, name: str, arguments: dict):
     if name == "finalechat_wait_for_reply":
         timeout = int(arguments.get("timeout_seconds") or 1800)
         target = mcp_target(arguments)
-        after = latest_message_id(client, target.ref)
-        reply = wait_for_reply(client, target.ref, after, timeout)
-        if reply is None:
+        try:
+            after = latest_message_id(client, target.ref)
+            replies = wait_for_replies(client, target.ref, after, timeout)
+        except APIError as err:
+            raise missing_thread(err, target) from None
+        if not replies:
             return f"No reply within {timeout} seconds."
-        text = f"Reply from the user: {reply.get('body', '') or '(no text)'}"
-        extra, images = mcp_attachment_content(client, [reply])
+        text = "Reply from the user: " + (join_replies(replies) or "(no text)")
+        extra, images = mcp_attachment_content(client, replies)
         if extra:
             text += "\n" + "\n".join(extra)
         return [{"type": "text", "text": text}] + images
@@ -2179,7 +2503,10 @@ def mcp_call(client: Client, name: str, arguments: dict):
     if name == "finalechat_read":
         limit = int(arguments.get("limit") or 20)
         target = mcp_target(arguments)
-        msgs = client.list_messages(target.ref, limit=max(1, min(200, limit))).get("messages") or []
+        try:
+            msgs = client.list_messages(target.ref, limit=max(1, min(200, limit))).get("messages") or []
+        except APIError as err:
+            raise missing_thread(err, target) from None
         if not msgs:
             return "(no messages yet)"
         lines = []
@@ -2420,7 +2747,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="what sort of activity (default working)")
     p.add_argument("--ttl", type=int, metavar="SECS", help="seconds until it lapses unless set again (default 45, max 600)")
     p.add_argument("--clear", action="store_true", help="drop the status now")
-    p.add_argument("--seq", type=int, metavar="N", help="ordering for concurrent writers: a status with a lower N than the live one is ignored")
+    p.add_argument("--seq", type=int, metavar="N", help="ordering for concurrent writers (default: the clock, in nanoseconds): a status "
+                                                        "with a lower N than the live one is ignored; also sequences --clear")
     p.add_argument("--json", action="store_true", help="print the thread as JSON")
     p.set_defaults(func=cmd_status)
 

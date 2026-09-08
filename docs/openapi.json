@@ -1636,6 +1636,10 @@
                       "type": "string",
                       "format": "date-time",
                       "description": "Present on anchorless waits: the instant the server started watching, by its own clock. Pass it back as after_time."
+                    },
+                    "anchor_unknown": {
+                      "type": "boolean",
+                      "description": "Present and true when after named a message the thread does not hold; the page then started from the thread's first message."
                     }
                   },
                   "required": [
@@ -2384,7 +2388,8 @@
                 "pending",
                 "answered",
                 "cancelled",
-                "expired"
+                "expired",
+                "dismissed"
               ]
             }
           },
@@ -2392,11 +2397,9 @@
             "name": "thread_id",
             "in": "query",
             "schema": {
-              "type": "string",
-              "format": "uuid",
-              "description": "UUID."
+              "type": "string"
             },
-            "description": "Thread UUID (not an ext: reference)."
+            "description": "Thread UUID or ext:<external_id>."
           },
           {
             "name": "limit",
@@ -3473,7 +3476,7 @@
                 "schema": {
                   "type": "string"
                 },
-                "description": "private, max-age=31536000, immutable"
+                "description": "private, no-cache"
               }
             },
             "content": {
@@ -3606,7 +3609,7 @@
                 "schema": {
                   "type": "string"
                 },
-                "description": "private, max-age=31536000, immutable"
+                "description": "private, no-cache"
               }
             },
             "content": {
@@ -3715,7 +3718,8 @@
                   "internal_error",
                   "method_not_allowed",
                   "storage_unavailable",
-                  "attachments_disabled"
+                  "attachments_disabled",
+                  "busy"
                 ]
               },
               "message": {
@@ -3861,7 +3865,7 @@
           },
           "attention": {
             "type": "integer",
-            "description": "Active, unmuted threads with a pending question or unread agent messages; the app badge."
+            "description": "Threads that need the user (a pending question or unread messages; archived and muted threads left out). The app's badge."
           }
         },
         "example": {
@@ -4082,7 +4086,7 @@
           },
           "deleted": {
             "type": "boolean",
-            "description": "True on a tombstone: the message was deleted; id and position are kept so anchors resolve. Only present on catch-up pages (after=<id> without a sender filter)."
+            "description": "True on a tombstone: the message was deleted and only its id and position remain. Only on catch-up pages (after=<id> without a sender filter)."
           },
           "deleted_at": {
             "type": "string",

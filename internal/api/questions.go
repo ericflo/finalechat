@@ -59,11 +59,13 @@ func (req *questionRequest) validate() (store.QuestionInput, error) {
 		if o.Label == "" {
 			return in, errValidation("options[%d].label is required.", i)
 		}
-		if len(o.Label) > 200 {
-			return in, errValidation("options[%d].label must be at most 200 characters.", i)
+		// Characters, as documented and as the app measures them; bytes
+		// would reject a label of 200 accented or CJK characters.
+		if !utf8.ValidString(o.Label) || utf8.RuneCountInString(o.Label) > 200 {
+			return in, errValidation("options[%d].label must be valid UTF-8 of at most 200 characters.", i)
 		}
-		if len(o.Description) > 1000 {
-			return in, errValidation("options[%d].description must be at most 1000 characters.", i)
+		if !utf8.ValidString(o.Description) || utf8.RuneCountInString(o.Description) > 1000 {
+			return in, errValidation("options[%d].description must be valid UTF-8 of at most 1000 characters.", i)
 		}
 		if seen[o.Label] {
 			return in, errValidation("options[%d].label %q is duplicated.", i, o.Label)
@@ -96,7 +98,7 @@ func (req *questionRequest) validate() (store.QuestionInput, error) {
 	}
 	in.Meta = meta
 	if req.Activity != nil {
-		if in.Activity, err = parseActivity(*req.Activity); err != nil {
+		if in.Activity, in.ClearSeq, err = parseActivity(*req.Activity); err != nil {
 			return in, err
 		}
 	}
@@ -204,9 +206,14 @@ func (s *Server) notifyQuestion(thread *store.Thread, q *store.Question) {
 		return
 	}
 	badge := s.badge(context.Background(), thread.UserID)
-	options := make([]string, 0, len(q.Options))
-	for _, o := range q.Options {
-		options = append(options, o.Label)
+	// Notification actions fit two or three short choices; a longer list is
+	// answered in the app, and a long list would push the payload past the
+	// one record a push service accepts.
+	var options []string
+	if len(q.Options) <= 3 {
+		for _, o := range q.Options {
+			options = append(options, truncateRunes(o.Label, 60))
+		}
 	}
 	s.push.Send(thread.UserID, push.Notification{
 		Type:       "question",
@@ -220,6 +227,15 @@ func (s *Server) notifyQuestion(thread *store.Thread, q *store.Question) {
 		Important:  true,
 		Badge:      badge,
 	})
+}
+
+// truncateRunes cuts s to at most n characters, marking the cut.
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:n-1]) + "…"
 }
 
 // GET /api/v1/questions/{id}

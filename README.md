@@ -75,7 +75,8 @@ try attachments without B2.
 | `FINALECHAT_B2_KEY_ID` / `FINALECHAT_B2_KEY` / `FINALECHAT_B2_BUCKET` | unset | Backblaze B2 bucket-scoped key for attachments; attachments are disabled without them |
 | `FINALECHAT_BLOB_STORE` | `b2` when keys are set, else `disabled` | `memory` keeps attachments in process memory for local development |
 | `FINALECHAT_SECURE_COOKIES` | `true` | Set `false` for plain-HTTP development |
-| `FINALECHAT_TRUST_PROXY` | `true` | Honour `X-Forwarded-For` |
+| `FINALECHAT_TRUST_PROXY` | `true` | Take the client address from `X-Forwarded-For` (set `false` when the server is reached directly) |
+| `FINALECHAT_TRUSTED_PROXY_HOPS` | `1` | How many trusted proxies append to `X-Forwarded-For`; the client is the Nth entry from the right, and `X-Real-Ip` is honoured only at `1` |
 | `FINALECHAT_SESSION_TTL` | `2160h` | Sliding browser session lifetime |
 | `FINALECHAT_SHUTDOWN_DELAY` | `3s` | How long `/readyz` fails before connections close on shutdown, so a load balancer drains first |
 | `FINALECHAT_LOG_JSON` / `FINALECHAT_LOG_LEVEL` | `true` / `info` | Logging |

@@ -89,6 +89,8 @@ type QuestionInput struct {
 	// Activity, when set, becomes the thread's status line (for an agent
 	// that keeps working while it waits); otherwise the status is cleared.
 	Activity *ActivityInput
+	// ClearSeq is the sequence the implicit clear records; see MessageInput.
+	ClearSeq int64
 }
 
 // CreateQuestion records a question and bumps the thread. created is false
@@ -136,11 +138,14 @@ func (s *Store) CreateQuestion(ctx context.Context, userID, threadID uuid.UUID, 
 			return err
 		}
 		created = true
-		activity := activityCleared
+		var activity string
 		args := []any{threadID, userID, Preview(in.Prompt), q.CreatedAt}
 		if in.Activity != nil {
 			args = append(args, in.Activity.Text, in.Activity.Kind, in.Activity.TTL, in.Activity.Seq)
 			activity = activitySet("$5", "$6", "$7", "$8")
+		} else {
+			args = append(args, in.ClearSeq)
+			activity = activityCleared("$5")
 		}
 		thread, err = scanThread(tx.QueryRow(ctx, `UPDATE threads t SET preview = $3, preview_sender = 'question', last_activity_at = $4, updated_at = now(), archived_at = NULL, `+activity+`
 			WHERE t.id = $1 AND t.user_id = $2 RETURNING `+threadColumns, args...))

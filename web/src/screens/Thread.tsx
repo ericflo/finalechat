@@ -44,6 +44,8 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   const [unseen, setUnseen] = useState(0);
   const lastCount = useRef(0);
   const lastTail = useRef<string | null>(null);
+  // Keyed to the oldest message, not the oldest item: an old question can
+  // sit above the first loaded message and would otherwise hold the key.
   const restore = useRef<{ height: number; top: number; head: string | null } | null>(null);
   // Set by the composer before a send: your own message always comes into
   // view, however far up you had scrolled.
@@ -77,8 +79,14 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   const items = useMemo<Item[]>(() => {
     const out: Item[] = [];
     // The answer to a question is shown on its card; the transcript copy the
-    // server keeps for agents would only repeat it here.
-    for (const m of messages ?? []) if (m.meta.kind !== "answer") out.push({ kind: "message", at: m.created_at, m });
+    // server keeps for agents would only repeat it here. An answer row whose
+    // question was not answered here (an agent mirroring a decision made in
+    // its terminal after withdrawing the card) is a reply worth seeing.
+    const answered = new Set((questions ?? []).filter((q) => q.status === "answered").map((q) => q.id));
+    for (const m of messages ?? []) {
+      const folded = m.meta.kind === "answer" && typeof m.meta.question_id === "string" && answered.has(m.meta.question_id);
+      if (!folded) out.push({ kind: "message", at: m.created_at, m });
+    }
     for (const q of questions ?? []) out.push({ kind: "question", at: q.created_at, q });
     out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
     return out;
@@ -102,7 +110,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   useLayoutEffect(() => {
     if (!loaded) return;
     const el = document.scrollingElement;
-    const head = items.length ? itemKey(items[0] as Item) : null;
+    const head = messages?.[0]?.id ?? null;
     // The anchor restore belongs to the prepend: only spend it when the first
     // item changed. A live message that lands first is handled as an append
     // below and the restore waits for the history page.
@@ -165,13 +173,15 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
     const el = document.scrollingElement;
     if (!el || loadingOlder) return;
     setLoadingOlder(true);
-    restore.current = { height: el.scrollHeight, top: el.scrollTop, head: items.length ? itemKey(items[0] as Item) : null };
+    restore.current = { height: el.scrollHeight, top: el.scrollTop, head: messages?.[0]?.id ?? null };
     try {
       await loadOlderMessages(id);
     } catch {
-      restore.current = null;
       toast("Could not load older messages", "error");
     } finally {
+      // An anchor the prepend did not spend (nothing older came) must not
+      // be spent by a later structural change.
+      restore.current = null;
       setLoadingOlder(false);
     }
   };
@@ -216,9 +226,9 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
     <div className="page thread-page">
       <TopBar
         title={
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, maxWidth: "100%" }}>
             {thread && <Avatar name={thread.agent || thread.title || "?"} small />}
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
+            <span style={{ minWidth: 0, flex: "0 1 auto", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
             {thread?.muted && <IconBellOff style={{ width: 14, height: 14, color: "var(--text-3)", flex: "none" }} />}
           </span>
         }
@@ -298,7 +308,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
       )}
       <Composer
         threadId={id}
-        ended={thread ? isEnded(thread) : false}
+        ended={sessionEnded(messages, questions, thread)}
         onSending={(sending) => {
           justSent.current = sending;
         }}
@@ -390,9 +400,23 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   );
 }
 
-/** A session that has said goodbye: the composer says so instead of pretending. */
-function isEnded(t: Thread): boolean {
-  return t.preview_sender === "system" && /session (ended|finished|stopped|was interrupted)|finished this session/i.test(t.preview);
+/** A session that has said goodbye: the composer says so instead of pretending.
+ * The agent's own `session_end` marker decides, and any later agent message
+ * or question lifts it; a reply from the user does not. Threads from before
+ * the marker existed fall back to reading the preview. */
+function sessionEnded(messages: Message[] | undefined, questions: Question[] | undefined, t: Thread | undefined): boolean {
+  let marker: Message | null = null;
+  for (const m of messages ?? []) {
+    if (m.sender === "system" && (m.meta.kind === "session_end" || m.meta.kind === "session_start")) marker = m;
+  }
+  if (marker) {
+    if (marker.meta.kind !== "session_end") return false;
+    const since = marker.created_at;
+    if ((messages ?? []).some((m) => m.sender !== "user" && m.created_at > since)) return false;
+    if ((questions ?? []).some((q) => q.created_at > since)) return false;
+    return true;
+  }
+  return !!t && t.preview_sender === "system" && /session (ended|finished|stopped|was interrupted)|finished this session/i.test(t.preview);
 }
 
 // Reserved meta keys agents may set; rendered as compact chips under the title.
@@ -513,17 +537,21 @@ const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, onOpen
 /** The agent's live status: "running tests…" with a timer once it has taken a while. */
 function ActivityBubble({ a }: { a: Activity }) {
   const elapsed = useElapsed(a.since);
+  // Only the text is live: the timer ticks every second and would otherwise
+  // be re-announced by a screen reader for as long as the agent works.
   return (
-    <div className="msg agent activity-msg" role="status" aria-live="polite">
+    <div className="msg agent activity-msg">
       <div className={`bubble activity ${a.kind}`}>
         <span className="act-dots" aria-hidden>
           <i />
           <i />
           <i />
         </span>
-        <span className="act-text">{a.text}</span>
+        <span className="act-text" role="status" aria-live="polite">
+          {a.text}
+        </span>
         {elapsed >= 15 && (
-          <span className="act-time" title="How long the agent has been busy">
+          <span className="act-time" title="How long the agent has been busy" aria-hidden="true">
             {formatElapsed(elapsed)}
           </span>
         )}
@@ -685,7 +713,7 @@ function Composer({ threadId, ended, onSending }: { threadId: string; ended: boo
       }}
     >
       <UploadTray items={uploads} onRemove={removeUpload} />
-      {ended && <div className="composer-note">This session has ended. Your reply is kept for the agent if it resumes.</div>}
+      {ended && <div className="composer-note">This session has ended. Your reply is kept here for the next one.</div>}
       <form
         className="composer"
         onSubmit={(e) => {

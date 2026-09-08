@@ -587,6 +587,85 @@ func TestDocumentsAndStatic(t *testing.T) {
 	if res.Request.URL.Path != "/api/" {
 		t.Fatalf("expected /api to redirect to /api/, ended at %s", res.Request.URL.Path)
 	}
+	// Every document a browser can render carries the app's policy, the
+	// shell served at /api/ included; API responses do not.
+	csp := func(path, accept string) string {
+		req, _ := http.NewRequest("GET", testSrv.URL+path, nil)
+		req.Header.Set("Accept", accept)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.Header.Get("Content-Security-Policy")
+	}
+	root := csp("/", "text/html")
+	if root == "" || !strings.Contains(root, "default-src 'self'") {
+		t.Fatalf("app shell without a CSP: %q", root)
+	}
+	for _, path := range []string{"/api/", "/t/01a07e1e-0000-7000-8000-000000000000", "/AGENTS.md"} {
+		if got := csp(path, "text/html"); got != root {
+			t.Errorf("%s: CSP %q differs from the shell's", path, got)
+		}
+	}
+	if got := csp("/api/v1/auth/status", "application/json"); got != "" {
+		t.Errorf("API response carries the app CSP: %q", got)
+	}
+}
+
+// A mirrored terminal prompt (a "user" message posted by an agent) must not
+// pull a thread the user archived back into the inbox; only the user's own
+// reply from the app does.
+func TestMirroredPromptKeepsArchive(t *testing.T) {
+	b, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "arch:1", "title": "archive"}), "thread"), "id")
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "hello"})
+	b.must(http.StatusOK, "PATCH", "/api/v1/threads/"+thread, map[string]any{"archived": true})
+	out := a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "ls", "sender": "user", "notify": false})
+	if sub(out, "thread")["archived_at"] == nil {
+		t.Fatalf("a token-origin user message un-archived the thread: %v", out)
+	}
+	out = b.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "back"})
+	if sub(out, "thread")["archived_at"] != nil {
+		t.Fatalf("the user's own reply from the app should un-archive: %v", out)
+	}
+}
+
+// Option labels are bounded in characters, as documented, not bytes.
+func TestQuestionOptionLimitsCountCharacters(t *testing.T) {
+	_, a := setup(t)
+	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "runes:1"}), "thread"), "id")
+	ok := strings.Repeat("é", 199) + "…" // 200 characters, 400 bytes
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/questions", map[string]any{"prompt": "Pick", "options": []map[string]any{{"label": ok}}})
+	if status, out := a.do("POST", "/api/v1/threads/"+thread+"/questions", map[string]any{"prompt": "Pick", "options": []map[string]any{{"label": strings.Repeat("a", 201)}}}); status != http.StatusUnprocessableEntity {
+		t.Fatalf("201 characters should be rejected, got %d %v", status, out)
+	}
+}
+
+// An anchor the thread no longer holds (a thread deleted from the app and
+// recreated by the agent under the same ext: id) pages from the start and
+// says so, instead of matching nothing forever.
+func TestUnknownAnchorPagesFromTheStart(t *testing.T) {
+	b, a := setup(t)
+	first := a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:recreate:1/messages", map[string]any{"body": "first life", "title": "recreate"})
+	old := str(sub(first, "message"), "id")
+	oldThread := str(sub(first, "thread"), "id")
+	b.must(http.StatusCreated, "POST", "/api/v1/threads/"+oldThread+"/messages", map[string]any{"body": "old reply"})
+	b.must(http.StatusOK, "DELETE", "/api/v1/threads/"+oldThread, nil)
+	second := a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:recreate:1/messages", map[string]any{"body": "second life", "title": "recreate"})
+	newThread := str(sub(second, "thread"), "id")
+	if newThread == oldThread {
+		t.Fatal("expected a new thread after the delete")
+	}
+	b.must(http.StatusCreated, "POST", "/api/v1/threads/"+newThread+"/messages", map[string]any{"body": "fresh reply"})
+	out := a.must(http.StatusOK, "GET", "/api/v1/threads/ext:recreate:1/messages?after="+old+"&sender=user", nil)
+	page := out["messages"].([]any)
+	if out["anchor_unknown"] != true || len(page) != 1 || str(page[0].(map[string]any), "body") != "fresh reply" {
+		t.Fatalf("an unknown anchor should page from the start and say so, got %v", out)
+	}
+	if out := a.must(http.StatusOK, "GET", "/api/v1/threads/ext:recreate:1/messages?after="+str(page[0].(map[string]any), "id")+"&sender=user&wait=1", nil); out["anchor_unknown"] != nil || len(out["messages"].([]any)) != 0 {
+		t.Fatalf("a known anchor must not be flagged: %v", out)
+	}
 }
 
 func TestAttachments(t *testing.T) {
@@ -1214,6 +1293,80 @@ func TestRoutesMatchDocs(t *testing.T) {
 			t.Errorf("docs/API.md does not mention %s", path)
 		}
 	}
+
+	// Enumerations the app and agents branch on stay in step with the code:
+	// every error code the handlers emit, and every question status.
+	var full struct {
+		Paths map[string]map[string]struct {
+			Parameters []struct {
+				Name   string `json:"name"`
+				Schema struct {
+					Enum []string `json:"enum"`
+				} `json:"schema"`
+			} `json:"parameters"`
+		} `json:"paths"`
+		Components struct {
+			Schemas struct {
+				Error struct {
+					Properties struct {
+						Error struct {
+							Properties struct {
+								Code struct {
+									Enum []string `json:"enum"`
+								} `json:"code"`
+							} `json:"properties"`
+						} `json:"error"`
+					} `json:"properties"`
+				} `json:"Error"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(raw, &full); err != nil {
+		t.Fatal(err)
+	}
+	documentedCodes := map[string]bool{}
+	for _, c := range full.Components.Schemas.Error.Properties.Error.Properties.Code.Enum {
+		documentedCodes[c] = true
+	}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	codeRe := regexp.MustCompile(`Code:\s*"([a-z_]+)"`)
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		body, err := os.ReadFile(e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range codeRe.FindAllStringSubmatch(string(body), -1) {
+			if !documentedCodes[m[1]] {
+				t.Errorf("%s emits error code %q, which docs/openapi.json's Error enum lacks", e.Name(), m[1])
+			}
+		}
+	}
+	want := map[string]bool{store.QuestionPending: true, store.QuestionAnswered: true, store.QuestionCancelled: true, store.QuestionExpired: true, store.QuestionDismissed: true}
+	for _, prm := range full.Paths["/questions"]["get"].Parameters {
+		if prm.Name != "status" {
+			continue
+		}
+		got := map[string]bool{}
+		for _, v := range prm.Schema.Enum {
+			got[v] = true
+		}
+		for v := range want {
+			if !got[v] {
+				t.Errorf("docs/openapi.json GET /questions status enum lacks %q", v)
+			}
+		}
+		for v := range got {
+			if !want[v] {
+				t.Errorf("docs/openapi.json GET /questions status enum has %q, which the store does not know", v)
+			}
+		}
+	}
 }
 
 func TestDeleteMessage(t *testing.T) {
@@ -1254,12 +1407,13 @@ func TestDeleteMessage(t *testing.T) {
 	}
 
 	// The deleted id still works as an anchor, so a device or agent that
-	// held it keeps receiving what came after.
+	// held it keeps receiving what came after; the device also learns that
+	// the anchor itself is gone.
 	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "after the delete"})
 	b.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "user reply after the delete"})
 	page := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages?after="+str(leaked, "id"), nil)["messages"].([]any)
-	if len(page) != 2 || str(page[0].(map[string]any), "body") != "after the delete" {
-		t.Fatalf("anchor on a deleted message should still page forward, got %v", page)
+	if len(page) != 3 || page[0].(map[string]any)["deleted"] != true || str(page[0].(map[string]any), "id") != str(leaked, "id") || str(page[1].(map[string]any), "body") != "after the delete" {
+		t.Fatalf("anchor on a deleted message should page forward and carry its own tombstone, got %v", page)
 	}
 	agentView := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages?after="+str(leaked, "id")+"&sender=user", nil)["messages"].([]any)
 	if len(agentView) != 1 || str(agentView[0].(map[string]any), "body") != "user reply after the delete" {
@@ -1286,6 +1440,20 @@ func TestDeleteMessage(t *testing.T) {
 		if m.(map[string]any)["deleted"] == true {
 			t.Fatalf("a normal page must not show tombstones: %v", m)
 		}
+	}
+	// A device anchored on the newest message holds the older ones too, so
+	// a catch-up page carries the tombstone of an older message deleted
+	// since, not only of messages that came after the anchor.
+	all := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages", nil)["messages"].([]any)
+	newest := all[len(all)-1].(map[string]any)
+	oldest := all[0].(map[string]any)
+	a.must(http.StatusOK, "DELETE", "/api/v1/messages/"+str(oldest, "id"), nil)
+	catchup = a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages?after="+str(newest, "id"), nil)["messages"].([]any)
+	if len(catchup) != 1 || str(catchup[0].(map[string]any), "id") != str(oldest, "id") || catchup[0].(map[string]any)["deleted"] != true {
+		t.Fatalf("catch-up page should carry the older tombstone and nothing else, got %v", catchup)
+	}
+	if got := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages?after="+str(newest, "id")+"&sender=user", nil)["messages"].([]any); len(got) != 0 {
+		t.Fatalf("a filtered page never shows tombstones, got %v", got)
 	}
 	// The stored preview is the cleaned survivor, never a raw body.
 	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "## Heading\n\n**bold** survivor"})
@@ -1399,5 +1567,31 @@ func TestAttentionAndClearedSeq(t *testing.T) {
 	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+thread+"/activity?seq=400", nil)
 	if out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "plain"}); out["applied"] != true {
 		t.Fatalf("an unsequenced write should still apply: %v", out)
+	}
+
+	// The clear an agent's post implies records a watermark too, when the
+	// post carries a blank sequenced activity: the path the hooks use.
+	a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "Running tests", "seq": 500})
+	out = a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/messages", map[string]any{"body": "Tests are green.", "activity": map[string]any{"text": "", "seq": 600}})
+	if sub(out, "thread")["activity"] != nil {
+		t.Fatalf("an agent post should clear the status: %v", out)
+	}
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "Thinking…", "seq": 550})
+	if out["applied"] != false || sub(out, "thread")["activity"] != nil {
+		t.Fatalf("a straggler older than the post's clear must be ignored: %v", out)
+	}
+	// A question's implicit clear does the same.
+	a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "Deciding", "seq": 700})
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+thread+"/questions", map[string]any{"prompt": "Ship?", "activity": map[string]any{"text": "", "seq": 800}})
+	if out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "late", "seq": 750}); out["applied"] != false {
+		t.Fatalf("a straggler older than the question's clear must be ignored: %v", out)
+	}
+	// The watermark is a straggler guard, not a permanent pin: a clear from
+	// a faster clock stops rejecting writes after ten minutes.
+	if _, err := testPool.Exec(context.Background(), "UPDATE threads SET activity_cleared_at = now() - interval '11 minutes' WHERE id = $1", thread); err != nil {
+		t.Fatal(err)
+	}
+	if out := a.must(http.StatusOK, "POST", "/api/v1/threads/"+thread+"/activity", map[string]any{"text": "much later", "seq": 760}); out["applied"] != true {
+		t.Fatalf("an old clear must not pin the status line shut: %v", out)
 	}
 }

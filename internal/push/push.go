@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/google/uuid"
@@ -94,7 +96,7 @@ func (s *Sender) Send(userID uuid.UUID, n Notification) {
 		if len(subs) == 0 {
 			return
 		}
-		payload, err := json.Marshal(n)
+		payload, err := encode(n)
 		if err != nil {
 			s.log.Error("marshal push payload", "err", err)
 			return
@@ -164,6 +166,11 @@ func (s *Sender) attempt(ctx context.Context, sub *store.PushSubscription, paylo
 		Urgency:         urgency,
 	})
 	if err != nil {
+		if errors.Is(err, webpush.ErrMaxPadExceeded) {
+			// Deterministic: encrypting it again three times changes nothing.
+			s.log.Error("push payload too large for one record", "endpoint", shorten(sub.Endpoint), "bytes", len(payload))
+			return rejected, 0
+		}
 		s.log.Warn("push delivery failed", "endpoint", shorten(sub.Endpoint), "err", err)
 		return retry, 0
 	}
@@ -193,6 +200,35 @@ func (s *Sender) attempt(ctx context.Context, sub *store.PushSubscription, paylo
 		}
 		return rejected, 0
 	}
+}
+
+// maxPayload keeps a notification inside the single 4096-byte record push
+// services accept; the encryption adds about a hundred bytes of overhead.
+const maxPayload = 3900
+
+// encode marshals a notification, shedding the option actions and then
+// shortening the body until it fits one record. A question with twenty long
+// options still arrives; it is answered in the app rather than from the
+// notification's buttons.
+func encode(n Notification) ([]byte, error) {
+	payload, err := json.Marshal(n)
+	if err != nil || len(payload) <= maxPayload {
+		return payload, err
+	}
+	n.Options = nil
+	if payload, err = json.Marshal(n); err != nil || len(payload) <= maxPayload {
+		return payload, err
+	}
+	n.Body = truncateRunes(n.Body, 120)
+	n.Title = truncateRunes(n.Title, 80)
+	return json.Marshal(n)
+}
+
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n-1]) + "…"
 }
 
 // Wait blocks until in-flight deliveries finish, bounded by the context.

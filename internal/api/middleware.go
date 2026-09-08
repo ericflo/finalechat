@@ -134,6 +134,12 @@ func truncateUA(ua string) string {
 	return ua
 }
 
+// appCSP is the policy for the app shell and every other document the
+// server renders itself. The app is a self-contained bundle: no third-party
+// scripts, styles or connections. Inline style attributes come from React;
+// images may come from markdown posted by agents.
+const appCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+
 func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
@@ -141,11 +147,11 @@ func (s *Server) securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-		if !strings.HasPrefix(r.URL.Path, "/api/") {
-			// The app is a self-contained bundle: no third-party scripts, styles
-			// or connections. Inline style attributes come from React; images
-			// may come from markdown posted by agents.
-			h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'")
+		// API responses are JSON, or attachments that set their own sandbox
+		// policy; everything else, including the app shell served at /api/
+		// to a browser, gets the app's policy.
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
+			h.Set("Content-Security-Policy", appCSP)
 		}
 		if s.cfg.SecureCookies {
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")

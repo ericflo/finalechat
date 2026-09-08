@@ -142,8 +142,9 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var activity *store.ActivityInput
+	var clearSeq int64
 	if req.Activity != nil {
-		if activity, err = parseActivity(*req.Activity); err != nil {
+		if activity, clearSeq, err = parseActivity(*req.Activity); err != nil {
 			writeError(w, err)
 			return
 		}
@@ -217,7 +218,7 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	msg, thread, created, err := s.store.CreateMessage(r.Context(), p.user.ID, thread.ID, store.MessageInput{
 		Sender: req.Sender, Body: req.Body, Format: req.Format, Importance: req.Importance, Meta: meta, AttachmentIDs: attachmentIDs,
 		Origin: origin, MarkRead: req.Sender == store.SenderUser && origin == store.OriginSession,
-		ClientKey: req.ClientKey, Activity: activity,
+		ClientKey: req.ClientKey, Activity: activity, ClearSeq: clearSeq,
 	})
 	if errors.Is(err, store.ErrNotFound) && len(attachmentIDs) > 0 {
 		writeError(w, errValidation("One or more attachments are unknown, belong to another thread, or are already attached."))
@@ -405,7 +406,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	deadline := time.Now().Add(wait)
 	for {
-		msgs, hasMore, err := s.store.ListMessages(r.Context(), p.user.ID, thread.ID, page)
+		msgs, hasMore, anchorUnknown, err := s.store.ListMessages(r.Context(), p.user.ID, thread.ID, page)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -413,6 +414,11 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 		if len(msgs) > 0 || wait == 0 || time.Now().After(deadline) {
 			decorate(msgs...)
 			resp := map[string]any{"messages": msgs, "has_more": hasMore, "thread_id": thread.ID}
+			if anchorUnknown {
+				// The anchor is not in this thread (deleted and recreated
+				// under the same ext: id, say); the page ran from the start.
+				resp["anchor_unknown"] = true
+			}
 			if page.AfterTime != nil && len(msgs) == 0 {
 				// Only when nothing came back: once messages exist the caller
 				// continues from the last message id, not from this instant.
@@ -425,6 +431,9 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) {
 			return ev.Type == bus.MessageCreated && ev.ThreadID == thread.ID.String()
 		}) {
 			resp := map[string]any{"messages": []any{}, "has_more": false, "thread_id": thread.ID, "timed_out": true}
+			if anchorUnknown {
+				resp["anchor_unknown"] = true
+			}
 			if page.AfterTime != nil {
 				// Pass this back as after_time so the next wait continues from
 				// the same instant instead of re-anchoring on "now".

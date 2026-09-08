@@ -16,6 +16,14 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
   const [confirmDismiss, setConfirmDismiss] = useState(false);
   const [allOptions, setAllOptions] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const dismissRef = useRef<HTMLButtonElement>(null);
+  const keepRef = useRef<HTMLButtonElement>(null);
+  // Focus follows the confirmation in and back out, so a keyboard or screen
+  // reader user is never dropped on <body>.
+  useEffect(() => {
+    if (confirmDismiss) keepRef.current?.focus();
+    else if (document.activeElement === document.body) dismissRef.current?.focus({ preventScroll: true });
+  }, [confirmDismiss]);
   const expiresAt = q.expires_at ? new Date(q.expires_at).getTime() : 0;
   // Tick every second in the last ten minutes, every half minute otherwise.
   const now = useNow(q.status === "pending" && expiresAt && expiresAt - Date.now() < 10 * 60 * 1000 ? 1000 : 30000);
@@ -159,17 +167,23 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
                 </span>
               )}
               <span className="spacer" />
-              {!confirmDismiss && (
-                <button type="button" className="btn ghost small" disabled={busy} onClick={() => setConfirmDismiss(true)}>
-                  Dismiss
-                </button>
-              )}
+              <button
+                ref={dismissRef}
+                type="button"
+                className="btn ghost small"
+                disabled={busy || confirmDismiss}
+                aria-expanded={confirmDismiss}
+                aria-controls={`q-confirm-${q.id}`}
+                onClick={() => setConfirmDismiss(true)}
+              >
+                Dismiss
+              </button>
             </div>
             {confirmDismiss && (
-              <div className="q-confirm" role="group" aria-label="Confirm dismissal">
-                <span>Dismiss without answering? The agent carries on without you.</span>
+              <div className="q-confirm" id={`q-confirm-${q.id}`} role="group" aria-labelledby={`q-confirm-text-${q.id}`}>
+                <span id={`q-confirm-text-${q.id}`}>Dismiss without answering? The agent carries on without you.</span>
                 <div className="q-confirm-actions">
-                  <button type="button" className="btn small" onClick={() => setConfirmDismiss(false)}>
+                  <button ref={keepRef} type="button" className="btn small" onClick={() => setConfirmDismiss(false)}>
                     Keep
                   </button>
                   <button type="button" className="btn small danger" disabled={busy} onClick={dismiss}>

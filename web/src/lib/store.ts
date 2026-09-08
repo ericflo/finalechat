@@ -31,6 +31,8 @@ export interface State {
   archivedLoaded: boolean;
   inboxLoaded: boolean;
   inboxCursor: string | null;
+  /** The user paged to the end of the inbox; a refresh must not offer "Load older" again. */
+  inboxExhausted: boolean;
   messages: Record<string, Message[]>;
   threadQuestions: Record<string, Question[]>;
   hasOlder: Record<string, boolean>;
@@ -106,6 +108,7 @@ let state: State = {
   archivedLoaded: false,
   inboxLoaded: !!snapshot,
   inboxCursor: null,
+  inboxExhausted: false,
   messages: {},
   threadQuestions: {},
   hasOlder: {},
@@ -148,14 +151,19 @@ export function useStore<T>(selector: (s: State) => T): T {
 
 let persistTimer: number | undefined;
 let lastSnapshot = "";
+/** Set only by a real sign-out (the user's, or a 401): the one case where
+ * the on-device snapshot is dropped. A server having a bad minute is not it. */
+let signedOut = false;
 function persistSnapshot() {
   if (typeof localStorage === "undefined") return;
   window.clearTimeout(persistTimer);
   persistTimer = window.setTimeout(() => {
     try {
       if (!state.user) {
-        lastSnapshot = "";
-        localStorage.removeItem(snapshotKey);
+        if (signedOut) {
+          lastSnapshot = "";
+          localStorage.removeItem(snapshotKey);
+        }
         return;
       }
       const threads = Object.values(state.threads)
@@ -212,34 +220,45 @@ function isTransport(err: unknown): boolean {
 // ---------------------------------------------------------------------------
 // Session
 
+/** The server said the session is gone: paint the login form and forget the device's copy. */
+function markSignedOut() {
+  signedOut = true;
+  set({ user: false, fromSnapshot: false, threads: {}, inboxLoaded: false, inboxExhausted: false });
+}
+
 export async function bootstrap(): Promise<void> {
   try {
     const status = await api.authStatus();
     set({ signup: status.signup, pushEnabled: status.push_enabled, attachmentsEnabled: status.attachments_enabled, version: status.version });
     if (!status.authenticated || !status.user) {
-      set({ user: false, fromSnapshot: false, threads: {}, inboxLoaded: false });
+      markSignedOut();
       return;
     }
+    signedOut = false;
     set({ user: status.user, settings: status.user.settings });
     await loadInbox();
     connect();
     void resyncPushSubscription();
   } catch (err) {
-    if (!isTransport(err)) {
-      set({ user: false, fromSnapshot: false });
-      toast(errorText(err), "error");
+    if (err instanceof APIError && err.status === 401) {
+      markSignedOut();
       return;
     }
-    // No network. Keep whatever the device remembers and keep trying.
+    // No network, or a server having a bad minute (a 503 during a rollout,
+    // a 500 while the database blips): neither means the user is signed
+    // out. Keep whatever the device remembers, say so, and keep trying; the
+    // stream's reconnect backoff does the retrying and refreshes on success.
     if (state.user === null) set({ user: snapshot ? snapshot.user : false });
     set({ connection: "offline" });
     if (state.user) connect();
-    else toast("You're offline. Sign in when you're back online.", "error");
+    else if (isTransport(err)) toast("You're offline. Sign in when you're back online.", "error");
+    else toast(errorText(err), "error");
   }
 }
 
 export async function signIn(email: string, password: string) {
   const { user } = await api.login({ email, password });
+  signedOut = false;
   set({ user, settings: user.settings, fromSnapshot: false });
   await loadInbox();
   connect();
@@ -247,6 +266,7 @@ export async function signIn(email: string, password: string) {
 
 export async function register(input: { email: string; password: string; display_name?: string; invite_code?: string }) {
   const { user } = await api.register(input);
+  signedOut = false;
   set({ user, settings: user.settings, signup: "closed", fromSnapshot: false });
   await loadInbox();
   connect();
@@ -267,6 +287,7 @@ export async function signOut(): Promise<boolean> {
   }
   disconnect();
   await forgetPushSubscription();
+  signedOut = true;
   set({
     user: false,
     fromSnapshot: false,
@@ -281,6 +302,7 @@ export async function signOut(): Promise<boolean> {
     drafts: {},
     pending: [],
     inboxLoaded: false,
+    inboxExhausted: false,
     archivedLoaded: false,
     searchHits: null,
     counts: emptyCounts,
@@ -322,45 +344,80 @@ function applyCounts(counts: Counts) {
   setBadge(counts.attention ?? counts.pending_questions + counts.unread_threads);
 }
 
-/** Stores threads, keeping the status line the app already knows to be newer
- * than what a slower REST response carries. */
-function withKnownActivity(s: State, t: Thread): Thread {
-  const seen = s.activitySeen[t.id];
-  if (!seen) return t;
-  if (t.activity && new Date(t.activity.at).getTime() < seen) return { ...t, activity: s.threads[t.id]?.activity ?? null };
-  if (!t.activity && s.threads[t.id]?.activity && new Date(s.threads[t.id]!.activity!.at).getTime() > seen) return { ...t, activity: s.threads[t.id]!.activity };
-  return t;
+/** Where a thread payload came from. Events are post-commit and in stream
+ * order, so their status is the truth; a REST response was computed at some
+ * point after the request was issued, so its status is compared by the
+ * database clock against the one the app holds. */
+type Source = { kind: "event"; at?: string } | { kind: "rest"; issuedAt: number };
+
+/** A REST source stamped now; call it before the fetch it describes. */
+function rest(): Source {
+  return { kind: "rest", issuedAt: serverNow() };
 }
 
-function upsertThreads(list: Thread[]) {
+/** Merges a payload's status line with the held one and says what the
+ * watermark (the DB time of the newest status seen) should become. */
+function mergeActivity(s: State, t: Thread, source: Source): { thread: Thread; seen?: number } {
+  const held = s.threads[t.id]?.activity ?? null;
+  const heldAt = held ? new Date(held.at).getTime() : 0;
+  if (source.kind === "event") {
+    const seen = t.activity ? new Date(t.activity.at).getTime() : source.at ? new Date(source.at).getTime() : undefined;
+    return { thread: t, seen };
+  }
+  if (t.activity) {
+    const at = new Date(t.activity.at).getTime();
+    // A slower response carrying a status older than the one on screen.
+    if (at < heldAt) return { thread: { ...t, activity: held } };
+    return { thread: t, seen: at };
+  }
+  // A null from a request issued before the held status was set says
+  // nothing about that status; one issued after it says it is gone.
+  if (held && source.issuedAt < heldAt) return { thread: { ...t, activity: held } };
+  return { thread: t };
+}
+
+function upsertThreads(list: Thread[], source: Source) {
   set((s) => {
     const threads = { ...s.threads };
-    for (const t of list) threads[t.id] = withKnownActivity(s, t);
-    return { threads };
+    const activitySeen = { ...s.activitySeen };
+    for (const t of list) {
+      const m = mergeActivity(s, t, source);
+      threads[t.id] = m.thread;
+      if (m.seen !== undefined) activitySeen[t.id] = Math.max(activitySeen[t.id] ?? 0, m.seen);
+    }
+    return { threads, activitySeen };
   });
 }
 
 export async function loadInbox(): Promise<void> {
+  const source = rest();
   try {
     const [threads, pending, me] = await Promise.all([api.listThreads({ limit: 100 }), api.listPendingQuestions(), api.me()]);
     const page = threads.threads;
     const oldest = page.length ? page[page.length - 1]!.last_activity_at : "";
+    // A page with more behind it says nothing about older threads; a page
+    // that ends the list is the whole list, and anything active it lacks was
+    // archived or deleted elsewhere.
+    const partial = !!threads.next_cursor;
     set((s) => {
       const merged: Record<string, Thread> = {};
+      const activitySeen = { ...s.activitySeen };
       for (const t of Object.values(s.threads)) {
-        // Keep archived threads we know, and active threads older than this
-        // page (paged in earlier; their absence here says nothing). Active
-        // threads inside the page's window that the page lacks were
-        // archived or deleted elsewhere and drop out.
-        if (t.archived_at || (oldest && t.last_activity_at < oldest)) merged[t.id] = t;
+        if (t.archived_at || (partial && oldest && t.last_activity_at < oldest)) merged[t.id] = t;
       }
-      for (const t of page) merged[t.id] = withKnownActivity(s, t);
+      for (const t of page) {
+        const m = mergeActivity(s, t, source);
+        merged[t.id] = m.thread;
+        if (m.seen !== undefined) activitySeen[t.id] = Math.max(activitySeen[t.id] ?? 0, m.seen);
+      }
       return {
         threads: merged,
+        activitySeen,
         inboxLoaded: true,
         fromSnapshot: false,
-        // A refresh keeps the cursor from the deepest page already loaded.
-        inboxCursor: s.inboxLoaded && !s.fromSnapshot && s.inboxCursor !== null ? s.inboxCursor : (threads.next_cursor ?? null),
+        // A refresh keeps the cursor from the deepest page already loaded,
+        // and offers nothing once the user has reached the end.
+        inboxCursor: s.inboxExhausted ? null : s.inboxLoaded && !s.fromSnapshot && s.inboxCursor !== null ? s.inboxCursor : (threads.next_cursor ?? null),
         pending: pending.questions,
         user: me.user,
         settings: me.user.settings,
@@ -374,14 +431,15 @@ export async function loadInbox(): Promise<void> {
     // still needs its thread for the card's name and link.
     const missing = pending.questions.map((q) => q.thread_id).filter((id, i, all) => !state.threads[id] && all.indexOf(id) === i);
     for (const id of missing.slice(0, 10)) {
+      const source = rest();
       api
         .getThread(id)
-        .then((r) => upsertThreads([r.thread]))
+        .then((r) => upsertThreads([r.thread], source))
         .catch(() => {});
     }
   } catch (err) {
     if (err instanceof APIError && err.status === 401) {
-      set({ user: false, fromSnapshot: false });
+      markSignedOut();
       return;
     }
     if (isTransport(err)) {
@@ -395,14 +453,16 @@ export async function loadInbox(): Promise<void> {
 export async function loadMoreThreads(): Promise<void> {
   const cursor = state.inboxCursor;
   if (!cursor) return;
+  const source = rest();
   const res = await api.listThreads({ limit: 100, cursor });
-  upsertThreads(res.threads);
-  set({ inboxCursor: res.next_cursor ?? null });
+  upsertThreads(res.threads, source);
+  set({ inboxCursor: res.next_cursor ?? null, inboxExhausted: !res.next_cursor });
 }
 
 export async function loadArchived(): Promise<void> {
+  const source = rest();
   const res = await api.listThreads({ archived: true, limit: 200 });
-  upsertThreads(res.threads);
+  upsertThreads(res.threads, source);
   set({ archivedLoaded: true });
 }
 
@@ -414,9 +474,10 @@ export async function searchThreads(query: string): Promise<void> {
     return;
   }
   try {
+    const source = rest();
     const [active, archived] = await Promise.all([api.listThreads({ q, limit: 100 }), api.listThreads({ q, archived: true, limit: 100 })]);
     const hits = [...active.threads, ...archived.threads];
-    upsertThreads(hits);
+    upsertThreads(hits, source);
     // A slower response for an older query must not overwrite a newer one.
     if (state.searchHits && state.searchHits.query !== q && state.searchHits.query.length > q.length) return;
     set({ searchHits: { query: q, ids: hits.map((t) => t.id) } });
@@ -432,19 +493,50 @@ export function clearSearch() {
 // ---------------------------------------------------------------------------
 // Thread
 
+/** Threads whose page is in flight, with what the stream delivered for them
+ * meanwhile; a message that lands during the fetch is merged, not lost until
+ * the next foreground. */
+const loading = new Map<string, { messages: Message[]; questions: Question[] }>();
+
+/** (created_at, id) order, the server's. */
+function after(a: { created_at: string; id: string }, b: { created_at: string; id: string }): boolean {
+  return a.created_at > b.created_at || (a.created_at === b.created_at && a.id > b.id);
+}
+
 export async function loadThread(id: string): Promise<ThreadLoad> {
+  const source = rest();
+  loading.set(id, { messages: [], questions: [] });
   try {
     const [thread, messages, questions] = await Promise.all([api.getThread(id), api.listMessages(id, { limit: 100 }), api.listThreadQuestions(id)]);
+    const buffered = loading.get(id) ?? { messages: [], questions: [] };
     set((s) => {
       const errors = { ...s.threadError };
       delete errors[id];
       const unreadMarker = { ...s.unreadMarker };
       if (!unreadMarker[id] && thread.thread.unread_count > 0) unreadMarker[id] = thread.thread.last_read_at;
+      // The page is the truth for its window; anything newer than its last
+      // row that arrived meanwhile (or was already held) is kept after it.
+      const page = messages.messages;
+      const ids = new Set(page.map((m) => m.id));
+      const last = page[page.length - 1];
+      const extra = new Map<string, Message>();
+      for (const m of [...(s.messages[id] ?? []), ...buffered.messages]) {
+        if (!ids.has(m.id) && !m.deleted && (!last || after(m, last))) extra.set(m.id, m);
+      }
+      const merged = [...page, ...Array.from(extra.values()).sort((a, b) => (after(a, b) ? 1 : -1))];
+      // Questions only move from pending to a final state, so the final one wins.
+      const qs = new Map(questions.questions.map((q) => [q.id, q]));
+      for (const q of buffered.questions) {
+        const have = qs.get(q.id);
+        if (!have || have.status === "pending") qs.set(q.id, q);
+      }
+      const m = mergeActivity(s, thread.thread, source);
       return {
-        threads: { ...s.threads, [id]: withKnownActivity(s, thread.thread) },
-        messages: { ...s.messages, [id]: messages.messages },
+        threads: { ...s.threads, [id]: m.thread },
+        activitySeen: m.seen !== undefined ? { ...s.activitySeen, [id]: Math.max(s.activitySeen[id] ?? 0, m.seen) } : s.activitySeen,
+        messages: { ...s.messages, [id]: merged },
         hasOlder: { ...s.hasOlder, [id]: messages.has_more },
-        threadQuestions: { ...s.threadQuestions, [id]: questions.questions },
+        threadQuestions: { ...s.threadQuestions, [id]: Array.from(qs.values()) },
         threadLoaded: { ...s.threadLoaded, [id]: true },
         threadError: errors,
         unreadMarker,
@@ -452,9 +544,15 @@ export async function loadThread(id: string): Promise<ThreadLoad> {
     });
     return "ok";
   } catch (err) {
-    if (err instanceof APIError && err.status === 404) return "missing";
+    if (err instanceof APIError && err.status === 404) {
+      // Deleted elsewhere: the row must not linger as a ghost in the inbox.
+      forgetThread(id);
+      return "missing";
+    }
     set((s) => ({ threadError: { ...s.threadError, [id]: isTransport(err) ? "You're offline." : errorText(err) } }));
     return "error";
+  } finally {
+    loading.delete(id);
   }
 }
 
@@ -466,6 +564,7 @@ export async function refreshThread(id: string): Promise<void> {
     return;
   }
   const last = current[current.length - 1];
+  const source = rest();
   try {
     const [thread, questions, newer] = await Promise.all([
       api.getThread(id),
@@ -486,8 +585,10 @@ export async function refreshThread(id: string): Promise<void> {
       const merged = last ? [...list.filter((m) => !gone.has(m.id)), ...fresh.filter((m) => !seen.has(m.id))] : fresh;
       const errors = { ...s.threadError };
       delete errors[id];
+      const m = mergeActivity(s, thread.thread, source);
       return {
-        threads: { ...s.threads, [id]: withKnownActivity(s, thread.thread) },
+        threads: { ...s.threads, [id]: m.thread },
+        activitySeen: m.seen !== undefined ? { ...s.activitySeen, [id]: Math.max(s.activitySeen[id] ?? 0, m.seen) } : s.activitySeen,
         messages: { ...s.messages, [id]: merged },
         hasOlder: last ? s.hasOlder : { ...s.hasOlder, [id]: newer.has_more },
         threadQuestions: { ...s.threadQuestions, [id]: questions.questions },
@@ -497,6 +598,7 @@ export async function refreshThread(id: string): Promise<void> {
   } catch (err) {
     if (err instanceof APIError && err.status === 404) {
       set((s) => ({ threadError: { ...s.threadError, [id]: "gone" } }));
+      forgetThread(id);
     }
     // Transport errors: the stream reconnect will try again.
   }
@@ -520,8 +622,9 @@ export async function markRead(id: string): Promise<void> {
   // Optimistic.
   set((s) => ({ threads: { ...s.threads, [id]: { ...t, unread_count: 0, last_read_at: new Date(serverNow()).toISOString() } } }));
   try {
+    const source = rest();
     const res = await api.markRead(id);
-    upsertThreads([res.thread]);
+    upsertThreads([res.thread], source);
     const counts = await api.counts();
     applyCounts(counts.counts);
   } catch {
@@ -536,15 +639,17 @@ export class AlreadyPostedError extends Error {
 }
 
 export async function sendMessage(threadId: string, body: string, attachments: string[] = [], clientKey?: string): Promise<void> {
+  const source = rest();
   const res = await api.sendMessage(threadId, body, attachments, clientKey);
   appendMessage(res.message);
-  upsertThreads([res.thread]);
+  upsertThreads([res.thread], source);
   // A replay of an earlier post: if what was typed differs, the server holds
   // the old text and this send must not look like a success.
   if (res.created === false && res.message.body !== body) throw new AlreadyPostedError();
 }
 
 function appendMessage(m: Message) {
+  loading.get(m.thread_id)?.messages.push(m);
   set((s) => {
     const list = s.messages[m.thread_id];
     if (!list) return {};
@@ -562,6 +667,7 @@ function removeMessage(threadId: string, id: string) {
 }
 
 function upsertQuestion(q: Question) {
+  loading.get(q.thread_id)?.questions.push(q);
   set((s) => {
     const list = s.threadQuestions[q.thread_id];
     let threadQuestions = s.threadQuestions;
@@ -576,24 +682,24 @@ function upsertQuestion(q: Question) {
   });
 }
 
-/** Merges a status line into its thread; an event older than what we hold is ignored. */
+/** Merges a status line into its thread. The watermark is the status's own
+ * time (the database clock); a clear has none, so it uses the event's. */
 function applyActivity(threadId: string, activity: Activity | null, at?: string) {
   set((s) => {
     const t = s.threads[threadId];
     if (!t) return {};
-    const held = t.activity;
-    const when = at ? new Date(at).getTime() : Date.now();
-    if (held && when < new Date(held.at).getTime()) return {};
-    if (s.activitySeen[threadId] && when < s.activitySeen[threadId]!) return {};
+    const when = activity ? new Date(activity.at).getTime() : at ? new Date(at).getTime() : serverNow();
+    if (when < (s.activitySeen[threadId] ?? 0)) return {};
     return { threads: { ...s.threads, [threadId]: { ...t, activity } }, activitySeen: { ...s.activitySeen, [threadId]: when } };
   });
 }
 
 export async function answerQuestion(id: string, answer: { selected: string[]; text?: string }): Promise<void> {
+  const source = rest();
   const res = await api.answerQuestion(id, answer);
   upsertQuestion(res.question);
   appendMessage(res.message);
-  upsertThreads([res.thread]);
+  upsertThreads([res.thread], source);
   const counts = await api.counts().catch(() => null);
   if (counts) applyCounts(counts.counts);
 }
@@ -606,8 +712,9 @@ export async function dismissQuestion(id: string): Promise<void> {
 }
 
 export async function updateThread(id: string, patch: { title?: string; archived?: boolean; muted?: boolean }): Promise<void> {
+  const source = rest();
   const res = await api.updateThread(id, patch);
-  upsertThreads([res.thread]);
+  upsertThreads([res.thread], source);
   if (patch.archived !== undefined) {
     const counts = await api.counts().catch(() => null);
     if (counts) applyCounts(counts.counts);
@@ -625,7 +732,13 @@ function forgetThread(id: string) {
     delete threads[id];
     const drafts = { ...s.drafts };
     delete drafts[id];
-    return { threads, drafts, pending: s.pending.filter((q) => q.thread_id !== id) };
+    const messages = { ...s.messages };
+    delete messages[id];
+    const threadQuestions = { ...s.threadQuestions };
+    delete threadQuestions[id];
+    const threadLoaded = { ...s.threadLoaded };
+    delete threadLoaded[id];
+    return { threads, drafts, messages, threadQuestions, threadLoaded, pending: s.pending.filter((q) => q.thread_id !== id) };
   });
   try {
     localStorage.removeItem(draftPrefix + id);
@@ -726,22 +839,23 @@ export function connect() {
     });
   };
 
-  withPayload("thread.created", (d) => d.thread && upsertThreads([d.thread]));
-  withPayload("thread.updated", (d) => d.thread && upsertThreads([d.thread]));
+  const event = (d: EventPayload): Source => ({ kind: "event", at: d.at });
+  withPayload("thread.created", (d) => d.thread && upsertThreads([d.thread], event(d)));
+  withPayload("thread.updated", (d) => d.thread && upsertThreads([d.thread], event(d)));
   withPayload("thread.activity", (d) => d.thread_id && applyActivity(d.thread_id, d.activity ?? null, d.at));
   withPayload("thread.deleted", (d) => d.thread_id && forgetThread(d.thread_id));
   withPayload("message.created", (d) => {
     if (d.message) appendMessage(d.message);
-    if (d.thread) upsertThreads([d.thread]);
+    if (d.thread) upsertThreads([d.thread], event(d));
   });
   withPayload("message.deleted", (d) => {
     if (d.message_id && d.thread) removeMessage(d.thread.id, d.message_id);
-    if (d.thread) upsertThreads([d.thread]);
+    if (d.thread) upsertThreads([d.thread], event(d));
   });
   for (const name of ["question.created", "question.answered", "question.cancelled", "question.expired", "question.dismissed"]) {
     withPayload(name, (d) => {
       if (d.question) upsertQuestion(d.question);
-      if (d.thread) upsertThreads([d.thread]);
+      if (d.thread) upsertThreads([d.thread], event(d));
     });
   }
   withPayload("settings.updated", (d) => d.settings && set({ settings: d.settings }));

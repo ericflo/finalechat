@@ -1,11 +1,39 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, ConfirmSheet, Link, Sheet } from "../components/Common";
-import { IconArchive, IconBell, IconBellOff, IconCheck, IconClose, IconInbox, IconPhone, IconSearch, IconSettings, IconTerminal, IconTrash } from "../components/Icons";
+import {
+  IconArchive,
+  IconBell,
+  IconBellOff,
+  IconCheck,
+  IconClose,
+  IconInbox,
+  IconPhone,
+  IconSearch,
+  IconSettings,
+  IconTerminal,
+  IconTrash,
+} from "../components/Icons";
 import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
-import { getPushState, isIOS, isStandalone, subscribeToPush, type PushState } from "../lib/push";
+import {
+  getPushState,
+  isIOS,
+  isStandalone,
+  subscribeToPush,
+  type PushState,
+} from "../lib/push";
 import { navigate } from "../lib/router";
-import { clearSearch, deleteThread, loadArchived, loadMoreThreads, searchThreads, toast, updateSettings, updateThread, useStore } from "../lib/store";
+import {
+  clearSearch,
+  deleteThread,
+  loadArchived,
+  loadMoreThreads,
+  searchThreads,
+  toast,
+  updateSettings,
+  updateThread,
+  useStore,
+} from "../lib/store";
 import { compactTime, fullDateTime, useNow } from "../lib/time";
 import type { Thread } from "../lib/types";
 import { api } from "../lib/api";
@@ -47,11 +75,24 @@ export function Inbox({ filter }: { filter: string | null }) {
   const searching = query.trim().length > 0;
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
-    const hits = searchHits && searchHits.query === query.trim() ? new Set(searchHits.ids) : null;
+    const hits =
+      searchHits && searchHits.query === query.trim()
+        ? new Set(searchHits.ids)
+        : null;
     return Object.values(threads)
-      .filter((t) => (q ? true : tab === "archived" ? !!t.archived_at : !t.archived_at))
+      .filter((t) =>
+        q ? true : tab === "archived" ? !!t.archived_at : !t.archived_at,
+      )
       .filter((t) => !needsYou || t.pending_questions > 0)
-      .filter((t) => !q || hits?.has(t.id) || t.title.toLowerCase().includes(q) || t.agent.toLowerCase().includes(q) || t.preview.toLowerCase().includes(q) || (t.external_id ?? "").toLowerCase().includes(q))
+      .filter(
+        (t) =>
+          !q ||
+          hits?.has(t.id) ||
+          t.title.toLowerCase().includes(q) ||
+          t.agent.toLowerCase().includes(q) ||
+          t.preview.toLowerCase().includes(q) ||
+          (t.external_id ?? "").toLowerCase().includes(q),
+      )
       .sort((a, b) => {
         // Threads with a question waiting come first; then by activity.
         const na = a.pending_questions > 0 ? 1 : 0;
@@ -61,19 +102,41 @@ export function Inbox({ filter }: { filter: string | null }) {
       });
   }, [threads, tab, query, searchHits, needsYou]);
 
+  const now = useNow(15000);
   const summary = useMemo(() => {
     const parts: string[] = [];
-    if (counts.pending_questions > 0) parts.push(`${counts.pending_questions} need${counts.pending_questions === 1 ? "s" : ""} you`);
-    if (counts.unread_threads > 0) parts.push(`${counts.unread_threads} unread`);
-    const live = Object.values(threads).filter((t) => !t.archived_at && t.activity && new Date(t.activity.expires_at).getTime() > Date.now()).length;
+    // The same source as the "Needs you" section below, so the two agree.
+    if (pending.length > 0)
+      parts.push(
+        `${pending.length} need${pending.length === 1 ? "s" : ""} you`,
+      );
+    if (counts.unread_threads > 0)
+      parts.push(`${counts.unread_threads} unread`);
+    // Working means working: an agent waiting on the user is not counted.
+    const live = Object.values(threads).filter(
+      (t) =>
+        !t.archived_at &&
+        t.activity &&
+        t.activity.kind !== "waiting" &&
+        new Date(t.activity.expires_at).getTime() > now,
+    ).length;
     if (live > 0) parts.push(`${live} working`);
     return parts.join(" · ");
-  }, [counts, threads]);
+  }, [counts, threads, pending, now]);
 
   const toggleRemote = () =>
     updateSettings({ remote_mode: !settings.remote_mode })
-      .then(() => toast(settings.remote_mode ? "Remote mode off · agents use the terminal again" : "Remote mode on · Claude Code waits for your replies here", "success"))
-      .catch((e) => toast(e instanceof Error ? e.message : "Could not update", "error"));
+      .then(() =>
+        toast(
+          settings.remote_mode
+            ? "Remote mode off · agents use the terminal again"
+            : "Remote mode on · Claude Code waits for your replies here",
+          "success",
+        ),
+      )
+      .catch((e) =>
+        toast(e instanceof Error ? e.message : "Could not update", "error"),
+      );
 
   const visiblePending = showAllPending ? pending : pending.slice(0, 2);
 
@@ -82,14 +145,23 @@ export function Inbox({ filter }: { filter: string | null }) {
       <TopBar
         big
         title="Finalechat"
-        subtitle={summary && !(inboxLoaded && tab === "active" && list.length === 0 && !searching) ? summary : undefined}
+        subtitle={
+          summary &&
+          !(inboxLoaded && tab === "active" && list.length === 0 && !searching)
+            ? summary
+            : undefined
+        }
         right={
           <>
             <button
               type="button"
               className={`remote-chip ${settings.remote_mode ? "on" : ""}`}
               aria-pressed={settings.remote_mode}
-              title={settings.remote_mode ? "Remote mode is on: agents wait for your replies from here" : "Remote mode is off: agents use the terminal"}
+              title={
+                settings.remote_mode
+                  ? "Remote mode is on: agents wait for your replies from here"
+                  : "Remote mode is off: agents use the terminal"
+              }
               onClick={toggleRemote}
             >
               <span className="dot" />
@@ -108,7 +180,11 @@ export function Inbox({ filter }: { filter: string | null }) {
           <div className="filter-row">
             <span className="filter-chip">
               Needs you · {list.length}
-              <button type="button" aria-label="Show everything" onClick={() => navigate("/", { replace: true })}>
+              <button
+                type="button"
+                aria-label="Show everything"
+                onClick={() => navigate("/", { replace: true })}
+              >
                 <IconClose />
               </button>
             </span>
@@ -125,8 +201,14 @@ export function Inbox({ filter }: { filter: string | null }) {
                 <QuestionCard key={q.id} q={q} showThread />
               ))}
               {pending.length > 2 && (
-                <button type="button" className="btn block" onClick={() => setShowAllPending((v) => !v)}>
-                  {showAllPending ? "Show fewer" : `${pending.length - 2} more question${pending.length - 2 === 1 ? "" : "s"}`}
+                <button
+                  type="button"
+                  className="btn block"
+                  onClick={() => setShowAllPending((v) => !v)}
+                >
+                  {showAllPending
+                    ? "Show fewer"
+                    : `${pending.length - 2} more question${pending.length - 2 === 1 ? "" : "s"}`}
                 </button>
               )}
             </div>
@@ -143,50 +225,113 @@ export function Inbox({ filter }: { filter: string | null }) {
           )
         )}
 
-        <div className="section-title" style={{ justifyContent: "space-between" }}>
-          <span>Threads</span>
-          <div className="segmented" style={{ textTransform: "none", letterSpacing: 0 }}>
-            <button type="button" className={tab === "active" ? "active" : ""} onClick={() => setTab("active")}>
-              Active
-            </button>
-            <button type="button" className={tab === "archived" ? "active" : ""} onClick={() => setTab("archived")}>
-              Archived
-            </button>
-          </div>
-        </div>
-        {(list.length > 5 || searching) && (
-          <label className="search">
-            <IconSearch aria-hidden />
-            <input type="search" aria-label="Search threads" placeholder="Search threads" value={query} onChange={(e) => setQuery(e.target.value)} />
-          </label>
-        )}
-        {!inboxLoaded ? (
-          <div className="thread-list">
-            {[0, 1, 2].map((i) => (
-              <div key={i} className="skeleton" style={{ height: 84 }} />
-            ))}
-          </div>
-        ) : list.length === 0 ? (
-          <EmptyThreads archived={tab === "archived"} searching={searching} />
-        ) : (
-          <div className={`thread-list grouped ${fromSnapshot ? "stale" : ""}`}>
-            {list.map((t) => (
-              <ThreadRow key={t.id} t={t} showArchived={searching} onMenu={() => setRowMenu(t)} />
-            ))}
-          </div>
-        )}
-        {tab === "active" && cursor && !searching && inboxLoaded && list.length > 0 && (
-          <button type="button" className="btn block" style={{ marginTop: 10 }} onClick={() => loadMoreThreads().catch(() => toast("Could not load more", "error"))}>
-            Load older threads
-          </button>
+        {/* Under the Needs-you shortcut the caught-up card is the whole empty state. */}
+        {needsYou && list.length === 0 ? null : (
+          <>
+            <div
+              className="section-title"
+              style={{ justifyContent: "space-between" }}
+            >
+              <span>{needsYou ? "Threads that need you" : "Threads"}</span>
+              {!needsYou && (
+                <div
+                  className="segmented"
+                  style={{ textTransform: "none", letterSpacing: 0 }}
+                >
+                  <button
+                    type="button"
+                    className={tab === "active" ? "active" : ""}
+                    onClick={() => setTab("active")}
+                  >
+                    Active
+                  </button>
+                  <button
+                    type="button"
+                    className={tab === "archived" ? "active" : ""}
+                    onClick={() => setTab("archived")}
+                  >
+                    Archived
+                  </button>
+                </div>
+              )}
+            </div>
+            {(list.length > 5 || searching) && (
+              <label className="search">
+                <IconSearch aria-hidden />
+                <input
+                  type="search"
+                  aria-label="Search threads"
+                  placeholder="Search threads"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </label>
+            )}
+            {!inboxLoaded ? (
+              <div className="thread-list">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="skeleton" style={{ height: 84 }} />
+                ))}
+              </div>
+            ) : list.length === 0 ? (
+              <EmptyThreads
+                archived={tab === "archived"}
+                searching={searching}
+              />
+            ) : (
+              <div
+                className={`thread-list grouped ${fromSnapshot ? "stale" : ""}`}
+              >
+                {list.map((t) => (
+                  <ThreadRow
+                    key={t.id}
+                    t={t}
+                    showArchived={searching}
+                    onMenu={() => setRowMenu(t)}
+                  />
+                ))}
+              </div>
+            )}
+            {tab === "active" &&
+              cursor &&
+              !searching &&
+              inboxLoaded &&
+              list.length > 0 && (
+                <button
+                  type="button"
+                  className="btn block"
+                  style={{ marginTop: 10 }}
+                  onClick={() =>
+                    loadMoreThreads().catch(() =>
+                      toast("Could not load more", "error"),
+                    )
+                  }
+                >
+                  Load older threads
+                </button>
+              )}
+          </>
         )}
       </div>
-      {rowMenu && <RowSheet t={threads[rowMenu.id] ?? rowMenu} onClose={() => setRowMenu(null)} />}
+      {rowMenu && (
+        <RowSheet
+          t={threads[rowMenu.id] ?? rowMenu}
+          onClose={() => setRowMenu(null)}
+        />
+      )}
     </div>
   );
 }
 
-function ThreadRow({ t, showArchived, onMenu }: { t: Thread; showArchived: boolean; onMenu: () => void }) {
+function ThreadRow({
+  t,
+  showArchived,
+  onMenu,
+}: {
+  t: Thread;
+  showArchived: boolean;
+  onMenu: () => void;
+}) {
   const unread = t.unread_count > 0;
   const needs = t.pending_questions > 0;
   const name = t.agent || t.title || "Agent";
@@ -214,7 +359,10 @@ function ThreadRow({ t, showArchived, onMenu }: { t: Thread; showArchived: boole
       onMenu();
     }, 480);
   }, [onMenu]);
-  const endPress = useCallback(() => window.clearTimeout(pressTimer.current), []);
+  const endPress = useCallback(
+    () => window.clearTimeout(pressTimer.current),
+    [],
+  );
 
   return (
     <Link
@@ -239,8 +387,12 @@ function ThreadRow({ t, showArchived, onMenu }: { t: Thread; showArchived: boole
       <Avatar name={name} />
       <div className="thread-main">
         <div className="thread-head">
-          <span className="thread-title">{t.title || t.agent || "Untitled thread"}</span>
-          {t.title && t.agent && <span className="thread-agent">{t.agent}</span>}
+          <span className="thread-title">
+            {t.title || t.agent || "Untitled thread"}
+          </span>
+          {t.title && t.agent && (
+            <span className="thread-agent">{t.agent}</span>
+          )}
         </div>
         <div className="thread-preview">
           {activity ? (
@@ -251,24 +403,43 @@ function ThreadRow({ t, showArchived, onMenu }: { t: Thread; showArchived: boole
           ) : (
             <>
               {draft && <span className="draft-tag">Draft</span>}
-              {t.preview_sender === "user" && <span style={{ color: "var(--text-3)" }}>You: </span>}
-              {t.preview_sender === "question" && <span className="asked">Asked: </span>}
-              {t.preview || <em style={{ color: "var(--text-3)" }}>No messages yet</em>}
+              {t.preview_sender === "user" && (
+                <span style={{ color: "var(--text-3)" }}>You: </span>
+              )}
+              {t.preview_sender === "question" && (
+                <span className="asked">Asked: </span>
+              )}
+              {t.preview || (
+                <em style={{ color: "var(--text-3)" }}>No messages yet</em>
+              )}
             </>
           )}
         </div>
       </div>
       <div className="thread-side">
-        <span title={fullDateTime(t.last_activity_at)}>{compactTime(t.last_activity_at, now)}</span>
+        <span title={fullDateTime(t.last_activity_at)}>
+          {compactTime(t.last_activity_at, now)}
+        </span>
         {needs ? (
-          <span className="pill amber">{t.pending_questions === 1 ? "Needs you" : `${t.pending_questions} questions`}</span>
+          <span className="pill amber">
+            {t.pending_questions === 1
+              ? "Needs you"
+              : `${t.pending_questions} questions`}
+          </span>
         ) : unread ? (
-          <span className="unread-count" aria-label={`${t.unread_count} unread`}>
+          <span
+            className="unread-count"
+            aria-label={`${t.unread_count} unread`}
+          >
             {t.unread_count > 99 ? "99+" : t.unread_count}
           </span>
         ) : null}
-        {showArchived && t.archived_at && <span className="pill muted">Archived</span>}
-        {t.muted && !needs && <IconBellOff className="muted-icon" aria-label="Muted" />}
+        {showArchived && t.archived_at && (
+          <span className="pill muted">Archived</span>
+        )}
+        {t.muted && !needs && (
+          <IconBellOff className="muted-icon" aria-label="Muted" />
+        )}
       </div>
     </Link>
   );
@@ -285,7 +456,11 @@ function RowSheet({ t, onClose }: { t: Thread; onClose: () => void }) {
         confirmLabel="Delete thread"
         danger
         onClose={onClose}
-        onConfirm={() => deleteThread(t.id).then(() => toast("Thread deleted")).catch((e) => toast(e.message, "error"))}
+        onConfirm={() =>
+          deleteThread(t.id)
+            .then(() => toast("Thread deleted"))
+            .catch((e) => toast(e.message, "error"))
+        }
       />
     );
   }
@@ -300,10 +475,13 @@ function RowSheet({ t, onClose }: { t: Thread; onClose: () => void }) {
         className="item"
         onClick={() => {
           onClose();
-          updateThread(t.id, { muted: !t.muted }).then(() => toast(t.muted ? "Notifications on" : "Thread muted")).catch((e) => toast(e.message, "error"));
+          updateThread(t.id, { muted: !t.muted })
+            .then(() => toast(t.muted ? "Notifications on" : "Thread muted"))
+            .catch((e) => toast(e.message, "error"));
         }}
       >
-        {t.muted ? <IconBell /> : <IconBellOff />} {t.muted ? "Unmute" : "Mute notifications"}
+        {t.muted ? <IconBell /> : <IconBellOff />}{" "}
+        {t.muted ? "Unmute" : "Mute notifications"}
       </button>
       <button
         type="button"
@@ -312,26 +490,49 @@ function RowSheet({ t, onClose }: { t: Thread; onClose: () => void }) {
           onClose();
           const wasArchived = !!t.archived_at;
           updateThread(t.id, { archived: !wasArchived })
-            .then(() => (wasArchived ? toast("Thread restored") : toast("Thread archived", "info", { label: "Undo", onClick: () => void updateThread(t.id, { archived: false }) })))
+            .then(() =>
+              wasArchived
+                ? toast("Thread restored")
+                : toast("Thread archived", "info", {
+                    label: "Undo",
+                    onClick: () => void updateThread(t.id, { archived: false }),
+                  }),
+            )
             .catch((e) => toast(e.message, "error"));
         }}
       >
         <IconArchive /> {t.archived_at ? "Unarchive" : "Archive"}
       </button>
-      <button type="button" className="item danger" onClick={() => setConfirmDelete(true)}>
+      <button
+        type="button"
+        className="item danger"
+        onClick={() => setConfirmDelete(true)}
+      >
         <IconTrash /> Delete thread
       </button>
     </Sheet>
   );
 }
 
-function EmptyThreads({ archived, searching }: { archived: boolean; searching: boolean }) {
+function EmptyThreads({
+  archived,
+  searching,
+}: {
+  archived: boolean;
+  searching: boolean;
+}) {
   return (
     <div className="empty">
       <div className="glyph">
         <IconInbox />
       </div>
-      <h2>{searching ? "No matches" : archived ? "Nothing archived" : "No threads yet"}</h2>
+      <h2>
+        {searching
+          ? "No matches"
+          : archived
+            ? "Nothing archived"
+            : "No threads yet"}
+      </h2>
       <p>
         {searching
           ? "Try a different search."
@@ -387,22 +588,36 @@ function SetupChecklist({ hasThreads }: { hasThreads: boolean }) {
 
   if (dismissed) return null;
   // Reserve the card's space so the list does not jump when the checks land.
-  if (push === null || tokens === null) return <div className="card checklist placeholder" aria-hidden />;
+  if (push === null || tokens === null)
+    return <div className="card checklist placeholder" aria-hidden />;
 
   const enablePush = async () => {
     try {
       const st = await subscribeToPush();
       setPush(st);
       if (st === "subscribed") toast("Notifications on", "success");
-      else if (st === "denied") toast("Notifications are blocked for this site in your browser settings.", "error");
+      else if (st === "denied")
+        toast(
+          "Notifications are blocked for this site in your browser settings.",
+          "error",
+        );
     } catch (e) {
-      toast(e instanceof Error ? e.message : "Could not enable notifications", "error");
+      toast(
+        e instanceof Error ? e.message : "Could not enable notifications",
+        "error",
+      );
     }
   };
 
   return (
     <div className="card checklist" style={{ marginBottom: 6 }}>
-      <div style={{ display: "flex", alignItems: "center", padding: "8px 10px 4px" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          padding: "8px 10px 4px",
+        }}
+      >
         <h2 style={{ fontSize: 16, flex: 1 }}>Get set up</h2>
         <button
           type="button"
@@ -423,7 +638,13 @@ function SetupChecklist({ hasThreads }: { hasThreads: boolean }) {
         done={standalone}
         icon={<IconPhone />}
         label="Install on your phone"
-        hint={standalone ? "Running as an app." : isIOS() ? "In Safari: Share → Add to Home Screen. Notifications need the installed app." : "Use your browser's Install / Add to Home Screen option."}
+        hint={
+          standalone
+            ? "Running as an app."
+            : isIOS()
+              ? "In Safari: Share → Add to Home Screen. Notifications need the installed app."
+              : "Use your browser's Install / Add to Home Screen option."
+        }
       />
       <CheckItem
         done={pushDone}
@@ -441,8 +662,15 @@ function SetupChecklist({ hasThreads }: { hasThreads: boolean }) {
                 : "Questions and important messages will buzz your phone."
         }
         action={
-          !pushDone && pushEnabled && push !== "unsupported" && push !== "denied" ? (
-            <button type="button" className="btn primary small" onClick={enablePush}>
+          !pushDone &&
+          pushEnabled &&
+          push !== "unsupported" &&
+          push !== "denied" ? (
+            <button
+              type="button"
+              className="btn primary small"
+              onClick={enablePush}
+            >
               Enable
             </button>
           ) : undefined
@@ -455,7 +683,11 @@ function SetupChecklist({ hasThreads }: { hasThreads: boolean }) {
         hint="Create a token and paste one line into your terminal."
         action={
           !tokenDone ? (
-            <button type="button" className="btn primary small" onClick={() => navigate("/settings/agents")}>
+            <button
+              type="button"
+              className="btn primary small"
+              onClick={() => navigate("/settings/agents")}
+            >
               Connect
             </button>
           ) : undefined
@@ -465,13 +697,37 @@ function SetupChecklist({ hasThreads }: { hasThreads: boolean }) {
   );
 }
 
-function CheckItem({ done, icon, label, hint, action }: { done: boolean; icon: React.ReactNode; label: string; hint: string; action?: React.ReactNode }) {
+function CheckItem({
+  done,
+  icon,
+  label,
+  hint,
+  action,
+}: {
+  done: boolean;
+  icon: React.ReactNode;
+  label: string;
+  hint: string;
+  action?: React.ReactNode;
+}) {
   return (
     <div className={`check-item ${done ? "done" : ""}`}>
       <div className="mark">{done ? <IconCheck /> : null}</div>
       <div>
-        <div className="label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ display: "inline-flex", width: 18, height: 18, color: "var(--text-3)" }}>{icon}</span>
+        <div
+          className="label"
+          style={{ display: "flex", alignItems: "center", gap: 8 }}
+        >
+          <span
+            style={{
+              display: "inline-flex",
+              width: 18,
+              height: 18,
+              color: "var(--text-3)",
+            }}
+          >
+            {icon}
+          </span>
           {label}
         </div>
         <div className="hint">{hint}</div>

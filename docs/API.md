@@ -82,6 +82,7 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | 502 | `storage_unavailable` | Object storage rejected an upload or download; retry |
 | 503 | `push_disabled` | Push is not configured on this server |
 | 503 | `attachments_disabled` | Attachment storage is not configured on this server |
+| 503 | `busy` | Too many uploads are being decoded at once; retry after `Retry-After` (5 seconds) |
 | 500 | `internal_error` | Server fault |
 
 ### Limits
@@ -151,9 +152,13 @@ until something happens or the wait elapses, then responds normally:
   anything created after the request started (by the server's clock); a
   wait that returns nothing carries that instant as `waited_from`, and
   passing it back as `after_time=<RFC 3339>` on the next wait keeps the
-  chain gapless. Once a wait returns messages, continue with
+    chain gapless. Once a wait returns messages, continue with
   `after=<last message id>` instead (the response then carries no
-  `waited_from`). A deleted message remains a valid `after` anchor.
+  `waited_from`). A deleted message remains a valid `after` anchor. An
+  anchor the thread does not hold at all (a thread deleted from the app and
+  recreated under the same `ext:` id, say) pages from the start of the
+  thread and the response carries `"anchor_unknown": true`; it is never an
+  error.
 - `POST /threads/{ref}/questions?wait=N` (or `"wait": N` in the body)
   returns when the question is answered, cancelled or expired.
 - `GET /questions/{id}?wait=N` likewise.
@@ -202,7 +207,8 @@ merged on later writes, returned, and otherwise ignored.
 `activity` is the agent's live status line, or `null` when there is none or
 the last one has lapsed. Archiving sticks: a plain agent message leaves an
 archived thread archived (its unread count still grows), while a message
-marked `important`, a question, or the user's own reply brings it back. `kind` is `thinking`, `working`, `typing`, `waiting`
+marked `important`, a question, or the user's own reply from the app brings
+it back (a `sender: "user"` message an agent posts does not). `kind` is `thinking`, `working`, `typing`, `waiting`
 or `tool`; `at` is when it was last set or refreshed, `since` when the agent
 became continuously busy (kept across refreshes), and `expires_at` when it
 lapses. See [POST /threads/{ref}/activity](#post-threadsrefactivity).
@@ -232,11 +238,16 @@ agent did (empty on rows from before the field existed); `sender: "user"`
 alone does not mean the user typed it on the phone, since agents may mirror
 terminal input as the user. Two `meta` keys are reserved: `kind` (`answer`
 marks the transcript copy of an answered question, which the app folds into
-the question card; `notification` labels a message as needing attention)
-and `via` (a short source label shown under the bubble). A deleted message
-becomes a tombstone: it keeps its `id` and position, `body` is empty and
-`deleted` is `true`; tombstones appear only on catch-up pages
-(`after=<id>` without a `sender` filter) so a client can prune them.
+the card only when `question_id` names an answered question in the same
+thread and otherwise shows as a mirrored reply; `notification` labels a
+message as needing attention; `session_start` and `session_end` on `system`
+rows tell the app whether the agent's session is still running) and `via`
+(a short source label shown under the bubble). A deleted message becomes a
+tombstone: it keeps its `id` and position, `body` is empty, `deleted` is
+`true` and `deleted_at` says when; tombstones appear only on catch-up pages
+(`after=<id>` without a `sender` filter), for the anchor itself, anything
+after it, and any older message deleted since the anchor existed, so a
+client that holds the anchor can prune everything it may hold.
 
 ### Attachment
 
@@ -318,11 +329,13 @@ is set whenever the question leaves `pending`, including on cancel or expiry.
 ### Counts
 
 ```json
-{"pending_questions": 1, "unread_threads": 3}
+{"pending_questions": 1, "unread_threads": 3, "attention": 3}
 ```
 
 `unread_threads` counts active threads with at least one unread non-user
-message. The app uses `pending_questions + unread_threads` as its badge.
+message; `attention` counts the threads that need the user (a pending
+question or unread messages, leaving out archived and muted threads) and is
+the app's badge.
 
 ## Notification policy
 
@@ -559,7 +572,7 @@ that exists. `PUT` is accepted too.
 | `text` | string | One line, at most 200 characters; whitespace is collapsed. Empty clears the status. |
 | `kind` | string | `thinking`, `working` (default), `typing`, `waiting` or `tool` |
 | `ttl_seconds` | integer | 1 to 600, default 45. The status lapses when this runs out unless set again. |
-| `seq` | integer | Optional ordering for concurrent writers: a write whose `seq` is not above the live status's is ignored (`"applied": false`). Use one clock for every writer of a thread; a nanosecond timestamp (`time.Now().UnixNano()`, `time.time_ns()`) is the convention. Any `seq` is accepted once the status has lapsed, but a clear that carried a `seq` (`DELETE …/activity?seq=`) still rejects writes below it, so a slow write cannot resurrect a status the agent already cleared. |
+| `seq` | integer | Optional ordering for concurrent writers: a write whose `seq` is not above the live status's is ignored (`"applied": false`). Use one clock for every writer of a thread; a nanosecond timestamp (`time.Now().UnixNano()`, `time.time_ns()`) is the convention. Any `seq` is accepted once the status has lapsed, but a clear that carried a `seq` (`DELETE …/activity?seq=`, or `{"text": "", "seq": N}` here or inline on a message or question) still rejects writes below it for ten minutes, so a slow write cannot resurrect a status the agent already cleared, and one clear from a fast clock cannot pin the line shut. |
 
 ```bash
 curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/activity \
@@ -630,20 +643,23 @@ curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/mess
             "preview_sender": "agent", "unread_count": 1, "...": "..."}}
 ```
 
-Status `201`. Posting bumps the thread's `last_activity_at` and `preview`
-and un-archives it. A message with `sender: "user"` also advances the
-thread's `last_read_at`. Emits `message.created`. Attaching an id that is
-unknown, belongs to another thread, or is already attached is a `422`.
+Status `201`. Posting bumps the thread's `last_activity_at` and `preview`;
+an `important` message or the user's own reply from the app un-archives the
+thread. A `sender: "user"` message posted from the app also advances the
+thread's `last_read_at` (one an agent posts does not). Emits
+`message.created`. Attaching an id that is unknown, belongs to another
+thread, or is already attached is a `422`.
 
 ### GET /threads/{ref}/messages
 
 | Parameter | Meaning |
 | --- | --- |
-| `after` | Message id; return newer messages, ascending |
+| `after` | Message id; return newer messages, ascending (with tombstones, see above). An id the thread does not hold pages from the start and sets `anchor_unknown` |
+| `after_time` | RFC 3339 instant; return messages created after it, ascending. For waits without a message to anchor on; take it from a previous response's `waited_from` |
 | `before` | Message id; return older messages, ascending |
 | `limit` | 1 to 500, default 100 |
 | `sender` | Filter: `agent`, `user` or `system` |
-| `wait` | Seconds to hold the request open for a new message; without `after` it waits for anything created from now on |
+| `wait` | Seconds to hold the request open for a new message; without `after` or `after_time` it waits for anything created from now on |
 
 ```bash
 curl -sS "https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/messages?limit=3" \
@@ -758,7 +774,9 @@ attached within 24 hours is deleted. `413 too_large` for a file over 10 MiB,
 ### GET /attachments/{id}
 
 Streams the original bytes with its `Content-Type`, `Content-Length` and
-`Cache-Control: private, max-age=31536000, immutable`. `Content-Disposition`
+`Cache-Control: private, no-cache` (the bytes never change, but a browser
+must revalidate so a signed-out session cannot keep serving them; the app's
+service worker keeps its own copy for offline reading). `Content-Disposition`
 is `inline` for images, PDFs and text and `attachment` otherwise, with the
 original filename. `HEAD` returns the headers only.
 
@@ -834,8 +852,9 @@ curl -sS "https://www.finalechat.com/api/v1/questions/01a07a60-6dc3-7cc4-ae8c-f3
 
 | Parameter | Meaning |
 | --- | --- |
-| `status` | `pending`, `answered`, `cancelled` or `expired` |
+| `status` | `pending`, `answered`, `cancelled`, `expired` or `dismissed` |
 | `thread_id` | Thread UUID or `ext:<external_id>` |
+| `attention` | `true` restricts pending questions to threads that need the user (not archived, not muted): the app's "needs you" list |
 | `limit` | 1 to 500, default 100 |
 
 Newest first.

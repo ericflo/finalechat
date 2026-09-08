@@ -89,7 +89,10 @@ finalechat status --clear
 ```
 
 It never notifies and is not part of the transcript, so send one for every
-step change.
+step change. The Claude Code hooks write the same line ("Running: go test",
+"Thinking…") from one shared clock, so a status you set yourself stays until
+your next tool call ends; for a step that outlives one tool call, set it
+again from inside the step or give it a long `--ttl`.
 
 ## Screenshots
 

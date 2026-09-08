@@ -72,9 +72,14 @@ curl -sS "https://www.finalechat.com/api/v1/threads/ext:my-session-42/questions?
 ```
 
 **3. Wait for the user's next reply.** Pass the id of the last message you
-have seen as `after` (or omit it to wait for anything new from now on); the
-call returns as soon as a newer message exists, or after `wait` seconds with
-an empty list and `"timed_out": true`.
+have seen as `after` (or omit it to wait for anything new from now on) and
+keep `sender=user`; the call returns as soon as a newer message exists, or
+after `wait` seconds with an empty list and `"timed_out": true`. Without the
+`sender` filter a catch-up page can also carry a `"deleted": true` tombstone
+for a message removed since; drop it, never read it. If the anchor is not in
+the thread any more (the user deleted the thread and you recreated it under
+the same `ext:` id) the page starts from the thread's first message and
+carries `"anchor_unknown": true`; continue from the newest id it returns.
 
 ```bash
 curl -sS "https://www.finalechat.com/api/v1/threads/ext:my-session-42/messages?after=$LAST_ID&sender=user&wait=600" \
@@ -134,11 +139,14 @@ cap keeps proxies happy; loop if you need longer.
   A key is scoped to its thread and may be any string up to 200 characters
   (a UUID is ideal).
 - Archiving is the user's call: a plain message leaves an archived thread
-  archived (it still collects unread), while an `important` message or a
-  question brings it back to the inbox.
+  archived (it still collects unread), while an `important` message, a
+  question, or the user's own reply from the app brings it back to the inbox.
+  A `sender: "user"` message you mirror from a terminal does not.
 - Do not post secrets, tokens or credentials. If one slips out,
   `DELETE /messages/{id}` (or `finalechat delete <message id>`) removes the
-  message and its files for good; the app drops it at once.
+  message and its files for good; the app drops it at once. The row stays as
+  a tombstone (empty body, `"deleted": true`) on catch-up pages so other
+  clients prune it, and `GET /messages/{id}` answers `404`.
 
 ## Screenshots and files
 
@@ -226,8 +234,17 @@ monotonic `seq` (the convention is a nanosecond timestamp, and every writer
 of a thread must use the same clock); a write whose `seq` is not above the
 live status's is ignored and comes back with `"applied": false`, so a slow
 "Thinking…" can never overwrite a newer "Running tests". Pass the same
-`seq` when you clear (`DELETE …/activity?seq=`) so a straggler cannot bring
-the status back.
+`seq` when you clear, either `DELETE …/activity?seq=` or, on the message
+that ends the step, `"activity": {"text": "", "seq": N}`, so a straggler
+cannot bring the status back. A clear's `seq` guards the line for ten
+minutes; after that any sequenced write applies again, so one clear from a
+fast clock can never pin a thread's status shut.
+
+The app also reads two reserved message `meta` kinds on `system` rows:
+`"kind": "session_start"` and `"kind": "session_end"`. Post the latter when
+your session finishes (the CLI hooks do) and the thread's composer tells the
+user their reply waits for the next session; your next agent message lifts
+it.
 
 With the CLI: `finalechat status "Running the migration…"` (add `--ttl 120`
 for long steps, `--clear` to drop it). With MCP: `finalechat_status`.
@@ -277,9 +294,11 @@ note. It also registers the MCP server
 `finalechat_read` and `finalechat_status` as tools.
 
 **Remote mode** is a switch in the app's Settings (also `finalechat remote
-on|off`). While it is on, the `Stop` hook waits for the user's phone reply
-and feeds it back to Claude as the next instruction, and a phone answer to
-`AskUserQuestion` is used instead of the terminal prompt. Read it yourself
+on|off`). While it is on, the `Stop` hook feeds Claude every phone message
+sent since it last heard from the user, including ones sent while it was
+still working, and otherwise waits for the next one; several replies arrive
+as one numbered instruction. A phone answer to `AskUserQuestion` is used
+instead of the terminal prompt. Read it yourself
 from `GET /me` → `user.settings.remote_mode` if you want to adapt your own
 behaviour, for example by waiting on questions longer.
 
@@ -334,7 +353,7 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `POST /threads/{ref}/activity` | Set the status line (`text`, `kind`, `ttl_seconds`, `seq`); empty `text` clears; never creates a thread |
 | `DELETE /threads/{ref}/activity` | Clear the status line |
 | `POST /threads/{ref}/messages` | Post a message (creates `ext:` thread); JSON with `attachments` ids, or multipart with `file` parts; optional `activity`, `client_key` |
-| `GET /threads/{ref}/messages?after=&before=&limit=&sender=&wait=` | Read or wait for messages |
+| `GET /threads/{ref}/messages?after=&after_time=&before=&limit=&sender=&wait=` | Read or wait for messages; catch-up pages may carry `deleted` tombstones, an unknown `after` sets `anchor_unknown` |
 | `GET /messages/{id}` | One message |
 | `DELETE /messages/{id}` | Remove a message and its files for good (posted a secret by mistake) |
 | `POST /threads/{ref}/attachments` | Upload files (multipart `file` parts or a raw body) to attach later |

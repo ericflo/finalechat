@@ -145,6 +145,19 @@ function luminance({ h, s, l }: { h: number; s: number; l: number }): number {
  * scroll events while one is open. */
 export let sheetsOpen = 0;
 
+/** Pointers currently down anywhere. A sheet opened while one is held (a
+ * long press) waits for it to lift before it takes taps; one opened from
+ * the keyboard or after a completed tap is live at once. */
+let pointersDown = 0;
+if (typeof window !== "undefined") {
+  window.addEventListener("pointerdown", () => pointersDown++, true);
+  const up = () => {
+    pointersDown = Math.max(0, pointersDown - 1);
+  };
+  window.addEventListener("pointerup", up, true);
+  window.addEventListener("pointercancel", up, true);
+}
+
 /** Bottom sheet: locks the page behind it, traps focus, restores it on close.
  * A sheet opened by a long press ignores the click that the finger's lift
  * produces, so the gesture can neither dismiss it nor pick an item. */
@@ -155,17 +168,25 @@ export function Sheet({ onClose, children, label }: { onClose: () => void; child
   const [armed, setArmed] = useState(false);
 
   useEffect(() => {
-    // Arm shortly after the pointer that may have opened us is released.
+    if (pointersDown === 0) {
+      setArmed(true);
+      return;
+    }
+    // Opened under a held finger: arm shortly after it lifts, or at the next
+    // press, which is a new gesture by definition. Never on a clock alone.
     let timer: number | undefined;
-    const arm = () => {
+    const lifted = () => {
       timer = window.setTimeout(() => setArmed(true), 120);
     };
-    window.addEventListener("pointerup", arm, { once: true, capture: true });
-    const fallback = window.setTimeout(() => setArmed(true), 500);
+    const pressed = () => setArmed(true);
+    window.addEventListener("pointerup", lifted, { once: true, capture: true });
+    window.addEventListener("pointercancel", lifted, { once: true, capture: true });
+    window.addEventListener("pointerdown", pressed, { once: true, capture: true });
     return () => {
-      window.removeEventListener("pointerup", arm, true);
+      window.removeEventListener("pointerup", lifted, true);
+      window.removeEventListener("pointercancel", lifted, true);
+      window.removeEventListener("pointerdown", pressed, true);
       window.clearTimeout(timer);
-      window.clearTimeout(fallback);
     };
   }, []);
 

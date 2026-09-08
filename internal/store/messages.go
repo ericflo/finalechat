@@ -84,6 +84,10 @@ type MessageInput struct {
 	// Activity, when set, becomes the thread's status line in the same
 	// transaction; otherwise an agent message clears the status.
 	Activity *ActivityInput
+	// ClearSeq is the sequence an agent post's implicit clear records (the
+	// seq of a blank inline activity), so a status write still in flight
+	// cannot land after the message and resurrect the line. Zero: unordered.
+	ClearSeq int64
 	// AttachmentIDs are pending uploads in the same thread to bind.
 	AttachmentIDs []uuid.UUID
 }
@@ -169,15 +173,17 @@ func createMessageTx(ctx context.Context, tx pgx.Tx, userID, threadID uuid.UUID,
 		lastRead = "GREATEST(t.last_read_at, m.created_at)"
 	}
 	// A plain agent message leaves an archived thread archived; the user's
-	// own reply and anything marked important bring it back.
+	// own reply from the app and anything marked important bring it back. A
+	// "user" message an agent mirrors from its terminal is not the user
+	// coming back to the thread.
 	archived := "t.archived_at"
-	if in.Sender == SenderUser || in.Importance == ImportanceImportant {
+	if (in.Sender == SenderUser && in.Origin == OriginSession) || in.Importance == ImportanceImportant {
 		archived = "NULL"
 	}
 	// An agent message is the outcome its status line announced, so the
 	// status goes with it unless the post carries the next one; the user's
 	// reply leaves it alone.
-	activity := activityCleared
+	var activity string
 	args := []any{threadID, userID, msg.CreatedAt, previewFor(in.Body, len(in.AttachmentIDs)), in.Sender}
 	switch {
 	case in.Activity != nil:
@@ -185,6 +191,9 @@ func createMessageTx(ctx context.Context, tx pgx.Tx, userID, threadID uuid.UUID,
 		activity = activitySet("$6", "$7", "$8", "$9")
 	case in.Sender == SenderUser:
 		activity = "activity_text = t.activity_text"
+	default:
+		args = append(args, in.ClearSeq)
+		activity = activityCleared("$6")
 	}
 	thread, err = scanThread(tx.QueryRow(ctx, `WITH m AS (SELECT $3::timestamptz AS created_at)
 		UPDATE threads t SET preview = $4, preview_sender = $5, last_activity_at = m.created_at, updated_at = now(),
@@ -329,24 +338,43 @@ type MessagePage struct {
 
 // ListMessages returns messages in ascending order. Without a cursor it
 // returns the newest Limit messages. hasMore reports whether older messages
-// exist before the returned window (or, with After, whether more newer ones do).
-func (s *Store) ListMessages(ctx context.Context, userID, threadID uuid.UUID, p MessagePage) (msgs []*Message, hasMore bool, err error) {
+// exist before the returned window (or, with After, whether more newer ones
+// do). anchorUnknown is set when After names a message the thread does not
+// hold (a thread deleted and recreated under the same external id, say): the
+// page then starts from the thread's first message rather than matching
+// nothing forever.
+func (s *Store) ListMessages(ctx context.Context, userID, threadID uuid.UUID, p MessagePage) (msgs []*Message, hasMore, anchorUnknown bool, err error) {
 	if p.Limit <= 0 || p.Limit > 500 {
 		p.Limit = 100
+	}
+	var anchorAt time.Time
+	if p.After != nil {
+		err = translate(s.pool.QueryRow(ctx, "SELECT created_at FROM messages WHERE id = $1 AND thread_id = $2 AND user_id = $3", *p.After, threadID, userID).Scan(&anchorAt))
+		switch {
+		case err == ErrNotFound:
+			anchorUnknown = true
+		case err != nil:
+			return nil, false, false, err
+		}
 	}
 	args := []any{threadID, userID, p.Limit + 1}
 	where := "m.thread_id = $1 AND m.user_id = $2"
 	// A catch-up page (after=<id>, no sender filter) includes tombstones so
 	// a client that held the message learns it is gone; everything else
 	// shows live messages only.
-	if p.After == nil || p.Sender != "" {
+	if p.After == nil || anchorUnknown || p.Sender != "" {
 		where += " AND m.deleted_at IS NULL"
 	}
 	order := "ORDER BY m.created_at DESC, m.id DESC"
 	reverse := true
 	if p.After != nil {
-		args = append(args, *p.After)
-		where += " AND (m.created_at, m.id) > (SELECT c.created_at, c.id FROM messages c WHERE c.id = $4)"
+		if !anchorUnknown {
+			args = append(args, anchorAt, *p.After)
+			// Besides what came after the anchor, the page carries the
+			// tombstone of any older message deleted since the anchor existed,
+			// which is exactly the set a client that holds the anchor may hold.
+			where += " AND ((m.created_at, m.id) > ($4::timestamptz, $5::uuid) OR (m.deleted_at IS NOT NULL AND m.deleted_at > $4::timestamptz))"
+		}
 		order = "ORDER BY m.created_at ASC, m.id ASC"
 		reverse = false
 	} else if p.AfterTime != nil {
@@ -364,19 +392,19 @@ func (s *Store) ListMessages(ctx context.Context, userID, threadID uuid.UUID, p 
 	}
 	rows, err := s.pool.Query(ctx, "SELECT "+messageColumns+" FROM messages m WHERE "+where+" "+order+" LIMIT $3", args...)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	defer rows.Close()
 	out := []*Message{}
 	for rows.Next() {
 		m, err := scanMessage(rows)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if len(out) > p.Limit {
 		out = out[:p.Limit]
@@ -388,7 +416,7 @@ func (s *Store) ListMessages(ctx context.Context, userID, threadID uuid.UUID, p 
 		}
 	}
 	if err := s.hydrateAttachments(ctx, userID, out); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
-	return out, hasMore, nil
+	return out, hasMore, anchorUnknown, nil
 }
