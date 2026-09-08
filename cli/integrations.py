@@ -314,7 +314,65 @@ def recover_source_file(directory, record, destination):
             os.fsync(out.fileno())
 
 
-def upload_website(client, directory, journal_path, thread_ref, title):
+class PublicationDeleted(CLIError):
+    def __init__(self, artifact_id=None):
+        self.artifact_id = artifact_id
+        super().__init__("The remote artifact was deleted. Automatic publication is paused; explicitly publish this session with --recreate to create a new record.")
+
+
+class PublicationConflict(CLIError):
+    pass
+
+
+def publication_head(client, artifact_id):
+    try:
+        return client.request("GET", "/api/v1/artifacts/" + Client.ref_path(artifact_id))
+    except APIError as error:
+        if error.status == 404:
+            raise PublicationDeleted(artifact_id) from None
+        raise
+
+
+def require_source_extension(directory, manifest, previous):
+    """A native publisher may advance only when every old source is a prefix."""
+    old_dataset, new_dataset = previous.get("dataset", {}), manifest.get("dataset", {})
+    if any(old_dataset.get(k) != new_dataset.get(k) for k in ("format", "schema", "session_id")):
+        raise PublicationConflict("The remote artifact belongs to a different native dataset.")
+    local = {record["path"]: record for record in manifest["files"] if record["role"] == "source"}
+    for old in previous["files"]:
+        if old["role"] != "source":
+            continue
+        record = local.get(old["path"])
+        if record is None or type(old["size"]) is not int or not 0 <= old["size"] <= record["size"]:
+            raise PublicationConflict("The local capture is missing published native records. Restore or extend the local sources before publishing again.")
+        digest, remaining = hashlib.sha256(), old["size"]
+        with regular_source(Path(directory) / record["path"]) as (source, _size):
+            while remaining:
+                raw = source.read(min(remaining, ARTIFACT_CHUNK))
+                if not raw:
+                    raise PublicationConflict("The local capture no longer contains the published source prefix.")
+                digest.update(raw)
+                remaining -= len(raw)
+        if digest.hexdigest() != old["sha256"]:
+            raise PublicationConflict("Local and published source histories diverged. The published record was left unchanged.")
+
+
+def publication_intent(client, directory, manifest, thread_ref, title, artifact_id=None, signature="", check_sources=False, key="session"):
+    if artifact_id:
+        head = publication_head(client, artifact_id)
+    else:
+        artifact = client.request("PUT", "/api/v1/threads/" + Client.ref_path(thread_ref) + "/artifacts/" + urllib.parse.quote(key, safe=""),
+                                  body={"title": title}, retries=2)["artifact"]
+        head = publication_head(client, artifact["id"])
+    artifact = head["artifact"]
+    if check_sources and head.get("revision"):
+        require_source_extension(directory, manifest, head["revision"]["manifest"])
+    return {"manifest_digest": sha256(canonical_bytes(manifest)), "artifact_id": artifact["id"],
+            "thread_id": artifact["thread_id"], "previous_revision_id": artifact.get("current_revision_id"),
+            "client_key": "native-" + secrets.token_hex(24), "directory": str(directory), "signature": signature}
+
+
+def upload_website(client, directory, journal_path, thread_ref, title, artifact_id=None, signature="", check_sources=False, key="session"):
     """Journal immutable capture identity before the first remote write."""
     manifest = verify_website(directory)
     journal = read_object(journal_path)
@@ -322,17 +380,18 @@ def upload_website(client, directory, journal_path, thread_ref, title):
     if journal and journal.get("manifest_digest") != digest:
         raise CLIError("A pending publication has different staged content; retain it and retry first.")
     if not journal:
-        artifact = client.request("PUT", "/api/v1/threads/" + Client.ref_path(thread_ref) + "/artifacts/session",
-                                  body={"title": title}, retries=2)["artifact"]
-        journal = {"manifest_digest": digest, "artifact_id": artifact["id"],
-                   "previous_revision_id": artifact.get("current_revision_id"),
-                   "client_key": "native-" + secrets.token_hex(24), "directory": str(directory)}
+        journal = publication_intent(client, directory, manifest, thread_ref, title, artifact_id, signature, check_sources, key)
         private_json(journal_path, journal)
     if journal.get("revision_id"):
         return journal
     base = "/api/v1/artifacts/" + Client.ref_path(journal["artifact_id"])
     hashes = sorted({c["sha256"] for f in manifest["files"] for c in f["chunks"]})
-    missing = set(client.request("POST", base + "/blobs/check", body={"hashes": hashes})["missing"])
+    try:
+        missing = set(client.request("POST", base + "/blobs/check", body={"hashes": hashes})["missing"])
+    except APIError as error:
+        if error.status == 404:
+            publication_head(client, journal["artifact_id"])
+        raise
     for record in manifest["files"]:
         with regular_source(Path(directory) / record["path"]) as (source, _size):
             for chunk in record["chunks"]:
@@ -343,9 +402,16 @@ def upload_website(client, directory, journal_path, thread_ref, title):
                     client.request_bytes("PUT", base + "/blobs/" + chunk["sha256"], data=raw,
                                          content_type="application/octet-stream", timeout=60)
                     missing.remove(chunk["sha256"])
-    revision = client.request("POST", base + "/revisions", body={
-        "client_key": journal["client_key"], "previous_revision_id": journal["previous_revision_id"],
-        "manifest": manifest}, retries=2)["revision"]
+    try:
+        revision = client.request("POST", base + "/revisions", body={
+            "client_key": journal["client_key"], "previous_revision_id": journal["previous_revision_id"],
+            "manifest": manifest}, retries=2)["revision"]
+    except APIError as error:
+        if error.status in (404, 409):
+            head = publication_head(client, journal["artifact_id"])
+            if error.status == 409 and head["artifact"].get("current_revision_id") != journal["previous_revision_id"]:
+                raise PublicationConflict("Another publisher advanced this artifact. A fresh capture is required.") from None
+        raise
     journal["revision_id"] = revision["id"]
     private_json(journal_path, journal)
     return journal
@@ -1045,10 +1111,10 @@ def registration_signature(registration, settings, directory):
     if audit.exists():
         sources.append(audit)
     stats = [(str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in sources]
-    return sha256(canonical_bytes([stats, settings["snapshot"]["version"], VERSION, INTEGRATION_ASSETS_DIGEST]))
+    return sha256(canonical_bytes([stats, settings["snapshot"]["version"] if settings else "unavailable", VERSION, INTEGRATION_ASSETS_DIGEST, INTEGRATION_ADAPTER_DIGEST]))
 
 
-def publish_registered_session(client, registration, directory, settings):
+def publish_registered_session(client, registration, directory, settings, recreate=False):
     session_dir = Path(directory) / "publications" / sha256(registration["session_id"].encode())
     session_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     with integration_lock(session_dir / "publisher.lock", timeout=0):
@@ -1056,46 +1122,96 @@ def publish_registered_session(client, registration, directory, settings):
         state = read_object(state_path)
         pending = session_dir / "pending.json"
         thread_ref = "ext:" + registration["provider"] + ":" + registration["session_id"]
+        intent = read_object(pending)
+        if recreate:
+            old_id = intent.get("artifact_id") or state.get("artifact_id")
+            if not old_id:
+                raise CLIError("This session has no deleted publication to recreate.")
+            try:
+                publication_head(client, old_id)
+            except PublicationDeleted:
+                # Keep the old identity and any unfinished capture as evidence.
+                private_json(session_dir / ("retired-" + sha256(old_id.encode()) + ".json"), {"state": state, "pending": intent})
+                private_json(state_path, {})
+                private_json(pending, {})
+                state, intent = {}, {}
+            else:
+                raise CLIError("The existing artifact still exists; --recreate cannot bypass a history conflict.")
+        if state.get("remote_deleted"):
+            raise PublicationDeleted()
 
         def complete(stage, signature):
-            result = upload_website(client, stage, pending, thread_ref, "Session explorer")
+            result = upload_website(client, stage, pending, thread_ref, "Session explorer", artifact_id=state.get("artifact_id"), signature=signature, check_sources=True)
             record = {"signature": signature, "artifact_id": result["artifact_id"], "revision_id": result["revision_id"],
-                      "settings_version": verify_website(stage)["dataset"].get("settings_version")}
+                      "thread_id": result.get("thread_id"), "settings_version": verify_website(stage)["dataset"].get("settings_version")}
             private_json(state_path, record)
             pending.unlink()
             shutil.rmtree(stage)
+            private_json(session_dir / "status.json", {"state": "published", "revision_id": record["revision_id"]})
             return record
 
-        if pending.exists():
-            intent = read_object(pending)
-            stage = Path(intent["directory"])
-            if stage.parent.resolve() != session_dir.resolve():
-                raise CLIError("Publication journal points outside its private staging directory.")
-            state = complete(stage, intent.get("signature", ""))
-        signature = registration_signature(registration, settings, directory)
-        if state.get("signature") == signature:
-            return state
-        stage = Path(tempfile.mkdtemp(prefix="capture-", dir=str(session_dir)))
         try:
-            build_native_export(stage, registration, settings, Path(directory) / "settings-audit.jsonl")
-            # upload_website records its own immutable identity before upload.
-            result = complete(stage, signature)
-        except BaseException:
-            if not pending.exists():
-                shutil.rmtree(stage)
+            old_stage = None
+            if intent:
+                old_stage = Path(intent["directory"])
+                if old_stage.parent.resolve() != session_dir.resolve() or old_stage.is_symlink():
+                    raise CLIError("Publication journal points outside its private staging directory.")
+                if not intent.get("needs_recapture"):
+                    try:
+                        state = complete(old_stage, intent.get("signature", ""))
+                        intent, old_stage = {}, None
+                    except PublicationConflict:
+                        intent["needs_recapture"] = True
+                        private_json(pending, intent)
+            signature = registration_signature(registration, settings, directory)
+            if not intent and state.get("signature") == signature:
+                return state
+            stage = Path(tempfile.mkdtemp(prefix="capture-", dir=str(session_dir)))
+            try:
+                manifest = build_native_export(stage, registration, settings, Path(directory) / "settings-audit.jsonl")
+                if intent:
+                    # The replacement must preserve both the pending capture
+                    # and the published source frontier. Never just rebase an
+                    # old manifest onto the newer server head.
+                    require_source_extension(stage, manifest, verify_website(old_stage))
+                    replacement = publication_intent(client, stage, manifest, thread_ref, "Session explorer", intent["artifact_id"], signature, True)
+                    private_json(pending, replacement)
+                    # New immutable source bytes and intent are durable first.
+                    shutil.rmtree(old_stage)
+                return complete(stage, signature)
+            except BaseException:
+                saved = read_object(pending)
+                if saved.get("directory") != str(stage):
+                    shutil.rmtree(stage)
+                raise
+        except PublicationDeleted as error:
+            latest = read_object(pending)
+            state.update(artifact_id=latest.get("artifact_id") or state.get("artifact_id") or error.artifact_id, remote_deleted=True)
+            private_json(state_path, state)
+            private_json(session_dir / "status.json", {"state": "remote_deleted", "message": "Explicit --recreate is required to resume this session's publication."})
             raise
-        return result
+        except PublicationConflict as error:
+            private_json(session_dir / "status.json", {"state": "conflicted", "message": str(error)})
+            raise
 
 
 def publish_integration_pass(provider, project, client, directory):
     config = read_object(Path(directory) / "integration.json")
     if not config.get("artifacts"):
         return
-    adapter = make_settings_adapter(provider, project, config.get("primary_scope"))
+    adapter = None
     try:
-        settings = adapter.snapshot()
+        settings = None
+        native_root = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
+        try:
+            adapter = make_settings_adapter(provider, project, config.get("primary_scope"))
+            settings = adapter.snapshot()
+            if provider == "codex":
+                native_root = adapter.rpc.info["codexHome"]
+        except (CLIError, OSError, ValueError):
+            hook_log(f"{provider} settings snapshot unavailable; preserving native session sources independently.")
         if provider == "codex":
-            discover_codex_sessions(project, directory, adapter.rpc.info["codexHome"])
+            discover_codex_sessions(project, directory, native_root)
         for path in sorted((Path(directory) / "sessions").glob("*.json")):
             registration = read_object(path)
             try:
@@ -1103,7 +1219,8 @@ def publish_integration_pass(provider, project, client, directory):
             except (CLIError, OSError, ValueError) as err:
                 hook_log(f"artifact publication deferred ({provider}, {registration.get('session_id')}): {type(err).__name__}")
     finally:
-        adapter.close()
+        if adapter:
+            adapter.close()
 
 
 def start_integration_companion(provider, project, client=None):
@@ -1298,20 +1415,28 @@ def cmd_artifact(args):
         return EXIT_OK
     if args.artifact_command == "publish":
         # Explicit one-shot publication is allowed without persistent opt-in.
+        if args.recreate and not args.session:
+            raise CLIError("--recreate requires one explicit native session ID.")
         client = client_from_args(args)
-        adapter = make_settings_adapter(provider, project)
+        adapter = None
         try:
-            settings = adapter.snapshot()
+            settings = None
+            try:
+                adapter = make_settings_adapter(provider, project)
+                settings = adapter.snapshot()
+            except (CLIError, OSError, ValueError):
+                print("Settings are unavailable; publishing the native session sources independently.", file=sys.stderr)
             registrations = [read_object(p) for p in (directory / "sessions").glob("*.json")]
             if args.session:
                 registrations = [r for r in registrations if r["session_id"] == args.session]
             if not registrations:
                 raise CLIError("No tracked sessions. Use artifact track first.")
             for registration in registrations:
-                result = publish_registered_session(client, registration, directory, settings)
+                result = publish_registered_session(client, registration, directory, settings, recreate=args.recreate)
                 print(f"Published {registration['session_id']} · revision {result['revision_id']}")
         finally:
-            adapter.close()
+            if adapter:
+                adapter.close()
         return EXIT_OK
     transcript = args.transcript
     if not transcript and provider == "codex":
@@ -1333,8 +1458,13 @@ def cmd_artifact(args):
     target.mkdir(parents=True, exist_ok=False, mode=0o700)
     adapter = None
     try:
-        adapter = make_settings_adapter(provider, project)
-        manifest = build_native_export(target, registration, adapter.snapshot(), directory / "settings-audit.jsonl")
+        settings = None
+        try:
+            adapter = make_settings_adapter(provider, project)
+            settings = adapter.snapshot()
+        except (CLIError, OSError, ValueError):
+            print("Settings are unavailable; exporting the native session sources independently.", file=sys.stderr)
+        manifest = build_native_export(target, registration, settings, directory / "settings-audit.jsonl")
         verify_website(target)
     except BaseException:
         shutil.rmtree(target)
@@ -1391,6 +1521,7 @@ def cmd_connector(args):
         config = read_object(directory / "integration.json")
         pairing = read_object(directory / "connector.json")
         value = {"provider": provider, "project": project, "enabled": config.get("enabled", False), "artifacts": config.get("artifacts", False), "paired": bool(pairing)}
+        value["publications"] = [dict(read_object(path), local_capture=path.parent.name) for path in sorted(directory.glob("publications/*/status.json"))]
         if pairing:
             scoped = Client(pairing["base_url"], pairing["secret"])
             remote = scoped.request("GET", "/api/v1/connectors/" + pairing["connector"]["id"])
@@ -1447,6 +1578,7 @@ def add_integration_parsers(sub):
             parser.add_argument("--transcript", help="native JSONL path; Codex can resolve its own thread ID")
         if name == "publish":
             parser.add_argument("session", nargs="?", help="tracked native session; omit for all tracked sessions here")
+            parser.add_argument("--recreate", action="store_true", help="explicitly create a new remote record after deletion; requires a session ID")
         if name == "export":
             parser.add_argument("-o", "--output", required=True, help="new export directory")
         parser.set_defaults(func=cmd_artifact)

@@ -249,7 +249,7 @@ class IntegrationTests(unittest.TestCase):
     def test_install_hook_spec_and_parsers(self):
         spec = G["hook_spec"]("finalechat hook claude-code")
         self.assertTrue({"SubagentStop", "PreCompact", "ConfigChange"} <= set(spec))
-        for argv in (["install", "codex", "--no-mcp"], ["connector", "pair", "claude-code", "--scope", "project_local"], ["artifact", "verify", "/tmp/archive"]):
+        for argv in (["install", "codex", "--no-mcp"], ["connector", "pair", "claude-code", "--scope", "project_local"], ["artifact", "verify", "/tmp/archive"], ["artifact", "publish", "codex", "fixture-session", "--recreate"]):
             self.assertTrue(callable(G["build_parser"]().parse_args(argv).func))
 
 

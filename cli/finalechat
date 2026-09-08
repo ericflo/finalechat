@@ -156,6 +156,13 @@ def resolve_token(explicit: str | None = None) -> str | None:
 # --------------------------------------------------------------------------- #
 
 
+class NoAPIRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # API endpoints are canonical. Never forward an account or connector
+        # credential to a redirect target or turn a command POST into a GET.
+        return None
+
+
 class Client:
     def __init__(self, base_url: str, token: str | None):
         self.base_url = base_url.rstrip("/")
@@ -166,6 +173,15 @@ class Client:
         self.deadline: float | None = None
 
     # -- transport ---------------------------------------------------------
+
+    def api_url(self, path: str) -> str:
+        url = path if path.startswith(("http://", "https://")) else self.base_url + path
+        base, target = urllib.parse.urlsplit(self.base_url), urllib.parse.urlsplit(url)
+        def origin(value):
+            return value.scheme, value.hostname, value.port or (443 if value.scheme == "https" else 80)
+        if base.scheme not in ("http", "https") or not base.hostname or base.username or base.password or target.username or target.password or target.fragment or origin(base) != origin(target):
+            raise CLIError("Authenticated requests must stay on the configured FinaleChat origin.")
+        return url
 
     def request(self, method: str, path: str, body: dict | None = None, params: dict | None = None,
                 timeout: float = 15.0, retries: int | None = None) -> dict:
@@ -206,7 +222,7 @@ class Client:
                       timeout: float) -> dict:
         if not self.token:
             raise NotSignedIn()
-        url = self.base_url + path
+        url = self.api_url(path)
         if params:
             clean = {k: v for k, v in params.items() if v is not None and v != ""}
             if clean:
@@ -222,10 +238,11 @@ class Client:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.build_opener(NoAPIRedirect()).open(req, timeout=timeout) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as err:
-            raw = err.read()
+            with err:
+                raw = err.read()
             try:
                 retry_after = float(err.headers.get("Retry-After") or 0)
             except (TypeError, ValueError):
@@ -253,7 +270,7 @@ class Client:
         """Send a request with a prepared body and return (body bytes, headers)."""
         if not self.token:
             raise NotSignedIn()
-        url = path if path.startswith("http") else self.base_url + path
+        url = self.api_url(path)
         headers = {
             "Authorization": f"Bearer {self.token}",
             "Accept": "application/json, */*",
@@ -263,10 +280,11 @@ class Client:
             headers["Content-Type"] = content_type
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.build_opener(NoAPIRedirect()).open(req, timeout=timeout) as resp:
                 return resp.read(), {k.lower(): v for k, v in resp.headers.items()}
         except urllib.error.HTTPError as err:
-            raw = err.read()
+            with err:
+                raw = err.read()
             try:
                 payload = json.loads(raw.decode("utf-8"))
                 info = payload.get("error") or {}
@@ -2654,7 +2672,7 @@ def cmd_mcp(args) -> int:
 # BEGIN GENERATED INTEGRATIONS (scripts/build-cli-integrations.py)
 INTEGRATION_ASSETS = {'sdk': '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', 'viewer': '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', 'settings': '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'}
 INTEGRATION_ASSETS_DIGEST = '8037f9d40e04609b5eb7f4407b1fd2d49a7fb86901f8a05229a7cd2a1a02b2df'
-INTEGRATION_ADAPTER_DIGEST = '3c87c40bd6cd081ec4cc7bb2595b3dda8ff04ef7ce8f3e84a47e389dfb91e5f8'
+INTEGRATION_ADAPTER_DIGEST = '576aa5f878e614626f67cdf1ee60b30e2810b4fd6d92415c321b92ecbaa598a4'
 """Source for the integrations embedded in the single-file CLI.
 
 Run scripts/build-cli-integrations.py after editing this file or cli/assets.
@@ -2971,7 +2989,65 @@ def recover_source_file(directory, record, destination):
             os.fsync(out.fileno())
 
 
-def upload_website(client, directory, journal_path, thread_ref, title):
+class PublicationDeleted(CLIError):
+    def __init__(self, artifact_id=None):
+        self.artifact_id = artifact_id
+        super().__init__("The remote artifact was deleted. Automatic publication is paused; explicitly publish this session with --recreate to create a new record.")
+
+
+class PublicationConflict(CLIError):
+    pass
+
+
+def publication_head(client, artifact_id):
+    try:
+        return client.request("GET", "/api/v1/artifacts/" + Client.ref_path(artifact_id))
+    except APIError as error:
+        if error.status == 404:
+            raise PublicationDeleted(artifact_id) from None
+        raise
+
+
+def require_source_extension(directory, manifest, previous):
+    """A native publisher may advance only when every old source is a prefix."""
+    old_dataset, new_dataset = previous.get("dataset", {}), manifest.get("dataset", {})
+    if any(old_dataset.get(k) != new_dataset.get(k) for k in ("format", "schema", "session_id")):
+        raise PublicationConflict("The remote artifact belongs to a different native dataset.")
+    local = {record["path"]: record for record in manifest["files"] if record["role"] == "source"}
+    for old in previous["files"]:
+        if old["role"] != "source":
+            continue
+        record = local.get(old["path"])
+        if record is None or type(old["size"]) is not int or not 0 <= old["size"] <= record["size"]:
+            raise PublicationConflict("The local capture is missing published native records. Restore or extend the local sources before publishing again.")
+        digest, remaining = hashlib.sha256(), old["size"]
+        with regular_source(Path(directory) / record["path"]) as (source, _size):
+            while remaining:
+                raw = source.read(min(remaining, ARTIFACT_CHUNK))
+                if not raw:
+                    raise PublicationConflict("The local capture no longer contains the published source prefix.")
+                digest.update(raw)
+                remaining -= len(raw)
+        if digest.hexdigest() != old["sha256"]:
+            raise PublicationConflict("Local and published source histories diverged. The published record was left unchanged.")
+
+
+def publication_intent(client, directory, manifest, thread_ref, title, artifact_id=None, signature="", check_sources=False, key="session"):
+    if artifact_id:
+        head = publication_head(client, artifact_id)
+    else:
+        artifact = client.request("PUT", "/api/v1/threads/" + Client.ref_path(thread_ref) + "/artifacts/" + urllib.parse.quote(key, safe=""),
+                                  body={"title": title}, retries=2)["artifact"]
+        head = publication_head(client, artifact["id"])
+    artifact = head["artifact"]
+    if check_sources and head.get("revision"):
+        require_source_extension(directory, manifest, head["revision"]["manifest"])
+    return {"manifest_digest": sha256(canonical_bytes(manifest)), "artifact_id": artifact["id"],
+            "thread_id": artifact["thread_id"], "previous_revision_id": artifact.get("current_revision_id"),
+            "client_key": "native-" + secrets.token_hex(24), "directory": str(directory), "signature": signature}
+
+
+def upload_website(client, directory, journal_path, thread_ref, title, artifact_id=None, signature="", check_sources=False, key="session"):
     """Journal immutable capture identity before the first remote write."""
     manifest = verify_website(directory)
     journal = read_object(journal_path)
@@ -2979,17 +3055,18 @@ def upload_website(client, directory, journal_path, thread_ref, title):
     if journal and journal.get("manifest_digest") != digest:
         raise CLIError("A pending publication has different staged content; retain it and retry first.")
     if not journal:
-        artifact = client.request("PUT", "/api/v1/threads/" + Client.ref_path(thread_ref) + "/artifacts/session",
-                                  body={"title": title}, retries=2)["artifact"]
-        journal = {"manifest_digest": digest, "artifact_id": artifact["id"],
-                   "previous_revision_id": artifact.get("current_revision_id"),
-                   "client_key": "native-" + secrets.token_hex(24), "directory": str(directory)}
+        journal = publication_intent(client, directory, manifest, thread_ref, title, artifact_id, signature, check_sources, key)
         private_json(journal_path, journal)
     if journal.get("revision_id"):
         return journal
     base = "/api/v1/artifacts/" + Client.ref_path(journal["artifact_id"])
     hashes = sorted({c["sha256"] for f in manifest["files"] for c in f["chunks"]})
-    missing = set(client.request("POST", base + "/blobs/check", body={"hashes": hashes})["missing"])
+    try:
+        missing = set(client.request("POST", base + "/blobs/check", body={"hashes": hashes})["missing"])
+    except APIError as error:
+        if error.status == 404:
+            publication_head(client, journal["artifact_id"])
+        raise
     for record in manifest["files"]:
         with regular_source(Path(directory) / record["path"]) as (source, _size):
             for chunk in record["chunks"]:
@@ -3000,9 +3077,16 @@ def upload_website(client, directory, journal_path, thread_ref, title):
                     client.request_bytes("PUT", base + "/blobs/" + chunk["sha256"], data=raw,
                                          content_type="application/octet-stream", timeout=60)
                     missing.remove(chunk["sha256"])
-    revision = client.request("POST", base + "/revisions", body={
-        "client_key": journal["client_key"], "previous_revision_id": journal["previous_revision_id"],
-        "manifest": manifest}, retries=2)["revision"]
+    try:
+        revision = client.request("POST", base + "/revisions", body={
+            "client_key": journal["client_key"], "previous_revision_id": journal["previous_revision_id"],
+            "manifest": manifest}, retries=2)["revision"]
+    except APIError as error:
+        if error.status in (404, 409):
+            head = publication_head(client, journal["artifact_id"])
+            if error.status == 409 and head["artifact"].get("current_revision_id") != journal["previous_revision_id"]:
+                raise PublicationConflict("Another publisher advanced this artifact. A fresh capture is required.") from None
+        raise
     journal["revision_id"] = revision["id"]
     private_json(journal_path, journal)
     return journal
@@ -3702,10 +3786,10 @@ def registration_signature(registration, settings, directory):
     if audit.exists():
         sources.append(audit)
     stats = [(str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in sources]
-    return sha256(canonical_bytes([stats, settings["snapshot"]["version"], VERSION, INTEGRATION_ASSETS_DIGEST]))
+    return sha256(canonical_bytes([stats, settings["snapshot"]["version"] if settings else "unavailable", VERSION, INTEGRATION_ASSETS_DIGEST, INTEGRATION_ADAPTER_DIGEST]))
 
 
-def publish_registered_session(client, registration, directory, settings):
+def publish_registered_session(client, registration, directory, settings, recreate=False):
     session_dir = Path(directory) / "publications" / sha256(registration["session_id"].encode())
     session_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     with integration_lock(session_dir / "publisher.lock", timeout=0):
@@ -3713,46 +3797,96 @@ def publish_registered_session(client, registration, directory, settings):
         state = read_object(state_path)
         pending = session_dir / "pending.json"
         thread_ref = "ext:" + registration["provider"] + ":" + registration["session_id"]
+        intent = read_object(pending)
+        if recreate:
+            old_id = intent.get("artifact_id") or state.get("artifact_id")
+            if not old_id:
+                raise CLIError("This session has no deleted publication to recreate.")
+            try:
+                publication_head(client, old_id)
+            except PublicationDeleted:
+                # Keep the old identity and any unfinished capture as evidence.
+                private_json(session_dir / ("retired-" + sha256(old_id.encode()) + ".json"), {"state": state, "pending": intent})
+                private_json(state_path, {})
+                private_json(pending, {})
+                state, intent = {}, {}
+            else:
+                raise CLIError("The existing artifact still exists; --recreate cannot bypass a history conflict.")
+        if state.get("remote_deleted"):
+            raise PublicationDeleted()
 
         def complete(stage, signature):
-            result = upload_website(client, stage, pending, thread_ref, "Session explorer")
+            result = upload_website(client, stage, pending, thread_ref, "Session explorer", artifact_id=state.get("artifact_id"), signature=signature, check_sources=True)
             record = {"signature": signature, "artifact_id": result["artifact_id"], "revision_id": result["revision_id"],
-                      "settings_version": verify_website(stage)["dataset"].get("settings_version")}
+                      "thread_id": result.get("thread_id"), "settings_version": verify_website(stage)["dataset"].get("settings_version")}
             private_json(state_path, record)
             pending.unlink()
             shutil.rmtree(stage)
+            private_json(session_dir / "status.json", {"state": "published", "revision_id": record["revision_id"]})
             return record
 
-        if pending.exists():
-            intent = read_object(pending)
-            stage = Path(intent["directory"])
-            if stage.parent.resolve() != session_dir.resolve():
-                raise CLIError("Publication journal points outside its private staging directory.")
-            state = complete(stage, intent.get("signature", ""))
-        signature = registration_signature(registration, settings, directory)
-        if state.get("signature") == signature:
-            return state
-        stage = Path(tempfile.mkdtemp(prefix="capture-", dir=str(session_dir)))
         try:
-            build_native_export(stage, registration, settings, Path(directory) / "settings-audit.jsonl")
-            # upload_website records its own immutable identity before upload.
-            result = complete(stage, signature)
-        except BaseException:
-            if not pending.exists():
-                shutil.rmtree(stage)
+            old_stage = None
+            if intent:
+                old_stage = Path(intent["directory"])
+                if old_stage.parent.resolve() != session_dir.resolve() or old_stage.is_symlink():
+                    raise CLIError("Publication journal points outside its private staging directory.")
+                if not intent.get("needs_recapture"):
+                    try:
+                        state = complete(old_stage, intent.get("signature", ""))
+                        intent, old_stage = {}, None
+                    except PublicationConflict:
+                        intent["needs_recapture"] = True
+                        private_json(pending, intent)
+            signature = registration_signature(registration, settings, directory)
+            if not intent and state.get("signature") == signature:
+                return state
+            stage = Path(tempfile.mkdtemp(prefix="capture-", dir=str(session_dir)))
+            try:
+                manifest = build_native_export(stage, registration, settings, Path(directory) / "settings-audit.jsonl")
+                if intent:
+                    # The replacement must preserve both the pending capture
+                    # and the published source frontier. Never just rebase an
+                    # old manifest onto the newer server head.
+                    require_source_extension(stage, manifest, verify_website(old_stage))
+                    replacement = publication_intent(client, stage, manifest, thread_ref, "Session explorer", intent["artifact_id"], signature, True)
+                    private_json(pending, replacement)
+                    # New immutable source bytes and intent are durable first.
+                    shutil.rmtree(old_stage)
+                return complete(stage, signature)
+            except BaseException:
+                saved = read_object(pending)
+                if saved.get("directory") != str(stage):
+                    shutil.rmtree(stage)
+                raise
+        except PublicationDeleted as error:
+            latest = read_object(pending)
+            state.update(artifact_id=latest.get("artifact_id") or state.get("artifact_id") or error.artifact_id, remote_deleted=True)
+            private_json(state_path, state)
+            private_json(session_dir / "status.json", {"state": "remote_deleted", "message": "Explicit --recreate is required to resume this session's publication."})
             raise
-        return result
+        except PublicationConflict as error:
+            private_json(session_dir / "status.json", {"state": "conflicted", "message": str(error)})
+            raise
 
 
 def publish_integration_pass(provider, project, client, directory):
     config = read_object(Path(directory) / "integration.json")
     if not config.get("artifacts"):
         return
-    adapter = make_settings_adapter(provider, project, config.get("primary_scope"))
+    adapter = None
     try:
-        settings = adapter.snapshot()
+        settings = None
+        native_root = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
+        try:
+            adapter = make_settings_adapter(provider, project, config.get("primary_scope"))
+            settings = adapter.snapshot()
+            if provider == "codex":
+                native_root = adapter.rpc.info["codexHome"]
+        except (CLIError, OSError, ValueError):
+            hook_log(f"{provider} settings snapshot unavailable; preserving native session sources independently.")
         if provider == "codex":
-            discover_codex_sessions(project, directory, adapter.rpc.info["codexHome"])
+            discover_codex_sessions(project, directory, native_root)
         for path in sorted((Path(directory) / "sessions").glob("*.json")):
             registration = read_object(path)
             try:
@@ -3760,7 +3894,8 @@ def publish_integration_pass(provider, project, client, directory):
             except (CLIError, OSError, ValueError) as err:
                 hook_log(f"artifact publication deferred ({provider}, {registration.get('session_id')}): {type(err).__name__}")
     finally:
-        adapter.close()
+        if adapter:
+            adapter.close()
 
 
 def start_integration_companion(provider, project, client=None):
@@ -3955,20 +4090,28 @@ def cmd_artifact(args):
         return EXIT_OK
     if args.artifact_command == "publish":
         # Explicit one-shot publication is allowed without persistent opt-in.
+        if args.recreate and not args.session:
+            raise CLIError("--recreate requires one explicit native session ID.")
         client = client_from_args(args)
-        adapter = make_settings_adapter(provider, project)
+        adapter = None
         try:
-            settings = adapter.snapshot()
+            settings = None
+            try:
+                adapter = make_settings_adapter(provider, project)
+                settings = adapter.snapshot()
+            except (CLIError, OSError, ValueError):
+                print("Settings are unavailable; publishing the native session sources independently.", file=sys.stderr)
             registrations = [read_object(p) for p in (directory / "sessions").glob("*.json")]
             if args.session:
                 registrations = [r for r in registrations if r["session_id"] == args.session]
             if not registrations:
                 raise CLIError("No tracked sessions. Use artifact track first.")
             for registration in registrations:
-                result = publish_registered_session(client, registration, directory, settings)
+                result = publish_registered_session(client, registration, directory, settings, recreate=args.recreate)
                 print(f"Published {registration['session_id']} · revision {result['revision_id']}")
         finally:
-            adapter.close()
+            if adapter:
+                adapter.close()
         return EXIT_OK
     transcript = args.transcript
     if not transcript and provider == "codex":
@@ -3990,8 +4133,13 @@ def cmd_artifact(args):
     target.mkdir(parents=True, exist_ok=False, mode=0o700)
     adapter = None
     try:
-        adapter = make_settings_adapter(provider, project)
-        manifest = build_native_export(target, registration, adapter.snapshot(), directory / "settings-audit.jsonl")
+        settings = None
+        try:
+            adapter = make_settings_adapter(provider, project)
+            settings = adapter.snapshot()
+        except (CLIError, OSError, ValueError):
+            print("Settings are unavailable; exporting the native session sources independently.", file=sys.stderr)
+        manifest = build_native_export(target, registration, settings, directory / "settings-audit.jsonl")
         verify_website(target)
     except BaseException:
         shutil.rmtree(target)
@@ -4048,6 +4196,7 @@ def cmd_connector(args):
         config = read_object(directory / "integration.json")
         pairing = read_object(directory / "connector.json")
         value = {"provider": provider, "project": project, "enabled": config.get("enabled", False), "artifacts": config.get("artifacts", False), "paired": bool(pairing)}
+        value["publications"] = [dict(read_object(path), local_capture=path.parent.name) for path in sorted(directory.glob("publications/*/status.json"))]
         if pairing:
             scoped = Client(pairing["base_url"], pairing["secret"])
             remote = scoped.request("GET", "/api/v1/connectors/" + pairing["connector"]["id"])
@@ -4104,6 +4253,7 @@ def add_integration_parsers(sub):
             parser.add_argument("--transcript", help="native JSONL path; Codex can resolve its own thread ID")
         if name == "publish":
             parser.add_argument("session", nargs="?", help="tracked native session; omit for all tracked sessions here")
+            parser.add_argument("--recreate", action="store_true", help="explicitly create a new remote record after deletion; requires a session ID")
         if name == "export":
             parser.add_argument("-o", "--output", required=True, help="new export directory")
         parser.set_defaults(func=cmd_artifact)

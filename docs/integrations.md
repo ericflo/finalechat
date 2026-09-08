@@ -57,6 +57,10 @@ finalechat connector run codex --project /path/to/project
 
 Archive uploading can be toggled separately with `artifact enable` / `artifact disable`. Settings commands still work when uploading or chat mirroring is disabled. A continuously running companion is needed for settings changes while the agent is idle. Detached companions are not automatically installed as boot services; an OS supervisor can run the foreground command.
 
+Publishers retain their remote artifact identity. Deleting an artifact or its thread pauses that session's automatic publication; it cannot quietly recreate the record in a new thread. To resume deliberately, use `finalechat artifact publish PROVIDER SESSION_ID --project . --recreate`. The old local publication identity is retained as recovery metadata. `connector status` includes publication conflicts and deletion status.
+
+A lost upload acknowledgement retries the original capture and idempotency key. A competing publisher's newer revision requires a fresh capture that contains every published native source file as an exact byte prefix. Truncated or divergent local histories leave the remote record unchanged. Native archive export/publication continues when settings APIs are unavailable, with the missing settings snapshot explicitly labeled.
+
 ## Export, verify and recover native sources
 
 ```sh
