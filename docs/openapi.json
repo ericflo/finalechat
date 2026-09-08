@@ -4903,7 +4903,7 @@
           "Integration settings"
         ],
         "summary": "Renew installation process ownership",
-        "description": "One random stable process identity owns a 90-second heartbeat lease. A different process must wait for expiry.",
+        "description": "One random stable process identity owns a 90-second heartbeat lease. Reuse it across transient reconnects. A different process must wait for release or expiry.",
         "responses": {
           "200": {
             "description": "Renew installation process ownership",
@@ -6365,6 +6365,77 @@
             "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
           }
         ]
+      }
+    },
+    "/connectors/{connector}/release": {
+      "post": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Release installation process ownership",
+        "description": "Call on graceful shutdown, after stopping command execution. Clears only the matching process heartbeat so a successor can reconnect immediately. Idempotent; a delayed release from an older process cannot disconnect its successor. Grants and command leases are unchanged. After an unclean exit the heartbeat expires after 90 seconds.",
+        "responses": {
+          "200": {
+            "description": "Release installation process ownership",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "connectorAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connector",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "instance": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "instance"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
       }
     }
   },

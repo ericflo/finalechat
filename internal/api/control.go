@@ -59,6 +59,7 @@ func (s *Server) connectorHandler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/v1/connectors/{connector}", s.handleConnectorStatus)
 	m.HandleFunc("POST /api/v1/connectors/{connector}/heartbeat", s.handleConnectorHeartbeat)
+	m.HandleFunc("POST /api/v1/connectors/{connector}/release", s.handleConnectorRelease)
 	m.HandleFunc("PUT /api/v1/connectors/{connector}/resources/{key}", s.handlePublishSettingsResource)
 	m.HandleFunc("PUT /api/v1/connectors/{connector}/bindings/{id}", s.handleBindSettingsArtifact)
 	m.HandleFunc("POST /api/v1/connectors/{connector}/commands/claim", s.handleClaimSettingsCommand)
@@ -246,6 +247,30 @@ func (s *Server) handleConnectorHeartbeat(w http.ResponseWriter, r *http.Request
 	}
 	writeJSON(w, 200, map[string]any{"connector": c, "online": true})
 }
+func (s *Server) handleConnectorRelease(w http.ResponseWriter, r *http.Request) {
+	c, err := s.ownConnector(r, true)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var in struct {
+		Instance string `json:"instance"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, err)
+		return
+	}
+	if !validInstance(in.Instance) {
+		writeError(w, errValidation("instance must be a stable random process identity"))
+		return
+	}
+	if err := s.store.ReleaseConnector(r.Context(), c.UserID, c.ID, in.Instance); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true})
+}
+
 func (s *Server) handlePublishSettingsResource(w http.ResponseWriter, r *http.Request) {
 	c, err := s.ownConnector(r, true)
 	if err != nil {

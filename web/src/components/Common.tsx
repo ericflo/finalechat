@@ -1,6 +1,6 @@
 import { Component, useEffect, useRef, useState, type ErrorInfo, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { onLinkClick } from "../lib/router";
-import { dismissToast, useStore } from "../lib/store";
+import { dismissToast, toast, useStore } from "../lib/store";
 import { IconCheck, IconClose, IconCopy } from "./Icons";
 
 export function Link({ href, children, className, onClick, ...rest }: { href: string; children: ReactNode; className?: string; onClick?: () => void } & Record<string, unknown>) {
@@ -67,12 +67,13 @@ export function CopyButton({ text, className = "copy", label = "Copy" }: { text:
       type="button"
       className={className}
       aria-label={done ? "Copied" : label}
+      title={done ? "Copied" : label}
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(text);
           setDone(true);
         } catch {
-          // Clipboard blocked; nothing else to do here.
+          toast("Could not copy. Select the text to copy it manually.", "error");
         }
       }}
     >

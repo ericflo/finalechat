@@ -198,3 +198,28 @@ func TestControlArchivedSurfaceCannotSubmit(t *testing.T) {
 	body["client_key"] = uuid.NewString()
 	f.browser.must(409, "POST", "/api/v1/settings-resources/"+f.resource+"/commands", body)
 }
+
+func TestControlGracefulRestartAndStaleRelease(t *testing.T) {
+	f := newControlFixture(t)
+	base := "/api/v1/connectors/" + f.id
+	next := uuid.NewString()
+	body := map[string]any{"instance": f.instance}
+	f.connector.must(409, "POST", base+"/heartbeat", map[string]any{"instance": next})
+	f.connector.must(422, "POST", base+"/release", map[string]any{"instance": ""})
+	f.agent.must(404, "POST", base+"/release", body)
+	f.connector.must(404, "POST", "/api/v1/connectors/"+uuid.NewString()+"/release", body)
+	f.connector.must(200, "POST", base+"/release", body)
+	f.connector.must(200, "POST", base+"/release", body)
+	status := f.connector.must(200, "GET", base, nil)
+	if status["online"] != false || str(sub(status, "connector"), "state") != "active" {
+		t.Fatal("release did not mark connection offline while preserving registration")
+	}
+	f.connector.must(200, "POST", base+"/heartbeat", map[string]any{"instance": next})
+	f.connector.must(200, "POST", base+"/release", body)
+	status = f.connector.must(200, "GET", base, nil)
+	if status["online"] != true {
+		t.Fatal("stale release disconnected successor")
+	}
+	f.connector.must(409, "POST", base+"/heartbeat", body)
+	f.connector.must(200, "PUT", base+"/resources/"+f.grant.Key, map[string]any{"instance": next, "descriptor": f.descriptor, "snapshot": f.snapshot})
+}

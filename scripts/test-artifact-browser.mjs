@@ -54,7 +54,7 @@ try {
     if (p === "/api/v1/threads/thread/settings") return json({ resources: [{id:"resource",label:"Fixture live session",scope:"session",provider:"fixture",available:true}] });
     if (p === "/api/v1/threads/thread/settings-resources") return json({ resources: (await page.evaluate(() => window.fixture.resource.scope)) === "session" ? [{ id: "resource", label: "Fixture live session", generation: "runtime-one", available: true }] : [] });
     if (p.endsWith("/audit")) return json({ audit: [] });
-    if (p === "/api/v1/threads/thread/artifacts") return json({ artifacts: [{ id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }] });
+    if (p === "/api/v1/threads/thread/artifacts") return json({ artifacts: [{ id: "settings-only", key: "agent-settings", thread_id: "thread", title: "Settings", current_revision_id: "settings-revision" }, { id: "other-website", key: "notes", thread_id: "thread", title: "Notes", current_revision_id: "notes-revision" }, { id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }] });
     if (p.startsWith("/api/v1/messages/")) return json({ message: await page.evaluate(() => window.messageFixture) });
     if (p === "/api/v1/threads/thread") return json({ thread: await page.evaluate(() => window.threadFixture) });
     if (p === "/api/v1/threads/thread/messages") return json({ messages: [], has_more: false });
@@ -67,6 +67,8 @@ try {
       await new Promise((resolve) => { commandResponse = resolve; });
       return json({ created: true, command: { id: "command", resource_id: "resource", status: "succeeded", proposal: body.proposal, result: { effects: [{ effective_when: body.proposal.generation ? "next_task" : "new_or_resumed_session", runtime_applied: !!body.proposal.generation }], undo: body.proposal.operation === "settings.apply" ? { format: "finalechat.settings-undo/v1", command_id: "command", restore_sha256: "a".repeat(64), operation: "settings.apply", edits: [{ op: "set", key: "/count", value: 2 }] } : undefined } } });
     }
+    if (p === "/api/v1/artifacts/settings-only") throw new Error("Settings website was inspected as session history");
+    if (p === "/api/v1/artifacts/other-website") return json({ artifact: { id: "other-website", thread_id: "thread", title: "Notes" }, revision: { ...revision, manifest: { ...manifest, files: [] } } });
     if (p === "/api/v1/artifacts/artifact") return json({ artifact: { id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }, revision: savedRevision(currentRevision) });
     if (p.endsWith("/settings-binding")) return json({ binding: { artifact_id: "artifact", resource_id: "resource", revision_id: currentRevision, generation: "" } });
     if (p.endsWith("/settings-surface")) return json({ lease: { id: "surface-lease", resource_id: "resource", generation: "", expires_at: "2030-01-01T00:00:00Z" } });
@@ -246,6 +248,14 @@ try {
   await matchingChat.click();
   await page.getByRole('region', { name: 'Selected archived message' }).getByText('The mirrored native answer', { exact: true }).waitFor();
   assert.equal(new URL(page.url()).searchParams.get('m'), 'chat-message');
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  const copyMessage = page.getByRole('button', { name: 'Copy message', exact: true });
+  assert.equal(await copyMessage.innerText(), '');
+  await copyMessage.click();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'The mirrored native answer');
+  await page.getByRole('button', { name: 'Copied', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Inspect this moment', exact: true }).innerText(), '');
+  console.log('PASS compact message actions copy original text and exclude settings-only websites');
   console.log('PASS trusted chat-to-native-event navigation and return to a message outside the recent page');
   await page.goto(`${base}/tests/artifacts.html?navigation=1&mcp=1`);
   await page.getByRole('button', { name: 'Inspect this moment', exact: true }).click();

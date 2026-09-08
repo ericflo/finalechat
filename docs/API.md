@@ -1128,6 +1128,7 @@ remain authorized. Account deletion removes the related audit along with the acc
 | `POST /connectors/{connector}/approve` | Approve a subset of requested grants |
 | `DELETE /connectors/{connector}` | Revoke access and cancel queued commands |
 | `POST /connectors/{connector}/heartbeat` | Renew installation process ownership |
+| `POST /connectors/{connector}/release` | Release installation process ownership |
 | `PUT /connectors/{connector}/resources/{key}` | Publish a granted resource descriptor and snapshot |
 | `PUT /connectors/{connector}/bindings/{id}` | Bind a current settings artifact to a resource |
 | `GET /artifacts/{id}/settings-binding` | Read the artifact’s current resource binding |

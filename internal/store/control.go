@@ -151,6 +151,13 @@ func (s *Store) HeartbeatConnector(ctx context.Context, userID, id uuid.UUID, in
 	return scanConnector(s.pool.QueryRow(ctx, `UPDATE connectors SET last_seen_at=now(),instance=$3 WHERE user_id=$1 AND id=$2 AND state='active' AND (instance=$3 OR last_seen_at IS NULL OR last_seen_at<now()-interval '90 seconds') RETURNING `+connectorColumns, userID, id, instance))
 }
 
+// ReleaseConnector drops only this process's liveness lease. A delayed or
+// repeated release cannot disconnect a successor or change grants/commands.
+func (s *Store) ReleaseConnector(ctx context.Context, userID, id uuid.UUID, instance string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE connectors SET last_seen_at=NULL WHERE user_id=$1 AND id=$2 AND state='active' AND instance=$3`, userID, id, instance)
+	return err
+}
+
 type SettingsResource struct {
 	ID          uuid.UUID          `json:"id"`
 	UserID      uuid.UUID          `json:"-"`

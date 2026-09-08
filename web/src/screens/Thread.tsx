@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../components/Attachments";
-import { Avatar, ConfirmSheet, Sheet, sheetsOpen } from "../components/Common";
+import { Avatar, ConfirmSheet, CopyButton, Sheet, sheetsOpen } from "../components/Common";
 import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBranch, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconSend, IconServer, IconTrash } from "../components/Icons";
 import { api } from "../lib/api";
 import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
@@ -545,7 +545,7 @@ const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, inspec
           </button>
         )}
       </div>
-      {inspectThread && <InspectMessage message={m} thread={inspectThread} />}
+      <div className="message-footer">
       {showMeta && (
         <div className="msg-meta" title={fullDateTime(m.created_at)}>
           {kind === "notification" && <span>needs attention</span>}
@@ -554,6 +554,11 @@ const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, inspec
           <span>{shortTime(m.created_at)}</span>
         </div>
       )}
+      <div className="message-actions">
+        {hasBody && <CopyButton text={m.body} className="message-action" label="Copy message" />}
+        {inspectThread && <InspectMessage message={m} thread={inspectThread} />}
+      </div>
+      </div>
     </div>
   );
 });
