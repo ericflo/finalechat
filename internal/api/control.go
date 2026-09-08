@@ -19,6 +19,7 @@ import (
 )
 
 func (s *Server) controlRoutes(m *http.ServeMux) {
+	m.HandleFunc("GET /api/v1/threads/{thread}/settings-resources", s.handleThreadSessionSettings)
 	m.HandleFunc("POST /api/v1/connectors", s.handleCreateConnector)
 	m.HandleFunc("GET /api/v1/connectors", s.sessionOnly(s.handleListConnectors))
 	m.HandleFunc("GET /api/v1/connectors/{connector}", s.sessionOnly(s.handleGetConnector))
@@ -34,6 +35,20 @@ func (s *Server) controlRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/v1/artifacts/{id}/settings-surface", s.sessionOnly(s.handleOpenSettingsSurface))
 	m.HandleFunc("GET /api/v1/commands/{command}", s.sessionOnly(s.handleGetSettingsCommand))
 	m.HandleFunc("POST /api/v1/commands/{command}/cancel", s.sessionOnly(s.handleCancelSettingsCommand))
+}
+
+func (s *Server) handleThreadSessionSettings(w http.ResponseWriter, r *http.Request) {
+	thread, _, err := s.resolveThread(r, false)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	resources, err := s.store.ThreadSessionSettings(r.Context(), thread)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"resources": resources})
 }
 
 // Connector credentials have their own routing tree. They cannot fall through
@@ -378,8 +393,8 @@ func (s *Server) handleCreateSettingsCommand(w http.ResponseWriter, r *http.Requ
 		writeError(w, errValidation("ttl_seconds must be 15 to 86400"))
 		return
 	}
-	if resource.Scope == "session" && in.TTL > 300 {
-		writeError(w, errValidation("session commands expire within 300 seconds"))
+	if resource.Scope == "session" && (in.TTL > 300 || in.AllowOffline) {
+		writeError(w, errValidation("session commands expire within 300 seconds and cannot wait for a later connection"))
 		return
 	}
 	q, created, err := s.store.CreateSettingsCommand(r.Context(), resource.UserID, resource.ID, in.ArtifactID, in.RevisionID, in.SurfaceLease, in.ClientKey, in.Proposal, time.Now().Add(time.Duration(in.TTL)*time.Second), in.AllowOffline)
@@ -560,6 +575,10 @@ func (s *Server) handleSaveSettingsDraft(w http.ResponseWriter, r *http.Request)
 	resource, c, err := s.settingsResourceFor(r)
 	if err != nil {
 		writeError(w, err)
+		return
+	}
+	if resource.Scope == "session" {
+		writeError(w, errValidation("runtime settings cannot be saved as offline drafts"))
 		return
 	}
 	var in control.Proposal

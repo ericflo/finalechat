@@ -1068,7 +1068,9 @@ does not submit a command. Match `onResult` outcomes to their proposals and
 preserve newer drafts when results arrive late. Saved
 historical surfaces remain read only until the user opens current settings.
 Drafts do not execute. Explicit send-when-connected applies only to stable
-settings edits with a deadline. Durable commands have fenced renewable leases,
+settings edits with a deadline. Session controls require a known active runtime,
+do not permit offline drafts or send-when-connected, and expire within 300 seconds.
+Durable commands have fenced renewable leases,
 an append-only audit and explicit expired/conflicted/unknown outcomes. Adapters
 must journal intent and reconcile save-before-ack crashes. No automatic retry
 may repeat an uncertain paid action. A saved file does not prove runtime adoption.
@@ -1083,6 +1085,7 @@ remain authorized. Account deletion removes the related audit along with the acc
 | --- | --- |
 | `PUT /threads/{thread}/artifacts/{key}` | Register or rename a session artifact |
 | `GET /threads/{thread}/artifacts` | List a thread’s artifacts |
+| `GET /threads/{thread}/settings-resources` | Discover live settings for a thread |
 | `GET /artifacts/{id}` | Artifact metadata, current manifest and limits |
 | `DELETE /artifacts/{id}` | Delete artifact and all revisions |
 | `POST /artifacts/{id}/blobs/check` | Check which chunk hashes are absent |

@@ -10,6 +10,8 @@ Settings changes run as integration code. They are not chat messages asking a mo
 
 **1. Separate the saved surface, the target resource and the execution capability**
 
+Eagent also exposes a separate explicitly paired session resource in the trusted generic form. `GET /threads/{thread}/settings-resources` discovers account-owned session resources whose snapshot declares `details.thread_external_id`; this is a navigation hint, not a binding or grant. Live task concurrency and narrator timing changes are acknowledged by the actual harness loop and recorded in its native event stream. A new run receives a new generation and loads project defaults.
+
 A settings artifact contains a bundled `settings/index.html`, a versioned settings schema, saved/effective values with provenance, and references to its context. Its script can render custom pickers, forms, route tests, prompt editors and explanations. Shared viewer assets can be reused across sessions.
 
 The live binding is a separate server record. It identifies an authorized connector installation, resource, adapter version, capabilities, and any particular running-session instance. Uploading an HTML file or declaring a capability in its manifest does not grant the script authority to change settings.
@@ -155,7 +157,7 @@ For eagent, retain the current rule that new provider endpoints and key-variable
 
 | Provider | Persistent settings | Running-session settings | Implementation |
 | --- | --- | --- | --- |
-| eagent | Project config, presets/bundles, prompt overrides, model/fallback/effort choices, concurrency/timeouts/narration options, mirror/archive preferences | Current config page writes defaults for new/resumed sessions. Hot updates require explicit new runtime support. | Extract shared config service from web handlers; retain guards, provenance and undo semantics; reuse `config.js` through a transport adapter. |
+| eagent | Project config, presets/bundles, prompt overrides, model/fallback/effort choices, concurrency/timeouts/narration options, mirror/archive preferences | Separate session grant controls live task concurrency and narrator check/quiet timing, with native acknowledgements and process-generation fencing. Other settings remain defaults for new/resumed sessions. | Shared config service and portable `config.js` editor; durable project writer and scheduler-owned session queue. |
 | Claude Code | User, project and project-local settings, subject to managed policy and actual merge rules | Reload behavior varies by field. Do not equate a file save with a live model/effort switch. | Extend the existing CLI/hooks integration with a scoped companion, versioned schema and file-change observation. |
 | Codex | Supported user config writes and declared project/profile settings | Supported overrides on subsequent turns only when this adapter controls that thread through a compatible API | Add a dedicated adapter; use native config APIs and their validation when available. |
 

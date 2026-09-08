@@ -199,6 +199,40 @@ func (s *Store) ListSettingsResources(ctx context.Context, userID, connectorID u
 	return out, rows.Err()
 }
 
+// Session links are discovery hints supplied by the integration. They confer
+// no grants; the thread, connector and resource must all belong to this owner.
+type SessionSettingsLink struct {
+	ID         uuid.UUID `json:"id"`
+	Label      string    `json:"label"`
+	Generation string    `json:"generation"`
+	Available  bool      `json:"available"`
+}
+
+func (s *Store) ThreadSessionSettings(ctx context.Context, thread *Thread) ([]SessionSettingsLink, error) {
+	out := []SessionSettingsLink{}
+	if thread.ExternalID == nil || *thread.ExternalID == "" {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT r.id,r.label,r.generation,
+		COALESCE(c.last_seen_at>now()-interval '90 seconds',false) AND r.snapshot->>'runtime_known'='true'
+		FROM settings_resources r JOIN connectors c ON c.id=r.connector_id AND c.user_id=r.user_id
+		WHERE r.user_id=$1 AND r.scope='session' AND c.state='active'
+		AND r.snapshot->'details'->>'thread_external_id'=$2
+		ORDER BY r.updated_at DESC,r.id LIMIT 100`, thread.UserID, *thread.ExternalID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var link SessionSettingsLink
+		if err := rows.Scan(&link.ID, &link.Label, &link.Generation, &link.Available); err != nil {
+			return nil, err
+		}
+		out = append(out, link)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) PublishSettingsResource(ctx context.Context, userID, connectorID uuid.UUID, instance, key, generation string, d control.Descriptor, snap control.Snapshot) (*SettingsResource, error) {
 	var out *SettingsResource
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
@@ -344,6 +378,9 @@ func (s *Store) CreateSettingsCommand(ctx context.Context, userID, resourceID uu
 		}
 		if p.ExpectedVersion != r.Snapshot.Version || p.Generation != r.Generation {
 			return ErrConflict
+		}
+		if r.Scope == "session" && (!r.Snapshot.RuntimeKnown || allowOffline) {
+			return ErrConnectorOffline
 		}
 		if !c.Online() && (!allowOffline || r.Scope == "session" || p.Operation != "settings.apply") {
 			return ErrConnectorOffline

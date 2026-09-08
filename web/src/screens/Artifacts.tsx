@@ -3,7 +3,7 @@ import { ConfirmSheet, Link } from "../components/Common";
 import { GenericSettingsForm, SettingsControls, useSettingsResource } from "../components/IntegrationSettings";
 import { TopBar } from "../components/TopBar";
 import { APIError } from "../lib/api";
-import { artifactAPI, fileURL, validateProposal, type Artifact, type ArtifactRevision, type RevisionInfo, type SettingsBinding, type SettingsCommand, type SettingsProposal, type SettingsSurfaceLease } from "../lib/artifacts";
+import { artifactAPI, controlAPI, fileURL, validateProposal, type Artifact, type ArtifactRevision, type RevisionInfo, type SessionSettingsLink, type SettingsBinding, type SettingsCommand, type SettingsProposal, type SettingsSurfaceLease } from "../lib/artifacts";
 import { connectArtifactFrame } from "../lib/artifact-bridge";
 import { navigate } from "../lib/router";
 import { fullDateTime } from "../lib/time";
@@ -11,14 +11,19 @@ import { validateAnchor } from "../lib/source-anchor";
 
 export function ThreadArtifacts({ thread, onAvailable }: { thread: string; onAvailable?: (available: boolean) => void }) {
   const [items, setItems] = useState<Artifact[]>([]);
+  const [resources, setResources] = useState<SessionSettingsLink[]>([]);
   useEffect(() => {
     let alive = true;
-    const refresh = () => { void artifactAPI.list(thread).then((r) => { if (alive) { setItems(r.artifacts); onAvailable?.(r.artifacts.some(a => !!a.current_revision_id)); } }).catch(() => {}); };
+    setItems([]); setResources([]); onAvailable?.(false);
+    const refresh = () => {
+      void artifactAPI.list(thread).then((r) => { if (alive) { setItems(r.artifacts); onAvailable?.(r.artifacts.some(a => !!a.current_revision_id)); } }).catch(() => {});
+      void controlAPI.forThread(thread).then((r) => { if (alive) setResources(r.resources); }).catch(() => { if (alive) setResources([]); });
+    };
     refresh(); const timer = window.setInterval(refresh, 15000);
     return () => { alive = false; window.clearInterval(timer); };
   }, [thread, onAvailable]);
-  if (!items.length) return null;
-  return <div className="thread-artifacts" aria-label="Saved session artifacts">{items.map((a) => <Link key={a.id} className="btn small" href={`/t/${thread}/artifacts/${a.id}`}>{a.title}{!a.current_revision_id ? " · Uploading…" : ""}</Link>)}</div>;
+  if (!items.length && !resources.length) return null;
+  return <div className="thread-artifacts" aria-label="Session artifacts and settings">{items.map((a) => <Link key={a.id} className="btn small" href={`/t/${thread}/artifacts/${a.id}`}>{a.title}{!a.current_revision_id ? " · Uploading…" : ""}</Link>)}{resources.map((r) => <Link key={r.id} className="btn small" href={`/settings/resources/${r.id}`} title={r.label}>Live session settings{r.available ? "" : " · Unavailable"}</Link>)}</div>;
 }
 
 function compatibleUpdate(a: ArtifactRevision, b: ArtifactRevision) {

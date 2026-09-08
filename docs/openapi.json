@@ -6079,6 +6079,95 @@
           }
         ]
       }
+    },
+    "/threads/{thread}/settings-resources": {
+      "get": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Discover live settings for a thread",
+        "description": "Returns up to 100 session resource links (id, label, generation, available), newest first. The connector snapshot may declare details.thread_external_id as a navigation hint. Thread, connector and resource must belong to the account; only active connectors and session-scoped resources appear. This does not create bindings or grant mutation authority. Availability also requires a recent connector heartbeat and runtime_known=true.",
+        "responses": {
+          "200": {
+            "description": "Discover live settings for a thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "resources": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "label": {
+                            "type": "string"
+                          },
+                          "generation": {
+                            "type": "string"
+                          },
+                          "available": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "label",
+                          "generation",
+                          "available"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "resources"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
     }
   },
   "components": {

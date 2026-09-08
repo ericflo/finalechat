@@ -51,6 +51,7 @@ def endpoint(method,path,title,body=None,security="agent",status="200",descripti
 
 endpoint("PUT","/threads/{thread}/artifacts/{key}","Register or rename a session artifact",record({"title":string},["title"]))
 endpoint("GET","/threads/{thread}/artifacts","List a thread’s artifacts")
+endpoint("GET","/threads/{thread}/settings-resources","Discover live settings for a thread",description="Returns up to 100 session resource links (id, label, generation, available), newest first. The connector snapshot may declare details.thread_external_id as a navigation hint. Thread, connector and resource must belong to the account; only active connectors and session-scoped resources appear. This does not create bindings or grant mutation authority. Availability also requires a recent connector heartbeat and runtime_known=true.",response=record({"resources":array(record({"id":uuid,"label":string,"generation":string,"available":{"type":"boolean"}},["id","label","generation","available"]))},["resources"]))
 endpoint("GET","/artifacts/{id}","Artifact metadata, current manifest and limits")
 endpoint("DELETE","/artifacts/{id}","Delete artifact and all revisions",security="browser",description="Referenced chunks are retained until no revision references them. A durable cleanup queue retries B2 removal, including orphan upload versions. Deleting an artifact or its thread cancels queued settings commands from that artifact and fences claimed commands as unknown; it cannot roll back a local write that already started. Completed results remain on the settings resource.")
 endpoint("POST","/artifacts/{id}/blobs/check","Check which chunk hashes are absent",record({"hashes":array(string)},["hashes"]))
@@ -163,7 +164,9 @@ does not submit a command. Match `onResult` outcomes to their proposals and
 preserve newer drafts when results arrive late. Saved
 historical surfaces remain read only until the user opens current settings.
 Drafts do not execute. Explicit send-when-connected applies only to stable
-settings edits with a deadline. Durable commands have fenced renewable leases,
+settings edits with a deadline. Session controls require a known active runtime,
+do not permit offline drafts or send-when-connected, and expire within 300 seconds.
+Durable commands have fenced renewable leases,
 an append-only audit and explicit expired/conflicted/unknown outcomes. Adapters
 must journal intent and reconcile save-before-ack crashes. No automatic retry
 may repeat an uncertain paid action. A saved file does not prove runtime adoption.

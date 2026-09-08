@@ -51,6 +51,8 @@ try {
     const json = (value) => route.fulfill({ json: value });
     if (p === "/offline") return route.fulfill({ contentType: "text/html", body: website });
     if (!p.startsWith("/api/")) return route.continue();
+    if (p === "/api/v1/threads/thread/settings-resources") return json({ resources: (await page.evaluate(() => window.fixture.resource.scope)) === "session" ? [{ id: "resource", label: "Fixture live session", generation: "runtime-one", available: true }] : [] });
+    if (p.endsWith("/audit")) return json({ audit: [] });
     if (p === "/api/v1/threads/thread/artifacts") return json({ artifacts: [{ id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }] });
     if (p.startsWith("/api/v1/messages/")) return json({ message: await page.evaluate(() => window.messageFixture) });
     if (p === "/api/v1/threads/thread") return json({ thread: await page.evaluate(() => window.threadFixture) });
@@ -62,7 +64,7 @@ try {
     if (p === "/api/v1/settings-resources/resource/commands") {
       const body = route.request().postDataJSON(); commands.push(body);
       await new Promise((resolve) => { commandResponse = resolve; });
-      return json({ created: true, command: { id: "command", resource_id: "resource", status: "succeeded", proposal: body.proposal, result: { effects: [{ effective_when: "new_or_resumed_session", runtime_applied: false }], undo: body.proposal.operation === "settings.apply" ? { format: "finalechat.settings-undo/v1", command_id: "command", restore_sha256: "a".repeat(64), operation: "settings.apply", edits: [{ op: "set", key: "/count", value: 2 }] } : undefined } } });
+      return json({ created: true, command: { id: "command", resource_id: "resource", status: "succeeded", proposal: body.proposal, result: { effects: [{ effective_when: body.proposal.generation ? "next_task" : "new_or_resumed_session", runtime_applied: !!body.proposal.generation }], undo: body.proposal.operation === "settings.apply" ? { format: "finalechat.settings-undo/v1", command_id: "command", restore_sha256: "a".repeat(64), operation: "settings.apply", edits: [{ op: "set", key: "/count", value: 2 }] } : undefined } } });
     }
     if (p === "/api/v1/artifacts/artifact") return json({ artifact: { id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }, revision: savedRevision(currentRevision) });
     if (p.endsWith("/settings-binding")) return json({ binding: { artifact_id: "artifact", resource_id: "resource", revision_id: currentRevision, generation: "" } });
@@ -256,6 +258,28 @@ try {
   native = false;
 
   await writeFile(path.join(temporary, "manifest.json"), JSON.stringify(manifest));
+  await page.goto(`${base}/tests/artifacts.html?runtime=1`);
+  await page.getByRole("link", { name: "Live session settings", exact: true }).click();
+  await page.getByLabel("Concurrency", { exact: true }).fill("6");
+  assert.match(await page.locator(".proposal-review").innerText(), /Current session value: 2/);
+  assert.equal(await page.getByRole("button", { name: "Save draft", exact: true }).count(), 0);
+  const priorRuntimeCommands = commands.length;
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector(".settings-control button.primary")?.textContent === "Submitting…");
+  assert.equal(commands.length, priorRuntimeCommands + 1);
+  assert.equal(commands.at(-1).proposal.generation, "runtime-one");
+  commandResponse();
+  await page.waitForFunction(() => document.querySelector(".command-result")?.textContent.includes("Applied to this runtime. Takes effect: next task."));
+  await page.evaluate(() => { window.fixture.resource.generation = "runtime-two"; });
+  await page.clock.runFor(11000);
+  await page.getByLabel("Concurrency", { exact: true }).fill("7");
+  await page.evaluate(() => { window.fixture.resource.snapshot.runtime_known = false; });
+  await page.clock.runFor(11000);
+  await page.getByText("This process only. Future sessions load project defaults. This runtime is unavailable.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Save", exact: true }).isDisabled(), true, "offline runtime remained writable");
+  assert.equal(await page.getByRole("button", { name: "Refresh from connector", exact: true }).isDisabled(), true);
+  console.log("PASS chat-to-live-settings navigation, session generation, native acknowledgement wording, no offline runtime drafts");
+
   await writeFile(path.join(temporary, "session.jsonl"), content);
   await page.goto(`${base}/offline`);
   let chooser = page.waitForEvent("filechooser");

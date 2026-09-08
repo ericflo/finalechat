@@ -2,9 +2,10 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { GenericSettingsForm, SettingsControls } from "../src/components/IntegrationSettings";
-import { ArtifactScreen } from "../src/screens/Artifacts";
+import { ArtifactScreen, ThreadArtifacts } from "../src/screens/Artifacts";
 import { type ResourceView, type SettingsProposal } from "../src/lib/artifacts";
 import { useRoute } from "../src/lib/router";
+import { ResourceSettingsScreen } from "../src/screens/Connectors";
 import { InspectMessage } from "../src/components/InspectMessage";
 import { ThreadScreen } from "../src/screens/Thread";
 import type { Thread, Message } from "../src/lib/types";
@@ -23,6 +24,13 @@ const fixture: ResourceView = {
 };
 
 declare global { interface Window { fixture: ResourceView; replaceFixture: (v: ResourceView) => void; staged: SettingsProposal | null } }
+if (new URLSearchParams(location.search).has("runtime")) {
+  fixture.resource.scope = "session"; fixture.resource.generation = "runtime-one"; fixture.resource.label = "Fixture live session";
+  fixture.resource.snapshot.runtime_known = true;
+  fixture.resource.snapshot.details = { persistence: "This process only. Future sessions load project defaults." };
+  fixture.resource.descriptor.fields = fixture.resource.descriptor.fields.slice(0, 1).map(f => ({ ...f, unset: false, effective_when: "next_task" }));
+  fixture.resource.descriptor.actions = [];
+}
 window.fixture = fixture;
 
 function Controls() {
@@ -49,4 +57,9 @@ function NavigationFixture() {
   if (route.path === "/t/thread") return <ThreadScreen id="thread" highlightQuestion={null} highlightMessage={route.search.get("m")} />;
   return <InspectMessage message={messageFixture} thread={threadFixture} />;
 }
-createRoot(document.getElementById("root")!).render(initial.has("navigation") ? <NavigationFixture /> : initial.has("artifact") ? <ArtifactFixture /> : <Controls />);
+function RuntimeFixture() {
+  const route = useRoute();
+  if (route.path === "/settings/resources/resource") return <ResourceSettingsScreen id="resource" />;
+  return <ThreadArtifacts thread="thread" />;
+}
+createRoot(document.getElementById("root")!).render(initial.has("runtime") ? <RuntimeFixture /> : initial.has("navigation") ? <NavigationFixture /> : initial.has("artifact") ? <ArtifactFixture /> : <Controls />);
