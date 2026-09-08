@@ -36,6 +36,7 @@ func (s *Server) artifactRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/artifacts/{id}/revisions/{revision}/files/{file...}", s.handleArtifactFile)
 	mux.HandleFunc("GET /api/v1/artifacts/{id}/revisions/{revision}/preview", s.sessionOnly(s.handleArtifactPreview))
 	mux.HandleFunc("GET /api/v1/artifacts/{id}/revisions/{revision}/download", s.handleArtifactDownload)
+	mux.HandleFunc("GET /api/v1/artifacts/{id}/revisions/{revision}/message", s.handleArtifactMessage)
 }
 
 func (s *Server) artifactFor(r *http.Request) (*store.Artifact, error) {

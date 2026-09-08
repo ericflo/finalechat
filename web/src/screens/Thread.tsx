@@ -8,10 +8,11 @@ import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
 import { renderMarkdown, renderText } from "../lib/markdown";
 import { navigate } from "../lib/router";
-import { AlreadyPostedError, deleteThread, loadOlderMessages, loadThread, markRead, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
+import { AlreadyPostedError, deleteThread, loadOlderMessages, loadThread, markRead, onMessageRemoved, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
 import type { Activity, Attachment, Message, Question, Thread } from "../lib/types";
 import { ThreadArtifacts } from "./Artifacts";
+import { InspectMessage } from "../components/InspectMessage";
 
 type Item = { kind: "message"; at: string; m: Message } | { kind: "question"; at: string; q: Question };
 
@@ -24,7 +25,7 @@ function groupedWith(a: Item | undefined, b: Item | undefined): boolean {
   return Math.abs(new Date(b.at).getTime() - new Date(a.at).getTime()) < 3 * 60 * 1000;
 }
 
-export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQuestion: string | null }) {
+export function ThreadScreen({ id, highlightQuestion, highlightMessage = null }: { id: string; highlightQuestion: string | null; highlightMessage?: string | null }) {
   const thread = useStore((s) => s.threads[id]);
   const messages = useStore((s) => s.messages[id]);
   const questions = useStore((s) => s.threadQuestions[id]);
@@ -38,6 +39,8 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [viewing, setViewing] = useState<{ items: Attachment[]; index: number } | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasArtifacts, setHasArtifacts] = useState(false);
+  const [focusedMessage, setFocusedMessage] = useState<Message | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const dividerRef = useRef<HTMLDivElement>(null);
@@ -53,6 +56,22 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
   const justSent = useRef(false);
   const initialised = useRef<string | null>(null);
   const activity = useLiveActivity(thread?.activity);
+
+  useEffect(() => {
+    let alive = true; setFocusedMessage(null);
+    const unsubscribe = onMessageRemoved((thread, message) => { if (thread === id && message === highlightMessage) { alive = false; setFocusedMessage(null); } });
+    if (highlightMessage) void api.getMessage(highlightMessage).then(r => {
+      if (r.message.thread_id !== id) throw new Error("Message belongs to another thread.");
+      if (alive) setFocusedMessage(r.message);
+    }).catch(() => { if (alive) toast("This message is no longer available in this thread.", "error"); });
+    return () => { alive = false; unsubscribe(); };
+  }, [id, highlightMessage]);
+  useLayoutEffect(() => {
+    if (loaded && focusedMessage) {
+      document.getElementById(`message-${focusedMessage.id}`)?.scrollIntoView({ block: "center" });
+      setAtBottom(false);
+    }
+  }, [loaded, focusedMessage]);
 
   useEffect(() => {
     setCurrentThread(id);
@@ -127,7 +146,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
       initialised.current = id;
       lastTail.current = tail;
       lastCount.current = items.length;
-      if (highlightQuestion) return; // the card scrolls itself into view
+      if (highlightQuestion || highlightMessage) return; // the selected item scrolls itself into view
       if (newIndex >= 0 && dividerRef.current) dividerRef.current.scrollIntoView({ block: "start" });
       else scrollToBottom();
       return;
@@ -240,9 +259,10 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
             <IconMore />
           </button>
         }
-        below={thread ? <><MetaStrip thread={thread} /><ThreadArtifacts thread={id} /></> : null}
+        below={thread ? <><MetaStrip thread={thread} /><ThreadArtifacts thread={id} onAvailable={setHasArtifacts} /></> : null}
       />
       <div ref={listRef} className="messages" onClick={onListClick}>
+        {focusedMessage && !items.some(it => it.kind === "message" && it.m.id === focusedMessage.id) && <section aria-label="Selected archived message"><p>Selected message · {fullDateTime(focusedMessage.created_at)}</p><MessageBubble m={focusedMessage} grouped={false} showMeta={true} inspectThread={hasArtifacts ? thread : undefined} onOpen={(items, index) => setViewing({ items, index })} /><button className="btn small" onClick={() => navigate(`/t/${id}`)}>Return to recent conversation</button></section>}
         {hasOlder && (
           <button type="button" className="btn small" style={{ alignSelf: "center" }} disabled={loadingOlder} onClick={loadOlder}>
             {loadingOlder ? "Loading…" : "Load earlier messages"}
@@ -287,7 +307,7 @@ export function ThreadScreen({ id, highlightQuestion }: { id: string; highlightQ
                   New
                 </div>
               )}
-              {it.kind === "message" ? <MessageBubble m={it.m} grouped={grouped} showMeta={showMeta} onOpen={(items, index) => setViewing({ items, index })} /> : <QuestionCard q={it.q} highlight={highlightQuestion === it.q.id} />}
+              {it.kind === "message" ? <MessageBubble m={it.m} grouped={grouped} showMeta={showMeta} inspectThread={hasArtifacts ? thread : undefined} onOpen={(items, index) => setViewing({ items, index })} /> : <QuestionCard q={it.q} highlight={highlightQuestion === it.q.id} />}
             </div>
           );
         })}
@@ -485,7 +505,7 @@ function RenameSheet({ initial, onClose, onSave }: { initial: string; onClose: (
 /** Bodies taller than this collapse behind "Show all" so one log dump does not bury the thread. */
 const collapseAt = 520;
 
-const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, onOpen }: { m: Message; grouped: boolean; showMeta: boolean; onOpen: (images: Attachment[], index: number) => void }) {
+const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, inspectThread, onOpen }: { m: Message; grouped: boolean; showMeta: boolean; inspectThread?: Thread; onOpen: (images: Attachment[], index: number) => void }) {
   const html = useMemo(() => (m.format === "markdown" ? renderMarkdown(m.body) : renderText(m.body)), [m.format, m.body]);
   const kind = typeof m.meta.kind === "string" ? m.meta.kind : "";
   const via = typeof m.meta.via === "string" ? m.meta.via : "";
@@ -507,7 +527,7 @@ const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, onOpen
     requestAnimationFrame(() => bodyRef.current?.closest(".msg")?.scrollIntoView({ block: "start" }));
   };
   return (
-    <div className={`msg ${m.sender} ${m.importance === "important" ? "important" : ""} ${grouped ? "grouped" : ""} ${mirrored ? "mirrored" : ""}`}>
+    <div id={`message-${m.id}`} className={`msg ${m.sender} ${m.importance === "important" ? "important" : ""} ${grouped ? "grouped" : ""} ${mirrored ? "mirrored" : ""}`}>
       {m.importance === "important" && <span className="important-chip">Important</span>}
       <div className={`bubble ${m.sender === "system" ? "" : "md"} ${hasMedia ? "has-media" : ""} ${collapsed ? "collapsed" : ""}`}>
         {hasBody && <div ref={bodyRef} className={`${m.sender === "system" ? "" : "md"} body`} dangerouslySetInnerHTML={{ __html: html }} />}
@@ -523,6 +543,7 @@ const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, onOpen
           </button>
         )}
       </div>
+      {inspectThread && <InspectMessage message={m} thread={inspectThread} />}
       {showMeta && (
         <div className="msg-meta" title={fullDateTime(m.created_at)}>
           {kind === "notification" && <span>needs attention</span>}

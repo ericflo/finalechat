@@ -5981,6 +5981,104 @@
           }
         }
       }
+    },
+    "/artifacts/{id}/revisions/{revision}/message": {
+      "get": {
+        "tags": [
+          "Artifacts"
+        ],
+        "summary": "Locate a chat message for an archived source anchor",
+        "description": "Returns only message_id and thread_id within this artifact's own thread. Validates declared dataset format/session identity and exactly one selector. Source files must exist in this revision. Deleted, foreign-thread or unmatched messages return 404. This is a presentation hint, not proof that a record has been captured or authority to navigate/mutate. Supports meta.source_anchor plus legacy eagent sequence and Claude transcript UUID metadata in their exact native-session threads.",
+        "responses": {
+          "200": {
+            "description": "Locate a chat message for an archived source anchor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "thread_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  },
+                  "required": [
+                    "message_id",
+                    "thread_id"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "revision",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          },
+          {
+            "name": "anchor",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "description": "JSON object containing dataset_format and session_id, plus exactly one of seq (positive safe integer), event_id, message_id, or file and line. Identifiers are within 200 UTF-8 bytes. Unknown keys and trailing JSON are rejected."
+          },
+          {
+            "name": "viewer",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "Explicit renderer revision from the same artifact. Requires equal declared dataset format/schema. Replaces only viewer-role files; every source/context/asset/derived file remains from the selected data revision. Does not commit a revision or change current. Incompatible file layouts return 422. Composed manifests record both revision IDs and have no settings entrypoint; incompatible with surface=settings. Omit to read the original archive."
+          }
+        ]
+      }
     }
   },
   "components": {

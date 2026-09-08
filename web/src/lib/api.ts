@@ -84,6 +84,7 @@ export const api = {
     return request<{ threads: Thread[]; next_cursor?: string }>("GET", `${base}/threads${suffix}`);
   },
   getThread: (id: string) => request<{ thread: Thread }>("GET", `${base}/threads/${id}`),
+  getMessage: (id: string) => request<{ message: Message }>("GET", `${base}/messages/${encodeURIComponent(id)}`),
   updateThread: (id: string, patch: { title?: string; agent?: string; archived?: boolean; muted?: boolean }) =>
     request<{ thread: Thread }>("PATCH", `${base}/threads/${id}`, patch),
   deleteThread: (id: string) => request<{ ok: true }>("DELETE", `${base}/threads/${id}`),

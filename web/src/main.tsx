@@ -72,14 +72,14 @@ function App() {
   }
 
   const artifact = match("/t/:thread/artifacts/:id", path);
-  if (artifact) return <ErrorBoundary key={artifact.id}><ArtifactScreen id={artifact.id!} thread={artifact.thread!} selectedRevision={route.search.get("revision")} selectedViewer={route.search.get("viewer")} surface={route.search.get("surface")} /></ErrorBoundary>;
+  if (artifact) return <ErrorBoundary key={artifact.id}><ArtifactScreen id={artifact.id!} thread={artifact.thread!} selectedRevision={route.search.get("revision")} selectedViewer={route.search.get("viewer")} initialAnchor={route.search.get("anchor")} surface={route.search.get("surface")} /></ErrorBoundary>;
   const resource = match("/settings/resources/:id", path);
   if (resource) return <ErrorBoundary key={resource.id}><ResourceSettingsScreen id={resource.id!} /></ErrorBoundary>;
   const thread = match("/t/:id", path);
   if (thread) {
     return (
       <ErrorBoundary key={thread.id}>
-        <ThreadScreen id={thread.id as string} highlightQuestion={route.search.get("q")} />
+        <ThreadScreen id={thread.id as string} highlightQuestion={route.search.get("q")} highlightMessage={route.search.get("m")} />
       </ErrorBoundary>
     );
   }

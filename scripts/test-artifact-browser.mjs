@@ -35,7 +35,7 @@ try {
   let commandResponse;
   let currentRevision = "revision";
   let native = false;
-  const nativeContent = id => Array.from({ length: id === "revision-two" ? 251 : 250 }, (_, i) => JSON.stringify({ type: "response_item", timestamp: "2026-09-07T00:00:00Z", payload: { type: "message", role: "assistant", content: [{ text: `Native record ${i + 1}` }] } })).join("\n") + "\n";
+  const nativeContent = id => Array.from({ length: id === "revision-two" ? 251 : 250 }, (_, i) => JSON.stringify({ type: "response_item", timestamp: "2026-09-07T00:00:00Z", payload: i === 249 ? { type: "function_call_output", call_id: "mcp-send", output: "Sent to thread 01a08000-0000-7000-8000-000000000000 (fixture); message id 01a08000-0000-7000-8000-000000000123" } : { type: "message", id: `native-${i + 1}`, role: "assistant", content: [{ text: `Native record ${i + 1}` }] } })).join("\n") + "\n";
   const savedRevision = (id, viewer) => {
     const m = structuredClone(manifest);
     if (native) { const raw = nativeContent(id); m.dataset.format = "codex.rollout/v1"; m.dataset.files = ["session.jsonl"]; m.files[0] = { ...m.files[0], size: Buffer.byteLength(raw), sha256: digest(raw), chunks: [{ sha256: digest(raw), size: Buffer.byteLength(raw) }] }; }
@@ -51,6 +51,12 @@ try {
     const json = (value) => route.fulfill({ json: value });
     if (p === "/offline") return route.fulfill({ contentType: "text/html", body: website });
     if (!p.startsWith("/api/")) return route.continue();
+    if (p === "/api/v1/threads/thread/artifacts") return json({ artifacts: [{ id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }] });
+    if (p.startsWith("/api/v1/messages/")) return json({ message: await page.evaluate(() => window.messageFixture) });
+    if (p === "/api/v1/threads/thread") return json({ thread: await page.evaluate(() => window.threadFixture) });
+    if (p === "/api/v1/threads/thread/messages") return json({ messages: [], has_more: false });
+    if (p === "/api/v1/threads/thread/questions") return json({ questions: [] });
+    if (p.endsWith("/message")) { const anchor = JSON.parse(url.searchParams.get("anchor")); assert.ok(anchor.event_id === "native-123" || anchor.message_id === "01a08000-0000-7000-8000-000000000123"); return json({ message_id: anchor.message_id || "chat-message", thread_id: "thread" }); }
     if (p.endsWith("/draft")) return json({ proposal: null });
     if (p === "/api/v1/settings-resources/resource") return json(await page.evaluate(() => window.fixture));
     if (p === "/api/v1/settings-resources/resource/commands") {
@@ -224,6 +230,29 @@ try {
   assert.equal(await frame.getByRole('button', { name: 'Download file', exact: true }).count(), 0, 'sandbox offered a download that the browser blocks');
   assert.equal(await frame.locator('#error').innerText(), '');
   console.log('PASS shipped native viewer keeps search, timeline and page through follow updates; downloads use trusted host controls');
+  await page.goto(`${base}/tests/artifacts.html?navigation=1`);
+  await page.getByRole('button', { name: 'Inspect this moment', exact: true }).click();
+  frame = page.frameLocator('iframe[title="Session explorer"]');
+  await frame.getByText('Selected native record 123.', { exact: true }).waitFor();
+  await frame.getByText('Native record 123', { exact: true }).waitFor();
+  assert.equal(await frame.locator('.event').count(), 1);
+  await frame.getByRole('button', { name: 'Find chat message', exact: true }).click();
+  const matchingChat = page.getByRole('link', { name: 'Show matching chat message', exact: true });
+  await matchingChat.waitFor();
+  assert.ok(new URL(page.url()).pathname.includes('/artifacts/'), 'iframe navigated the trusted host without a link tap');
+  await matchingChat.click();
+  await page.getByRole('region', { name: 'Selected archived message' }).getByText('The mirrored native answer', { exact: true }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.get('m'), 'chat-message');
+  console.log('PASS trusted chat-to-native-event navigation and return to a message outside the recent page');
+  await page.goto(`${base}/tests/artifacts.html?navigation=1&mcp=1`);
+  await page.getByRole('button', { name: 'Inspect this moment', exact: true }).click();
+  frame = page.frameLocator('iframe[title="Session explorer"]');
+  await frame.getByText('Selected native record 250.', { exact: true }).waitFor();
+  await frame.getByRole('button', { name: 'Find chat message', exact: true }).click();
+  await page.getByRole('link', { name: 'Show matching chat message', exact: true }).click();
+  assert.equal(new URL(page.url()).searchParams.get('m'), '01a08000-0000-7000-8000-000000000123');
+  await page.getByRole('region', { name: 'Selected archived message' }).getByText('The mirrored native answer', { exact: true }).waitFor();
+  console.log('PASS Codex MCP message IDs link recorded tool results to their original chat messages without invented native IDs');
   native = false;
 
   await writeFile(path.join(temporary, "manifest.json"), JSON.stringify(manifest));

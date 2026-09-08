@@ -7,15 +7,16 @@ import { artifactAPI, fileURL, validateProposal, type Artifact, type ArtifactRev
 import { connectArtifactFrame } from "../lib/artifact-bridge";
 import { navigate } from "../lib/router";
 import { fullDateTime } from "../lib/time";
+import { validateAnchor } from "../lib/source-anchor";
 
-export function ThreadArtifacts({ thread }: { thread: string }) {
+export function ThreadArtifacts({ thread, onAvailable }: { thread: string; onAvailable?: (available: boolean) => void }) {
   const [items, setItems] = useState<Artifact[]>([]);
   useEffect(() => {
     let alive = true;
-    const refresh = () => { void artifactAPI.list(thread).then((r) => { if (alive) setItems(r.artifacts); }).catch(() => {}); };
+    const refresh = () => { void artifactAPI.list(thread).then((r) => { if (alive) { setItems(r.artifacts); onAvailable?.(r.artifacts.some(a => !!a.current_revision_id)); } }).catch(() => {}); };
     refresh(); const timer = window.setInterval(refresh, 15000);
     return () => { alive = false; window.clearInterval(timer); };
-  }, [thread]);
+  }, [thread, onAvailable]);
   if (!items.length) return null;
   return <div className="thread-artifacts" aria-label="Saved session artifacts">{items.map((a) => <Link key={a.id} className="btn small" href={`/t/${thread}/artifacts/${a.id}`}>{a.title}{!a.current_revision_id ? " · Uploading…" : ""}</Link>)}</div>;
 }
@@ -25,7 +26,7 @@ function compatibleUpdate(a: ArtifactRevision, b: ArtifactRevision) {
   return identity(a) === identity(b);
 }
 
-export function ArtifactScreen({ id, thread, selectedRevision, selectedViewer = null, surface }: { id: string; thread: string; selectedRevision: string | null; selectedViewer?: string | null; surface: string | null }) {
+export function ArtifactScreen({ id, thread, selectedRevision, selectedViewer = null, initialAnchor = null, surface }: { id: string; thread: string; selectedRevision: string | null; selectedViewer?: string | null; initialAnchor?: string | null; surface: string | null }) {
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [revision, setRevision] = useState<ArtifactRevision | null>(null);
   const [history, setHistory] = useState<RevisionInfo[]>([]);
@@ -42,6 +43,8 @@ export function ArtifactScreen({ id, thread, selectedRevision, selectedViewer = 
   const [remove, setRemove] = useState(false);
   const [follow, setFollow] = useState(false);
   const [viewerNotice, setViewerNotice] = useState("");
+  const [chatMessage, setChatMessage] = useState<string | null>(null);
+  const navigationAttempt = useRef(0);
   const followAttempt = useRef(0);
   const inspection = useRef<{ artifact: string; value: unknown }>({ artifact: id, value: null });
   const frame = useRef<HTMLIFrameElement>(null);
@@ -62,8 +65,8 @@ export function ArtifactScreen({ id, thread, selectedRevision, selectedViewer = 
     }).catch((e: Error) => { if (alive) setError(e.message); });
     void artifactAPI.revisions(id).then((r) => { if (alive) { setHistory(r.revisions); setBefore(r.next_before); } }).catch(() => {});
     void artifactAPI.binding(id).then((r) => { if (alive) setBinding(r.binding); }).catch(() => {});
-    return () => { alive = false; editAttempt.current++; bridge.current?.close(); bridge.current = null; };
-  }, [id, thread, selectedRevision, selectedViewer]);
+    return () => { alive = false; editAttempt.current++; navigationAttempt.current++; bridge.current?.close(); bridge.current = null; };
+  }, [id, thread, selectedRevision, selectedViewer, initialAnchor]);
   useEffect(() => {
     let alive = true;
     const timer = window.setInterval(() => {
@@ -86,15 +89,20 @@ export function ArtifactScreen({ id, thread, selectedRevision, selectedViewer = 
   useEffect(() => () => { bridge.current?.close(); }, [generic, editing, surface]);
 
   const url = (rev: string | null, settings: boolean, viewer: string | null = selectedViewer) => {
-    const params = new URLSearchParams({ ...(rev ? { revision: rev } : {}), ...(settings ? { surface: "settings" } : viewer ? { viewer } : {}) });
+    const params = new URLSearchParams({ ...(rev ? { revision: rev } : {}), ...(settings ? { surface: "settings" } : { ...(viewer ? { viewer } : {}), ...(initialAnchor ? { anchor: initialAnchor } : {}) }) });
     return `/t/${thread}/artifacts/${id}${params.size ? "?" + params : ""}`;
   };
   const viewerQuery = selectedViewer ? `?viewer=${encodeURIComponent(selectedViewer)}` : "";
   const mount = () => {
+    const epoch = ++navigationAttempt.current; setChatMessage(null);
     bridge.current?.close(); if (!frame.current || !revision) return;
     if (loadedFrame.current === frame.current) { setError("The viewer navigated away. Reopen this saved revision to reconnect it."); return; }
     loadedFrame.current = frame.current;
     bridge.current = connectArtifactFrame(frame.current, id, revision, {
+      ...(!settings ? {
+        "artifact.anchor": () => { if (!initialAnchor) return null; if (new TextEncoder().encode(initialAnchor).byteLength > 2048) throw new Error("Source anchor is too large."); return validateAnchor(JSON.parse(initialAnchor) as unknown, revision.manifest); },
+        "thread.reveal": async (raw: unknown) => { const anchor = validateAnchor(raw, revision.manifest); try { const found = await artifactAPI.message(id, revision.id, anchor, selectedViewer); if (found.thread_id !== thread) throw new Error("Message belongs to another thread."); if (navigationAttempt.current === epoch) setChatMessage(found.message_id); return { available: true }; } catch (error) { if (error instanceof APIError && error.status === 404) throw new Error("No matching chat message was recorded for this event."); throw error; } },
+      } : {}),
       "artifact.view-state.read": () => inspection.current.artifact === id ? structuredClone(inspection.current.value) : null,
       "artifact.view-state.write": raw => { const encoded = JSON.stringify(raw); if (encoded === undefined || new TextEncoder().encode(encoded).byteLength > 16384) throw new Error("Viewer state must be JSON within 16 KiB."); inspection.current = { artifact: id, value: JSON.parse(encoded) as unknown }; return { saved: true }; },
       ...(settings && editing && !selectedViewer ? {
@@ -133,6 +141,7 @@ export function ArtifactScreen({ id, thread, selectedRevision, selectedViewer = 
       {revision && !settings && <div className="artifact-actions"><label><input type="checkbox" checked={follow} disabled={!!selectedViewer} onChange={event => void beginFollow(event.target.checked)} /> Follow latest</label>{typeof revision.manifest.dataset.format === "string" && <label>Viewer <select aria-label="Viewer for this dataset" value={selectedViewer || ""} onChange={event => { setFollow(false); navigate(url(revision.id, false, event.target.value || null)); }}><option value="">Original viewer for this data</option>{history.filter(r => r.dataset.format === revision.manifest.dataset.format && JSON.stringify(r.dataset.schema) === JSON.stringify(revision.manifest.dataset.schema)).map(r => <option key={r.id} value={r.id}>{r.producer.name} {r.producer.version} · {fullDateTime(r.captured_at)}</option>)}</select></label>}</div>}
       {selectedViewer && <p className="artifact-notice">This keeps the selected dataset and uses viewer files from another saved revision. Current settings control is available through the original viewer.</p>}
       {viewerNotice && <p className="artifact-notice">{viewerNotice}</p>}
+      {chatMessage && <p className="artifact-notice"><Link className="btn small" href={`/t/${thread}?m=${encodeURIComponent(chatMessage)}`}>Show matching chat message</Link><button className="btn small" onClick={() => setChatMessage(null)}>Dismiss</button></p>}
       <details><summary>Saved revisions and files</summary><div className="artifact-history">{history.map((r) => <button key={r.id} className="btn small" onClick={() => { setFollow(false); navigate(url(r.id, settings)); }}>{fullDateTime(r.captured_at)}{r.id === artifact?.current_revision_id ? " · Latest" : ""}</button>)}{before && <button className="btn small" onClick={() => void more()}>Earlier revisions</button>}</div>{revision && <div className="artifact-files">{revision.manifest.files.map((f) => <a key={f.path} href={fileURL(id, revision.id, f.path, selectedViewer)}>{f.path} <small>{f.size.toLocaleString()} bytes · {f.role}</small></a>)}</div>}<button className="btn small danger" onClick={() => setRemove(true)}>Delete artifact and history</button></details>
       {revision && !isCurrent && <div className="artifact-notice">{editing ? "A newer archive is available. This editor remains connected to the same settings resource until its editing session expires." : "You are viewing a historical revision."} <button className="btn small" onClick={() => navigate(url(artifact?.current_revision_id || null, settings))}>Open latest revision</button></div>}
       {settings && !editing && <div className="artifact-notice">This is a saved settings snapshot.{canEdit ? <button className="btn primary" disabled={opening} onClick={() => void beginEdit()}>{opening ? "Opening…" : "Edit current settings"}</button> : " Current control is unavailable for this revision."}</div>}

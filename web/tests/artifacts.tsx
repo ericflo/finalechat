@@ -5,6 +5,9 @@ import { GenericSettingsForm, SettingsControls } from "../src/components/Integra
 import { ArtifactScreen } from "../src/screens/Artifacts";
 import { type ResourceView, type SettingsProposal } from "../src/lib/artifacts";
 import { useRoute } from "../src/lib/router";
+import { InspectMessage } from "../src/components/InspectMessage";
+import { ThreadScreen } from "../src/screens/Thread";
+import type { Thread, Message } from "../src/lib/types";
 
 const fixture: ResourceView = {
   online: true,
@@ -34,6 +37,16 @@ const initial = new URLSearchParams(location.search);
 function ArtifactFixture() {
   const route = useRoute();
   const surface = route.search.get("surface") || (route.path === "/tests/artifacts.html" ? "settings" : null);
-  return <ArtifactScreen id="artifact" thread="thread" selectedRevision={route.search.get("revision")} selectedViewer={route.search.get("viewer")} surface={surface} />;
+  return <ArtifactScreen id="artifact" thread="thread" selectedRevision={route.search.get("revision")} selectedViewer={route.search.get("viewer")} initialAnchor={route.search.get("anchor")} surface={surface} />;
 }
-createRoot(document.getElementById("root")!).render(initial.has("artifact") ? <ArtifactFixture /> : <Controls />);
+const threadFixture = { id: "thread", external_id: "codex:fixture-session", title: "Fixture session", agent: "Codex", meta: {}, unread_count: 0, pending_count: 0, last_read_at: "2026-09-07T00:00:00Z", created_at: "2026-09-07T00:00:00Z" } as Thread;
+const messageFixture = { id: "chat-message", thread_id: "thread", sender: "agent", origin: "token", body: "The mirrored native answer", format: "text", importance: "normal", meta: { source_anchor: { dataset_format: "codex.rollout/v1", session_id: "fixture-session", event_id: "native-123" } }, created_at: "2026-09-07T00:00:00Z", attachments: [] } as Message;
+if (initial.has("mcp")) { messageFixture.id = "01a08000-0000-7000-8000-000000000123"; messageFixture.meta = {}; }
+Object.assign(window, { threadFixture, messageFixture });
+function NavigationFixture() {
+  const route = useRoute();
+  if (route.path.includes("/artifacts/")) return <ArtifactFixture />;
+  if (route.path === "/t/thread") return <ThreadScreen id="thread" highlightQuestion={null} highlightMessage={route.search.get("m")} />;
+  return <InspectMessage message={messageFixture} thread={threadFixture} />;
+}
+createRoot(document.getElementById("root")!).render(initial.has("navigation") ? <NavigationFixture /> : initial.has("artifact") ? <ArtifactFixture /> : <Controls />);

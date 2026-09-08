@@ -1044,6 +1044,15 @@ combined layout must validate. Only viewer-role files change; the manifest
 records both source and renderer revision IDs and disables settings entrypoints.
 The original data, original downloads and current revision remain unchanged.
 
+Messages may carry `meta.source_anchor` with `dataset_format`, `session_id`
+and exactly one selector: `seq`, `event_id`, `message_id`, or `file` plus `line`.
+The trusted chat UI opens the selected immutable revision with this hint.
+`finale.anchor()` returns that hint to the viewer, which must find the native
+record or explicitly report it absent from the loaded prefix. A viewer can call
+`finale.reveal(anchor)` to request a matching chat link; the parent validates
+the dataset, looks up only this artifact's thread and presents a trusted link
+for the user to tap. It never navigates merely because the iframe asked.
+
 Pair control independently from upload. API tokens may request pairing but
 only a signed-in user may approve resource keys, scopes, operations and classes.
 The resulting `fcc_` token cannot use chat, upload, account or browser commands.
@@ -1084,6 +1093,7 @@ remain authorized. Account deletion removes the related audit along with the acc
 | `GET /artifacts/{id}/revisions/{revision}/files/{file}` | Download exact file bytes or a bounded slice |
 | `GET /artifacts/{id}/revisions/{revision}/preview` | Load a sandboxed website entrypoint |
 | `GET /artifacts/{id}/revisions/{revision}/download` | Download the portable ZIP archive |
+| `GET /artifacts/{id}/revisions/{revision}/message` | Locate a chat message for an archived source anchor |
 | `POST /connectors` | Request pairing and receive a scoped credential |
 | `GET /connectors` | List paired and pending installations |
 | `GET /connectors/{connector}` | Connector pairing state and grants |

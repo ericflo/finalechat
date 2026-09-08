@@ -96,5 +96,6 @@
     settings: Object.freeze({ read: () => rpc("settings.read"), propose: (proposal) => rpc("settings.propose", proposal), clear: () => rpc("settings.propose", null), onResult: (fn) => on("settings.result", fn) }),
     viewState: Object.freeze({ read: () => connected ? rpc("artifact.view-state.read") : Promise.resolve(localViewState), write: (value) => { if (connected) return rpc("artifact.view-state.write", value); localViewState = value; return Promise.resolve(); } }),
     reveal: (anchor) => rpc("thread.reveal", anchor),
+    anchor: () => connected ? rpc("artifact.anchor") : Promise.resolve(null),
   });
 })();

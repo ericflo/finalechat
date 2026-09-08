@@ -24,6 +24,7 @@ export const artifactAPI = {
   list: (thread: string) => request<{ artifacts: Artifact[] }>("GET", `${b}/threads/${thread}/artifacts`),
   get: (id: string) => request<{ artifact: Artifact; revision?: ArtifactRevision }>("GET", `${b}/artifacts/${id}`),
   revision: (id: string, revision: string, viewer?: string | null) => request<{ revision: ArtifactRevision }>("GET", `${b}/artifacts/${id}/revisions/${revision}${viewer ? `?viewer=${encodeURIComponent(viewer)}` : ""}`),
+  message: (id: string, revision: string, anchor: unknown, viewer?: string | null) => request<{ message_id: string; thread_id: string }>("GET", `${b}/artifacts/${id}/revisions/${revision}/message?${new URLSearchParams({ anchor: JSON.stringify(anchor), ...(viewer ? { viewer } : {}) })}`),
   revisions: (id: string, before?: string) => request<{ revisions: RevisionInfo[]; next_before?: string }>("GET", `${b}/artifacts/${id}/revisions${before ? `?before=${encodeURIComponent(before)}` : ""}`),
   binding: (id: string) => request<{ binding: SettingsBinding }>("GET", `${b}/artifacts/${id}/settings-binding`),
   openSettings: (id: string, revision: string) => request<{ lease: SettingsSurfaceLease }>("POST", `${b}/artifacts/${id}/settings-surface`, { revision_id: revision }),

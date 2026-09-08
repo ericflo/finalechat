@@ -571,6 +571,7 @@ export async function refreshThread(id: string): Promise<void> {
       api.listThreadQuestions(id),
       last ? api.listMessages(id, { after: last.id, limit: 200 }) : api.listMessages(id, { limit: 100 }),
     ]);
+    for (const message of newer.messages) if (message.deleted) removeMessage(id, message.id);
     if (newer.has_more && last) {
       // Too much happened; start over from the newest page.
       await loadThread(id);
@@ -658,7 +659,13 @@ function appendMessage(m: Message) {
   });
 }
 
+const messageRemovalListeners = new Set<(thread: string, id: string) => void>();
+export function onMessageRemoved(fn: (thread: string, id: string) => void) {
+  messageRemovalListeners.add(fn);
+  return () => { messageRemovalListeners.delete(fn); };
+}
 function removeMessage(threadId: string, id: string) {
+  for (const listener of messageRemovalListeners) listener(threadId, id);
   set((s) => {
     const list = s.messages[threadId];
     if (!list || !list.some((m) => m.id === id)) return {};

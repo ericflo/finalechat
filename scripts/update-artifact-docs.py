@@ -64,7 +64,10 @@ op["parameters"] += [{"name":x,"in":"query","schema":{"type":"integer","minimum"
 op["responses"]["200"]["content"]={"application/octet-stream":{"schema":{"type":"string","format":"binary"}}}
 op=endpoint("GET","/artifacts/{id}/revisions/{revision}/preview","Load a sandboxed website entrypoint",security="browser",description="Optional surface=settings selects settings_entrypoint. This is a separate opaque-origin document protected by response CSP and iframe sandbox=allow-scripts. Scripts have no general API/fetch bridge.");op["parameters"].append({"name":"surface","in":"query","schema":{"enum":["settings"]}});op["responses"]["200"]["content"]={"text/html":{"schema":string}}
 op=endpoint("GET","/artifacts/{id}/revisions/{revision}/download","Download the portable ZIP archive",description="Contains manifest.json and every exact file under portable paths.");op["responses"]["200"]["content"]={"application/zip":{"schema":{"type":"string","format":"binary"}}}
-for suffix in ["", "/files/{file}", "/preview", "/download"]:
+op=endpoint("GET","/artifacts/{id}/revisions/{revision}/message","Locate a chat message for an archived source anchor",description="Returns only message_id and thread_id within this artifact's own thread. Validates declared dataset format/session identity and exactly one selector. Source files must exist in this revision. Deleted, foreign-thread or unmatched messages return 404. This is a presentation hint, not proof that a record has been captured or authority to navigate/mutate. Supports meta.source_anchor plus legacy eagent sequence and Claude transcript UUID metadata in their exact native-session threads.")
+op["parameters"].append({"name":"anchor","in":"query","required":True,"schema":{"type":"string","maxLength":2048},"description":"JSON object containing dataset_format and session_id, plus exactly one of seq (positive safe integer), event_id, message_id, or file and line. Identifiers are within 200 UTF-8 bytes. Unknown keys and trailing JSON are rejected."})
+op["responses"]["200"]["content"]={"application/json":{"schema":record({"message_id":uuid,"thread_id":uuid},["message_id","thread_id"])}}
+for suffix in ["", "/files/{file}", "/preview", "/download", "/message"]:
     op=doc["paths"]["/artifacts/{id}/revisions/{revision}"+suffix]["get"]
     op["parameters"].append({"name":"viewer","in":"query","schema":uuid,"description":"Explicit renderer revision from the same artifact. Requires equal declared dataset format/schema. Replaces only viewer-role files; every source/context/asset/derived file remains from the selected data revision. Does not commit a revision or change current. Incompatible file layouts return 422. Composed manifests record both revision IDs and have no settings entrypoint; incompatible with surface=settings. Omit to read the original archive."})
 
@@ -135,6 +138,15 @@ file, preview and ZIP download routes. Dataset format/schema must agree and the
 combined layout must validate. Only viewer-role files change; the manifest
 records both source and renderer revision IDs and disables settings entrypoints.
 The original data, original downloads and current revision remain unchanged.
+
+Messages may carry `meta.source_anchor` with `dataset_format`, `session_id`
+and exactly one selector: `seq`, `event_id`, `message_id`, or `file` plus `line`.
+The trusted chat UI opens the selected immutable revision with this hint.
+`finale.anchor()` returns that hint to the viewer, which must find the native
+record or explicitly report it absent from the loaded prefix. A viewer can call
+`finale.reveal(anchor)` to request a matching chat link; the parent validates
+the dataset, looks up only this artifact's thread and presents a trusted link
+for the user to tap. It never navigates merely because the iframe asked.
 
 Pair control independently from upload. API tokens may request pairing but
 only a signed-in user may approve resource keys, scopes, operations and classes.
