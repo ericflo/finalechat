@@ -1045,6 +1045,12 @@ an append-only audit and explicit expired/conflicted/unknown outcomes. Adapters
 must journal intent and reconcile save-before-ack crashes. No automatic retry
 may repeat an uncertain paid action. A saved file does not prove runtime adoption.
 
+Deleting an artifact, directly or through thread deletion, cancels its queued
+settings commands and fences claimed commands with an `unknown` result. This
+does not undo a local write that may already have started. Completed results
+remain on the settings resource, and independently submitted resource commands
+remain authorized. Account deletion removes the related audit along with the account.
+
 | Endpoint | Purpose |
 | --- | --- |
 | `PUT /threads/{thread}/artifacts/{key}` | Register or rename a session artifact |

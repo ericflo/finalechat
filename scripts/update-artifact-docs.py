@@ -52,7 +52,7 @@ def endpoint(method,path,title,body=None,security="agent",status="200",descripti
 endpoint("PUT","/threads/{thread}/artifacts/{key}","Register or rename a session artifact",record({"title":string},["title"]))
 endpoint("GET","/threads/{thread}/artifacts","List a thread’s artifacts")
 endpoint("GET","/artifacts/{id}","Artifact metadata, current manifest and limits")
-endpoint("DELETE","/artifacts/{id}","Delete artifact and all revisions",security="browser",description="Referenced chunks are retained until no revision references them. A durable cleanup queue retries B2 removal, including orphan upload versions.")
+endpoint("DELETE","/artifacts/{id}","Delete artifact and all revisions",security="browser",description="Referenced chunks are retained until no revision references them. A durable cleanup queue retries B2 removal, including orphan upload versions. Deleting an artifact or its thread cancels queued settings commands from that artifact and fences claimed commands as unknown; it cannot roll back a local write that already started. Completed results remain on the settings resource.")
 endpoint("POST","/artifacts/{id}/blobs/check","Check which chunk hashes are absent",record({"hashes":array(string)},["hashes"]))
 op=endpoint("PUT","/artifacts/{id}/blobs/{hash}","Upload a verified chunk",status="201",description="Raw bytes, 1 to 1,048,576 bytes. URL hash must match SHA-256. 200 if already present; 409 upload_in_progress; 413 quota/size limit.")
 op["requestBody"]={"required":True,"content":{"application/octet-stream":{"schema":{"type":"string","format":"binary","maxLength":1048576}}}}
@@ -133,6 +133,12 @@ settings edits with a deadline. Durable commands have fenced renewable leases,
 an append-only audit and explicit expired/conflicted/unknown outcomes. Adapters
 must journal intent and reconcile save-before-ack crashes. No automatic retry
 may repeat an uncertain paid action. A saved file does not prove runtime adoption.
+
+Deleting an artifact, directly or through thread deletion, cancels its queued
+settings commands and fences claimed commands with an `unknown` result. This
+does not undo a local write that may already have started. Completed results
+remain on the settings resource, and independently submitted resource commands
+remain authorized. Account deletion removes the related audit along with the account.
 
 """
 section += "| Endpoint | Purpose |\n| --- | --- |\n"+"".join(f"| `{m} {p}` | {title} |\n" for m,p,title in routes)

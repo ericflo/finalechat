@@ -6,6 +6,8 @@ Settings control is a separate opt-in. A local companion publishes a typed setti
 
 Opening **Edit current settings** creates a 30-minute editing session for that exact current artifact and resource. New transcript revisions can be published while the editor stays open. Historical pages cannot start a new editing session; expiry, revocation, deletion or a changed runtime generation ends the authorization. FinaleChat retains the editing identifier outside the iframe and records the original source revision on each command. Settings version checks still prevent stale writes, and background refreshes never silently rebase an existing edit set.
 
+Deleting an artifact or its thread also cancels queued commands submitted from that artifact. An already claimed command becomes `unknown`, and its lease and later acknowledgements are fenced: deletion cannot guarantee that a local write had not already happened. Completed results and their audit remain with the settings resource. Commands submitted independently from the resource keep their own authorization.
+
 ## Claude Code
 
 The existing hooks/MCP integration remains available:

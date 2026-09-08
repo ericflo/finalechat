@@ -3867,7 +3867,7 @@
           "Artifacts"
         ],
         "summary": "Delete artifact and all revisions",
-        "description": "Referenced chunks are retained until no revision references them. A durable cleanup queue retries B2 removal, including orphan upload versions.",
+        "description": "Referenced chunks are retained until no revision references them. A durable cleanup queue retries B2 removal, including orphan upload versions. Deleting an artifact or its thread cancels queued settings commands from that artifact and fences claimed commands as unknown; it cannot roll back a local write that already started. Completed results remain on the settings resource.",
         "responses": {
           "200": {
             "description": "Delete artifact and all revisions",
