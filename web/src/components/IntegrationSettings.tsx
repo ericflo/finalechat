@@ -25,8 +25,19 @@ function commandDescription(c: SettingsCommand): string {
   if (c.status === "rejected") return typeof c.result?.message === "string" ? c.result.message : "The connector rejected the command. See its result below.";
   const effects = Array.isArray(c.result?.effects) ? c.result.effects as { effective_when?: string; runtime_applied?: boolean }[] : [];
   const timings = [...new Set(effects.filter((e) => !e.runtime_applied).map((e) => effectLabel[e.effective_when || "unknown"] || "Runtime effect unconfirmed"))];
-  if (c.proposal.operation !== "settings.apply") return "The connector completed the action.";
+  if (!["settings.apply", "settings.undo"].includes(c.proposal.operation)) return "The connector completed the action.";
   return timings.length ? `Saved. Takes effect: ${timings.join(", ").toLowerCase()}.` : "Saved. See the connector’s result for runtime effects.";
+}
+
+type UndoOffer = { format: string; command_id: string; restore_sha256: string; operation: string; edits?: SettingEdit[]; resource?: { kind: string; name: string; restore_override: boolean; restore_sha256: string } };
+function undoOffer(command: SettingsCommand | null, resource: SettingsResource): UndoOffer | null {
+  if (!command || command.status !== "succeeded" || command.resource_id !== resource.id || (command.proposal.generation || "") !== resource.generation || !resource.descriptor.actions?.some((a) => a.operation === "settings.undo")) return null;
+  const value = command.result?.undo as Partial<UndoOffer> | undefined;
+  if (!value || value.format !== "finalechat.settings-undo/v1" || value.command_id !== command.id || !/^[a-f0-9]{64}$/.test(value.restore_sha256 || "")) return null;
+  if (value.operation === "settings.apply") {
+    if (!Array.isArray(value.edits) || !value.edits.length || value.edits.length > 512 || value.edits.some((e) => !e || !["set", "unset"].includes(e.op) || !resource.descriptor.fields.some((f) => f.key === e.key))) return null;
+  } else if (!value.resource || !["prompt", "bundle"].includes(value.resource.kind) || typeof value.resource.name !== "string" || typeof value.resource.restore_override !== "boolean" || !/^[a-f0-9]{64}$/.test(value.resource.restore_sha256)) return null;
+  return value as UndoOffer;
 }
 
 /** This component lives outside the artifact iframe. An iframe can stage
@@ -84,6 +95,12 @@ export function SettingsControls({ view, proposal, onProposal, surface, surfaceE
   if (expiredSurface || replacedSurface) validation = replacedSurface ? "The target runtime was replaced. Reopen the latest settings page." : "This editing session expired. Save a draft and reopen the latest settings page.";
   const pending = busy || !!command && ["queued", "executing"].includes(command.status);
   const action = resource.descriptor.actions?.find((a) => a.operation === proposal?.operation);
+  const undo = undoOffer(command, resource);
+  const reviewedUndo = undo && proposal?.operation === "settings.undo" && proposal.parameters?.command_id === undo.command_id && proposal.parameters?.restore_sha256 === undo.restore_sha256 ? undo : null;
+  if (reviewedUndo?.edits) {
+    try { validateProposal({ operation: "settings.apply", schema_version: proposal!.schema_version, expected_version: proposal!.expected_version, generation: proposal!.generation, edits: reviewedUndo.edits }, resource); }
+    catch (e) { validation = e instanceof Error ? e.message : "These settings cannot currently be restored."; }
+  }
   const refresh: SettingsProposal = { operation: "settings.refresh", schema_version: resource.descriptor.schema_version, expected_version: resource.snapshot.version, generation: resource.generation };
   return <section className="settings-control" aria-label="Settings controls">
     <div className="settings-target"><strong>{resource.label}</strong><span>{scopeLabel[resource.scope] || resource.scope} · {view.connector.name} · {view.online ? "Connected" : "Offline"}</span></div>
@@ -92,6 +109,10 @@ export function SettingsControls({ view, proposal, onProposal, surface, surfaceE
       <strong>{action?.label || (proposal.operation === "settings.refresh" ? "Refresh settings" : "Review changes")}</strong>
       {proposal.edits?.map((e) => { const f = resource.descriptor.fields.find((f) => f.key === e.key); return <div className="proposal-edit" key={e.key}><span>{f?.label || e.key}</span><small>Currently saved: {Object.hasOwn(resource.snapshot.saved, e.key) ? displayValue(resource.snapshot.saved[e.key]) : "Inherited"}</small><code>{e.op === "unset" ? "Inherit default" : inputValue(e.value)}</code><small>{effectLabel[f?.effective_when || "unknown"]}{f?.class !== "preference" ? ` · ${f?.class}` : ""}</small></div>; })}
       {action && <><p>{action.class === "cost" ? "This action can make a paid provider request." : `Capability: ${action.class}`}</p><pre>{JSON.stringify(proposal.parameters || {}, null, 2)}</pre></>}
+      {reviewedUndo && <div className="undo-review"><p>Restore the following from the previous command. The connector checks the affected values and current permissions again; unrelated edits are preserved.</p>
+        {reviewedUndo.edits?.map((edit) => { const field = resource.descriptor.fields.find((f) => f.key === edit.key); return <div className="proposal-edit" key={edit.key}><span>{field?.label || edit.key}</span><small>Currently saved: {Object.hasOwn(resource.snapshot.saved, edit.key) ? displayValue(resource.snapshot.saved[edit.key]) : "Inherited"}</small><code>{edit.op === "unset" ? "Inherit default" : inputValue(edit.value)}</code><small>{field?.class}</small></div>; })}
+        {reviewedUndo.resource && <p>{reviewedUndo.resource.restore_override ? "Restore previous override" : "Remove the created override"}: {reviewedUndo.resource.kind} · {reviewedUndo.resource.name}. The original content is identified by <code>{reviewedUndo.resource.restore_sha256}</code>.</p>}
+      </div>}
       {validation && <p role="alert" className="artifact-error">{validation}</p>}
       {proposal.operation === "settings.apply" && proposal.expected_version !== resource.snapshot.version && proposal.schema_version === resource.descriptor.schema_version && (proposal.generation || "") === resource.generation && resource.scope !== "session" && <button className="btn small" disabled={pending} onClick={() => { try { onProposal(validateProposal({ ...proposal, expected_version: resource.snapshot.version }, resource)); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "These edits cannot apply to the current settings."); } }}>Review against current settings</button>}
       {!view.online && resource.scope !== "session" && proposal.operation === "settings.apply" && <label className="offline-choice"><input type="checkbox" checked={sendLater} onChange={(e) => setSendLater(e.target.checked)} /> Send when connected, expiring after one hour</label>}
@@ -99,6 +120,7 @@ export function SettingsControls({ view, proposal, onProposal, surface, surfaceE
     </div>}
     <div className="artifact-actions"><button className="btn small" disabled={pending || !view.online || expiredSurface || replacedSurface} onClick={() => void submit(refresh)}>Refresh from connector</button></div>
     {command && <div className="command-result" role="status"><strong>{commandDescription(command)}</strong>{command.result?.snapshot_publication === "pending" && <p>{archivedSettingsVersion && archivedSettingsVersion === command.result.version ? "Updated settings are preserved in the latest archive." : "The command result is saved. Archive publication is not yet confirmed here."}</p>}{command.status === "queued" && <button className="btn small" onClick={() => { void controlAPI.cancel(command.id).then((r) => setCommand(r.command)).catch((e: Error) => setError(e.message)); }}>Cancel queued command</button>}{command.result && <details><summary>Command details</summary><pre>{JSON.stringify(command.result, null, 2)}</pre></details>}</div>}
+    {undo && <button className="btn small" disabled={pending || !!proposal || expiredSurface || replacedSurface} onClick={() => { try { onProposal(validateProposal({ operation: "settings.undo", schema_version: resource.descriptor.schema_version, expected_version: resource.snapshot.version, generation: resource.generation, parameters: { command_id: undo.command_id, restore_sha256: undo.restore_sha256 } }, resource)); setError(""); } catch (e) { setError(e instanceof Error ? e.message : "Undo is unavailable for the current settings."); } }}>Review undo</button>}
     {error && <p role="alert" className="artifact-error">{error}</p>}
   </section>;
 }

@@ -45,7 +45,7 @@ try {
     if (p === "/api/v1/settings-resources/resource/commands") {
       const body = route.request().postDataJSON(); commands.push(body);
       await new Promise((resolve) => { commandResponse = resolve; });
-      return json({ created: true, command: { id: "command", status: "succeeded", proposal: body.proposal, result: { effects: [{ effective_when: "new_or_resumed_session", runtime_applied: false }] } } });
+      return json({ created: true, command: { id: "command", resource_id: "resource", status: "succeeded", proposal: body.proposal, result: { effects: [{ effective_when: "new_or_resumed_session", runtime_applied: false }], undo: body.proposal.operation === "settings.apply" ? { format: "finalechat.settings-undo/v1", command_id: "command", restore_sha256: "a".repeat(64), operation: "settings.apply", edits: [{ op: "set", key: "/count", value: 2 }] } : undefined } } });
     }
     if (p === "/api/v1/artifacts/artifact") return json({ artifact: { id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }, revision: { ...revision, id: currentRevision } });
     if (p.endsWith("/settings-binding")) return json({ binding: { artifact_id: "artifact", resource_id: "resource", revision_id: currentRevision, generation: "" } });
@@ -76,6 +76,13 @@ try {
   await page.getByRole("button", { name: "Review against current settings", exact: true }).click();
   assert.equal(await page.evaluate(() => window.staged.expected_version), "v2");
   assert.equal(await save.isEnabled(), true);
+  await page.getByRole("button", { name: "Discard changes", exact: true }).click();
+  await page.getByRole("button", { name: "Review undo", exact: true }).click();
+  assert.equal(commands.length, 1, "reviewing undo submitted a command");
+  assert.equal(await page.evaluate(() => window.staged.operation), "settings.undo");
+  assert.equal(await page.evaluate(() => window.staged.expected_version), "v2");
+  assert.equal(await page.evaluate(() => window.staged.parameters.restore_sha256), "a".repeat(64));
+  assert.match(await page.locator(".undo-review").innerText(), /Concurrency[\s\S]*2/);
   await page.getByRole("button", { name: "Discard changes", exact: true }).click();
   await page.getByText("Integration actions", { exact: true }).click();
   await page.getByLabel("Action", { exact: true }).selectOption("prompt.set");

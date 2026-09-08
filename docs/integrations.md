@@ -8,6 +8,8 @@ Opening **Edit current settings** creates a 30-minute editing session for that e
 
 Deleting an artifact or its thread also cancels queued commands submitted from that artifact. An already claimed command becomes `unknown`, and its lease and later acknowledgements are fenced: deletion cannot guarantee that a local write had not already happened. Completed results and their audit remain with the settings resource. Commands submitted independently from the resource keep their own authorization.
 
+An adapter may return a `finalechat.settings-undo/v1` review in a successful command's `result.undo`, containing the original `command_id`, a `restore_sha256`, and either the inverse configuration `edits` or a named `resource` review. When its descriptor advertises `settings.undo`, FinaleChat offers **Review undo**. This stages a new command with the current settings version and the reviewed command/digest; submission still requires the trusted action button. The adapter must match that review to its private journal, check the affected values and current grants, and apply the reversal conditionally. Undo never grants permission to overwrite unrelated changes or silently replay a paid action. Eagent implements this contract for settings, prompts and bundles.
+
 ## Websites from other integrations
 
 Prepare a directory containing a self-contained HTML entrypoint and the data it reads. Then publish it to the integration's exact session thread:

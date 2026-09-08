@@ -13,7 +13,7 @@ const fixture: ResourceView = {
     descriptor: { format: "finalechat.settings/v1", schema_version: "fixture/1", adapter_version: "1", fields: [
       { key: "/count", label: "Concurrency", schema: { type: "integer", minimum: 1, maximum: 16 }, writable: true, unset: true, class: "preference", effective_when: "new_or_resumed_session" },
       { key: "/text", label: "Long prompt", schema: { type: "string", max_length: 32768 }, writable: true, unset: true, class: "preference", effective_when: "new_or_resumed_session" },
-    ], actions: [{ operation: "prompt.set", label: "Save prompt override", class: "preference", parameters: { type: "object", properties: { name: { type: "string", enum: ["narrator"] }, text: { type: "string", max_length: 32768 } }, required: ["name", "text"] } }] },
+    ], actions: [{ operation: "prompt.set", label: "Save prompt override", class: "preference", parameters: { type: "object", properties: { name: { type: "string", enum: ["narrator"] }, text: { type: "string", max_length: 32768 } }, required: ["name", "text"] } }, { operation: "settings.undo", label: "Undo reviewed settings change", class: "preference", parameters: { type: "object", properties: { command_id: { type: "string", max_length: 80 }, restore_sha256: { type: "string", max_length: 64 } }, required: ["command_id", "restore_sha256"] } }] },
     snapshot: { version: "v1", context: "fixture", saved: { "/count": 2, "/text": "A".repeat(4096) }, effective: {}, runtime_known: false },
   },
 };
