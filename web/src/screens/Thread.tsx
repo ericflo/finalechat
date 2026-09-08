@@ -11,6 +11,7 @@ import { navigate } from "../lib/router";
 import { AlreadyPostedError, deleteThread, loadOlderMessages, loadThread, markRead, onMessageRemoved, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
 import type { Activity, Attachment, Message, Question, Thread } from "../lib/types";
+import { ThreadSettingsPanel } from "../components/ThreadSettings";
 import { ThreadArtifacts } from "./Artifacts";
 import { InspectMessage } from "../components/InspectMessage";
 
@@ -25,7 +26,7 @@ function groupedWith(a: Item | undefined, b: Item | undefined): boolean {
   return Math.abs(new Date(b.at).getTime() - new Date(a.at).getTime()) < 3 * 60 * 1000;
 }
 
-export function ThreadScreen({ id, highlightQuestion, highlightMessage = null }: { id: string; highlightQuestion: string | null; highlightMessage?: string | null }) {
+export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, settingsOpen = false }: { id: string; highlightQuestion: string | null; highlightMessage?: string | null; settingsOpen?: boolean }) {
   const thread = useStore((s) => s.threads[id]);
   const messages = useStore((s) => s.messages[id]);
   const questions = useStore((s) => s.threadQuestions[id]);
@@ -244,6 +245,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null }:
 
   return (
     <div className="page thread-page">
+      {settingsOpen && <ThreadSettingsPanel thread={id} onClose={() => navigate(`/t/${id}`)} />}
       <TopBar
         title={
           <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, maxWidth: "100%" }}>
@@ -255,9 +257,9 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null }:
         subtitle={subtitle}
         backTo="/"
         right={
-          <button type="button" className="icon-btn" aria-label="Thread options" onClick={() => setMenu(true)}>
+          <><button type="button" className="btn small thread-settings-trigger" onClick={() => navigate(`/t/${id}?panel=settings`)}>Settings</button><button type="button" className="icon-btn" aria-label="Thread options" onClick={() => setMenu(true)}>
             <IconMore />
-          </button>
+          </button></>
         }
         below={thread ? <><MetaStrip thread={thread} /><ThreadArtifacts thread={id} onAvailable={setHasArtifacts} /></> : null}
       />

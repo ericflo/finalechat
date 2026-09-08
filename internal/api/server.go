@@ -37,7 +37,7 @@ type Server struct {
 // Features lists the optional capabilities agents can feature-detect on
 // GET /me and GET /auth/status.
 func (s *Server) Features() []string {
-	f := []string{"activity", "idempotency", "dismiss", "settings-control.v1"}
+	f := []string{"activity", "idempotency", "dismiss", "settings-control.v1", "settings-connect.v1"}
 	if s.push.Enabled() {
 		f = append(f, "push")
 	}

@@ -4541,11 +4541,11 @@
         "tags": [
           "Integration settings"
         ],
-        "summary": "Request pairing and receive a scoped credential",
-        "description": "Pending pairing expires in 15 minutes. Returns connector, one-time secret and approval_url. An API token cannot approve its own request.",
+        "summary": "Connect an owned installation and receive a scoped credential",
+        "description": "An account-authenticated integration sets connect=true to activate its own declared settings immediately. Omitting connect preserves legacy pending pairing. Returns connector and one-time scoped secret; only a signed-in human can submit settings commands.",
         "responses": {
           "201": {
-            "description": "Request pairing and receive a scoped credential",
+            "description": "Connect an owned installation and receive a scoped credential",
             "content": {
               "application/json": {
                 "schema": {
@@ -4596,6 +4596,9 @@
                     "items": {
                       "$ref": "#/components/schemas/SettingsGrant"
                     }
+                  },
+                  "connect": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -6128,6 +6131,135 @@
                     "resources"
                   ],
                   "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "thread",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ]
+      }
+    },
+    "/connectors/{connector}/connect": {
+      "post": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Connect an existing owned installation",
+        "description": "Requires account authentication and the locally held connector secret. Activates pending installations, preserves active grants, and never reactivates a revoked installation.",
+        "responses": {
+          "200": {
+            "description": "Connect an existing owned installation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "connector",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Account-scoped identifier; thread also accepts ext:external_id, revision also accepts current. File paths must exactly match the manifest."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "secret": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "secret"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{thread}/settings": {
+      "get": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "List agent settings available in this conversation",
+        "description": "Returns resources linked by an owned current settings website or published thread_external_id/thread_external_ids hints. Each item includes id, label, scope, provider, available and optional artifact_id/revision_id. Does not create a thread.",
+        "responses": {
+          "200": {
+            "description": "List agent settings available in this conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
                 }
               }
             }

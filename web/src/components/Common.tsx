@@ -161,7 +161,7 @@ if (typeof window !== "undefined") {
 /** Bottom sheet: locks the page behind it, traps focus, restores it on close.
  * A sheet opened by a long press ignores the click that the finger's lift
  * produces, so the gesture can neither dismiss it nor pick an item. */
-export function Sheet({ onClose, children, label }: { onClose: () => void; children: ReactNode; label?: string }) {
+export function Sheet({ onClose, children, label, className = "" }: { onClose: () => void; children: ReactNode; label?: string; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -241,7 +241,7 @@ export function Sheet({ onClose, children, label }: { onClose: () => void; child
   };
   return (
     <div
-      className="sheet-backdrop"
+      className={`sheet-backdrop ${className}`}
       onClickCapture={swallowUnarmed}
       onPointerDown={(e) => {
         if (armed && e.target === e.currentTarget) onClose();

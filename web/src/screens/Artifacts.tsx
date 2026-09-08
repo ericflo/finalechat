@@ -16,14 +16,14 @@ export function ThreadArtifacts({ thread, onAvailable }: { thread: string; onAva
     let alive = true;
     setItems([]); setResources([]); onAvailable?.(false);
     const refresh = () => {
-      void artifactAPI.list(thread).then((r) => { if (alive) { setItems(r.artifacts); onAvailable?.(r.artifacts.some(a => !!a.current_revision_id)); } }).catch(() => {});
+      void artifactAPI.list(thread).then((r) => { if (alive) { setItems(r.artifacts.filter(a => a.key !== "agent-settings")); onAvailable?.(r.artifacts.some(a => a.key !== "agent-settings" && !!a.current_revision_id)); } }).catch(() => {});
       void controlAPI.forThread(thread).then((r) => { if (alive) setResources(r.resources); }).catch(() => { if (alive) setResources([]); });
     };
     refresh(); const timer = window.setInterval(refresh, 15000);
     return () => { alive = false; window.clearInterval(timer); };
   }, [thread, onAvailable]);
   if (!items.length && !resources.length) return null;
-  return <div className="thread-artifacts" aria-label="Session artifacts and settings">{items.map((a) => <Link key={a.id} className="btn small" href={`/t/${thread}/artifacts/${a.id}`}>{a.title}{!a.current_revision_id ? " · Uploading…" : ""}</Link>)}{resources.map((r) => <Link key={r.id} className="btn small" href={`/settings/resources/${r.id}`} title={r.label}>Live session settings{r.available ? "" : " · Unavailable"}</Link>)}</div>;
+  return <div className="thread-artifacts" aria-label="Session artifacts and settings">{items.map((a) => <Link key={a.id} className="btn small" href={`/t/${thread}/artifacts/${a.id}`}>{a.title}{!a.current_revision_id ? " · Uploading…" : ""}</Link>)}{resources.map((r) => <Link key={r.id} className="btn small" href={`/t/${thread}?panel=settings`} title={r.label}>Live session settings{r.available ? "" : " · Unavailable"}</Link>)}</div>;
 }
 
 function compatibleUpdate(a: ArtifactRevision, b: ArtifactRevision) {

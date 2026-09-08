@@ -20,7 +20,9 @@ import (
 
 func (s *Server) controlRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/v1/threads/{thread}/settings-resources", s.handleThreadSessionSettings)
+	m.HandleFunc("GET /api/v1/threads/{thread}/settings", s.handleThreadSettings)
 	m.HandleFunc("POST /api/v1/connectors", s.handleCreateConnector)
+	m.HandleFunc("POST /api/v1/connectors/{connector}/connect", s.handleConnectOwnAgent)
 	m.HandleFunc("GET /api/v1/connectors", s.sessionOnly(s.handleListConnectors))
 	m.HandleFunc("GET /api/v1/connectors/{connector}", s.sessionOnly(s.handleGetConnector))
 	m.HandleFunc("POST /api/v1/connectors/{connector}/approve", s.sessionOnly(s.handleApproveConnector))
@@ -86,6 +88,7 @@ func (s *Server) handleCreateConnector(w http.ResponseWriter, r *http.Request) {
 		Name     string          `json:"name"`
 		Provider string          `json:"provider"`
 		Grants   []control.Grant `json:"requested_grants"`
+		Connect  bool            `json:"connect"`
 	}
 	if err := decodeJSON(r, &in); err != nil {
 		writeError(w, err)
@@ -118,6 +121,13 @@ func (s *Server) handleCreateConnector(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	if in.Connect {
+		c, err = s.store.ConnectOwnAgent(r.Context(), p.user.ID, c.ID, auth.HashToken(secret))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
 	}
 	s.controlEvent(r.Context(), p.user.ID, c.ID, uuid.Nil, uuid.Nil, bus.ConnectorUpdated)
 	writeJSON(w, 201, map[string]any{"connector": c, "secret": secret, "approval_url": s.cfg.BaseURL + "/settings?connector=" + c.ID.String()})

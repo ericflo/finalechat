@@ -79,7 +79,7 @@ function App() {
   if (thread) {
     return (
       <ErrorBoundary key={thread.id}>
-        <ThreadScreen id={thread.id as string} highlightQuestion={route.search.get("q")} highlightMessage={route.search.get("m")} />
+        <ThreadScreen settingsOpen={route.search.get("panel") === "settings"} id={thread.id as string} highlightQuestion={route.search.get("q")} highlightMessage={route.search.get("m")} />
       </ErrorBoundary>
     );
   }

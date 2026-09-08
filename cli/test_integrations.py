@@ -43,6 +43,45 @@ class IntegrationTests(unittest.TestCase):
     def write(self, path, value):
         G["private_json"](path, value)
 
+    def test_settings_connects_without_transcript_opt_in(self):
+        calls = []
+        class Account:
+            base_url = "https://fixture.invalid"
+            def request(self, method, path, body=None):
+                calls.append((method, path, body))
+                return {"connector": {"id": "owned", "state": "active", "requested_grants": []}, "secret": "fcc_fixture"}
+        with patch.dict(G, make_settings_adapter=lambda *args: self.adapter):
+            result = G["connect_own_integration"]("claude-code", str(self.project), Account(), self.directory)
+        self.assertTrue(calls[0][2]["connect"])
+        self.assertEqual(result["connector"]["state"], "active")
+        self.assertFalse((self.directory / "integration.json").exists())
+        self.assertFalse((self.directory / "publications").exists())
+        self.assertEqual((self.directory / "connector.json").stat().st_mode & 0o777, 0o600)
+
+    def test_pending_connector_migration_retains_disconnection_and_host(self):
+        self.write(self.directory / "connector.json", {"connector": {"id": "owned"}, "base_url": "https://fixture.invalid", "secret": "fcc_fixture"})
+        calls = []
+        class Account:
+            base_url = "https://fixture.invalid"
+            def request(self, method, path, body=None):
+                calls.append((method, path, body))
+                return {}
+        class Scoped:
+            state = "pending"
+            def __init__(self, *args): pass
+            def request(self, *args): return {"connector": {"id": "owned", "state": self.state}}
+        with patch.dict(G, Client=Scoped):
+            G["connect_own_integration"]("claude-code", str(self.project), Account(), self.directory)
+            self.assertEqual(calls[0][1], "/api/v1/connectors/owned/connect")
+            self.assertEqual(calls[0][2], {"secret": "fcc_fixture"})
+            calls.clear()
+            Scoped.state = "revoked"
+            G["connect_own_integration"]("claude-code", str(self.project), Account(), self.directory)
+            self.assertEqual(calls, [])
+            Account.base_url = "https://other.invalid"
+            with self.assertRaises(G["CLIError"]):
+                G["connect_own_integration"]("claude-code", str(self.project), Account(), self.directory)
+
     def proposal(self, key="/model", value="fixture-model", op="set"):
         view = self.adapter.snapshot()
         edit = {"key": key, "op": op}

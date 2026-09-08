@@ -1067,7 +1067,7 @@ def notify_claude_artifact(payload):
     project = str(Path(payload.get("cwd") or os.getcwd()).resolve())
     directory = integration_path("claude-code", project)
     config = read_object(directory / "integration.json")
-    if not config.get("artifacts") or not config.get("enabled", True):
+    if not config.get("enabled", True):
         return
     transcript, session_id = payload.get("transcript_path"), payload.get("session_id")
     if transcript and session_id and Path(transcript).exists():
@@ -1282,6 +1282,28 @@ def start_integration_companion(provider, project, client=None):
     return True
 
 
+def connect_own_integration(provider, project, client, directory):
+    existing = read_object(directory / "connector.json")
+    if existing:
+        if existing["base_url"].rstrip("/") != client.base_url.rstrip("/"):
+            raise CLIError("The settings connection belongs to another FinaleChat server.")
+        scoped = Client(existing["base_url"], existing["secret"])
+        connector = scoped.request("GET", "/api/v1/connectors/" + existing["connector"]["id"])["connector"]
+        if connector["state"] == "pending":
+            client.request("POST", "/api/v1/connectors/" + connector["id"] + "/connect", body={"secret": existing["secret"]})
+        return existing
+    adapter = make_settings_adapter(provider, project)
+    try:
+        adapter.snapshot()
+        pairing = client.request("POST", "/api/v1/connectors", body={"name": provider + " · " + Path(project).name + " · " + hostname(),
+            "provider": provider, "requested_grants": [adapter.grant()], "connect": True})
+        pairing["base_url"] = client.base_url
+        private_json(directory / "connector.json", pairing)
+        return pairing
+    finally:
+        adapter.close()
+
+
 def run_integration_companion(provider, project, client, once=False):
     directory = integration_path(provider, project)
     stop = threading.Event()
@@ -1308,11 +1330,14 @@ def run_integration_companion(provider, project, client, once=False):
                 if not config.get("enabled", True):
                     break
                 pairing = read_object(directory / "connector.json")
-                if not pairing:
-                    if once:
-                        break
-                    stop.wait(5)
-                    continue
+                if not pairing or pairing.get("connector", {}).get("state") == "pending":
+                    try:
+                        pairing = connect_own_integration(provider, project, client, directory)
+                    except (CLIError, OSError, ValueError):
+                        if once:
+                            break
+                        stop.wait(5)
+                        continue
                 control_client = Client(pairing["base_url"], pairing["secret"])
                 base = "/api/v1/connectors/" + Client.ref_path(pairing["connector"]["id"])
                 try:
@@ -1335,6 +1360,10 @@ def run_integration_companion(provider, project, client, once=False):
                                 raise CLIError("Local resource identity changed; pair it again.")
                             adapters[grant["key"]] = adapter
                         view = adapter.snapshot(grant)
+                        if provider == "codex":
+                            discover_codex_sessions(project, directory, adapter.rpc.info["codexHome"])
+                        registrations = [read_object(p) for p in sorted((directory / "sessions").glob("*.json"))[-100:]]
+                        view["snapshot"].setdefault("details", {})["thread_external_ids"] = [provider + ":" + r["session_id"] for r in registrations if r.get("session_id")]
                         resource = control_client.request("PUT", base + "/resources/" + Client.ref_path(adapter.key), body={
                             "instance": instance, "generation": "", "descriptor": view["descriptor"], "snapshot": view["snapshot"]})["resource"]
                         resources[resource["id"]] = adapter
@@ -1659,16 +1688,18 @@ def cmd_connector(args):
                         raise
                     prior = None
                 if prior and prior["state"] in ("active", "pending"):
-                    print("Existing pairing: " + existing["approval_url"])
-                    print("Revoke it in FinaleChat before changing this installation's scopes.")
+                    connect_own_integration(provider, project, client, directory)
+                    configure_integration(provider, project, enabled=True)
+                    if not args.foreground:
+                        start_integration_companion(provider, project, client)
+                    print("Connected. Open Settings in your FinaleChat conversation.")
                     return EXIT_OK
             pairing = client.request("POST", "/api/v1/connectors", body={"name": provider + " · " + Path(project).name + " · " + hostname(),
-                                      "provider": provider, "requested_grants": grants})
+                                      "provider": provider, "requested_grants": grants, "connect": True})
             pairing["base_url"] = client.base_url
             private_json(directory / "connector.json", pairing)
             configure_integration(provider, project, enabled=True, primary_scope=scopes[0])
-            print("Approve the exact scopes and settings classes in FinaleChat:")
-            print(pairing["approval_url"])
+            print("Connected. Open Settings in your FinaleChat conversation.")
             if not args.foreground:
                 start_integration_companion(provider, project, client)
         finally:
@@ -1746,7 +1777,9 @@ def install_codex_integration(args, remove=False):
             configure_integration("codex", args.project, enabled=True, artifacts=True)
             start_integration_companion("codex", args.project, client_from_args(args))
             print("Proactive native rollout publication enabled for " + str(Path(args.project).resolve()))
-        print("Pair settings separately with: finalechat connector pair codex --project " + shlex.quote(str(Path(args.project).resolve())))
+        configure_integration("codex", args.project, enabled=True)
+        start_integration_companion("codex", args.project, client_from_args(args))
+        print("Agent settings connect automatically and appear in your FinaleChat conversation.")
     return EXIT_OK
 
 

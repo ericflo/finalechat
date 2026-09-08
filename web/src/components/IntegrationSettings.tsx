@@ -156,7 +156,7 @@ function GenericSettingsActions({ resource, proposal, onProposal }: { resource: 
   </details>;
 }
 
-function SettingInput({ field: f, saved, effective, edit, onEdit, resetLabel = "Inherit default" }: { field: SettingField; saved: unknown; effective: unknown; edit?: SettingEdit; onEdit: (e: SettingEdit) => void; resetLabel?: string }) {
+export function SettingInput({ field: f, saved, effective, edit, onEdit, resetLabel = "Inherit default" }: { field: SettingField; saved: unknown; effective: unknown; edit?: SettingEdit; onEdit: (e: SettingEdit) => void; resetLabel?: string }) {
   const value = edit?.op === "set" ? edit.value : edit?.op === "unset" ? undefined : saved;
   const [text, setText] = useState(inputValue(value));
   const [error, setError] = useState("");

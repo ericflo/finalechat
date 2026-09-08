@@ -1,4 +1,5 @@
 // Test-only entrypoint. Production Vite builds do not include this directory.
+import "../src/styles.css";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { GenericSettingsForm, SettingsControls } from "../src/components/IntegrationSettings";
@@ -54,12 +55,14 @@ Object.assign(window, { threadFixture, messageFixture });
 function NavigationFixture() {
   const route = useRoute();
   if (route.path.includes("/artifacts/")) return <ArtifactFixture />;
-  if (route.path === "/t/thread") return <ThreadScreen id="thread" highlightQuestion={null} highlightMessage={route.search.get("m")} />;
+  if (route.path === "/t/thread") return <ThreadScreen settingsOpen={route.search.get("panel") === "settings"} id="thread" highlightQuestion={null} highlightMessage={route.search.get("m")} />;
   return <InspectMessage message={messageFixture} thread={threadFixture} />;
 }
+function ThreadFixture() { const route = useRoute(); return <ThreadScreen id="thread" highlightQuestion={null} settingsOpen={route.search.get("panel") === "settings"} />; }
 function RuntimeFixture() {
   const route = useRoute();
+  if (route.path === "/t/thread") return <ThreadScreen id="thread" highlightQuestion={null} settingsOpen={route.search.get("panel") === "settings"} />;
   if (route.path === "/settings/resources/resource") return <ResourceSettingsScreen id="resource" />;
   return <ThreadArtifacts thread="thread" />;
 }
-createRoot(document.getElementById("root")!).render(initial.has("runtime") ? <RuntimeFixture /> : initial.has("navigation") ? <NavigationFixture /> : initial.has("artifact") ? <ArtifactFixture /> : <Controls />);
+createRoot(document.getElementById("root")!).render(initial.has("thread") ? <ThreadFixture /> : initial.has("runtime") ? <RuntimeFixture /> : initial.has("navigation") ? <NavigationFixture /> : initial.has("artifact") ? <ArtifactFixture /> : <Controls />);

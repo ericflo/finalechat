@@ -1495,7 +1495,7 @@ def install_claude_hooks(args) -> int:
         configure_integration("claude-code", args.project, artifacts=True, enabled=True)
         start_integration_companion("claude-code", args.project, client_from_args(args))
         print("Proactive transcript artifacts enabled for " + str(Path(args.project).resolve()))
-    print("Pair settings separately with: finalechat connector pair claude-code --project " + shlex.quote(str(Path(args.project).resolve())))
+    print("Agent settings connect automatically and appear in your FinaleChat conversation.")
     return EXIT_OK
 
 
@@ -2684,7 +2684,7 @@ def cmd_mcp(args) -> int:
 # BEGIN GENERATED INTEGRATIONS (scripts/build-cli-integrations.py)
 INTEGRATION_ASSETS = {'sdk': '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', 'viewer': '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', 'settings': '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'}
 INTEGRATION_ASSETS_DIGEST = '7168456fe09bb94680fcdc19d1fefcff73d11e22933dc2e7321cdd31f33de14f'
-INTEGRATION_ADAPTER_DIGEST = '7c463015d23075d7bbe0e732c83ad9e5a28db58bc784e659eb5997e02f1c15d6'
+INTEGRATION_ADAPTER_DIGEST = 'd5e2d23859dd1baf2e86a46bbdb5acafb819621034a948d65aa36c9efce7ce2a'
 """Source for the integrations embedded in the single-file CLI.
 
 Run scripts/build-cli-integrations.py after editing this file or cli/assets.
@@ -3754,7 +3754,7 @@ def notify_claude_artifact(payload):
     project = str(Path(payload.get("cwd") or os.getcwd()).resolve())
     directory = integration_path("claude-code", project)
     config = read_object(directory / "integration.json")
-    if not config.get("artifacts") or not config.get("enabled", True):
+    if not config.get("enabled", True):
         return
     transcript, session_id = payload.get("transcript_path"), payload.get("session_id")
     if transcript and session_id and Path(transcript).exists():
@@ -3969,6 +3969,28 @@ def start_integration_companion(provider, project, client=None):
     return True
 
 
+def connect_own_integration(provider, project, client, directory):
+    existing = read_object(directory / "connector.json")
+    if existing:
+        if existing["base_url"].rstrip("/") != client.base_url.rstrip("/"):
+            raise CLIError("The settings connection belongs to another FinaleChat server.")
+        scoped = Client(existing["base_url"], existing["secret"])
+        connector = scoped.request("GET", "/api/v1/connectors/" + existing["connector"]["id"])["connector"]
+        if connector["state"] == "pending":
+            client.request("POST", "/api/v1/connectors/" + connector["id"] + "/connect", body={"secret": existing["secret"]})
+        return existing
+    adapter = make_settings_adapter(provider, project)
+    try:
+        adapter.snapshot()
+        pairing = client.request("POST", "/api/v1/connectors", body={"name": provider + " · " + Path(project).name + " · " + hostname(),
+            "provider": provider, "requested_grants": [adapter.grant()], "connect": True})
+        pairing["base_url"] = client.base_url
+        private_json(directory / "connector.json", pairing)
+        return pairing
+    finally:
+        adapter.close()
+
+
 def run_integration_companion(provider, project, client, once=False):
     directory = integration_path(provider, project)
     stop = threading.Event()
@@ -3995,11 +4017,14 @@ def run_integration_companion(provider, project, client, once=False):
                 if not config.get("enabled", True):
                     break
                 pairing = read_object(directory / "connector.json")
-                if not pairing:
-                    if once:
-                        break
-                    stop.wait(5)
-                    continue
+                if not pairing or pairing.get("connector", {}).get("state") == "pending":
+                    try:
+                        pairing = connect_own_integration(provider, project, client, directory)
+                    except (CLIError, OSError, ValueError):
+                        if once:
+                            break
+                        stop.wait(5)
+                        continue
                 control_client = Client(pairing["base_url"], pairing["secret"])
                 base = "/api/v1/connectors/" + Client.ref_path(pairing["connector"]["id"])
                 try:
@@ -4022,6 +4047,10 @@ def run_integration_companion(provider, project, client, once=False):
                                 raise CLIError("Local resource identity changed; pair it again.")
                             adapters[grant["key"]] = adapter
                         view = adapter.snapshot(grant)
+                        if provider == "codex":
+                            discover_codex_sessions(project, directory, adapter.rpc.info["codexHome"])
+                        registrations = [read_object(p) for p in sorted((directory / "sessions").glob("*.json"))[-100:]]
+                        view["snapshot"].setdefault("details", {})["thread_external_ids"] = [provider + ":" + r["session_id"] for r in registrations if r.get("session_id")]
                         resource = control_client.request("PUT", base + "/resources/" + Client.ref_path(adapter.key), body={
                             "instance": instance, "generation": "", "descriptor": view["descriptor"], "snapshot": view["snapshot"]})["resource"]
                         resources[resource["id"]] = adapter
@@ -4346,16 +4375,18 @@ def cmd_connector(args):
                         raise
                     prior = None
                 if prior and prior["state"] in ("active", "pending"):
-                    print("Existing pairing: " + existing["approval_url"])
-                    print("Revoke it in FinaleChat before changing this installation's scopes.")
+                    connect_own_integration(provider, project, client, directory)
+                    configure_integration(provider, project, enabled=True)
+                    if not args.foreground:
+                        start_integration_companion(provider, project, client)
+                    print("Connected. Open Settings in your FinaleChat conversation.")
                     return EXIT_OK
             pairing = client.request("POST", "/api/v1/connectors", body={"name": provider + " · " + Path(project).name + " · " + hostname(),
-                                      "provider": provider, "requested_grants": grants})
+                                      "provider": provider, "requested_grants": grants, "connect": True})
             pairing["base_url"] = client.base_url
             private_json(directory / "connector.json", pairing)
             configure_integration(provider, project, enabled=True, primary_scope=scopes[0])
-            print("Approve the exact scopes and settings classes in FinaleChat:")
-            print(pairing["approval_url"])
+            print("Connected. Open Settings in your FinaleChat conversation.")
             if not args.foreground:
                 start_integration_companion(provider, project, client)
         finally:
@@ -4433,7 +4464,9 @@ def install_codex_integration(args, remove=False):
             configure_integration("codex", args.project, enabled=True, artifacts=True)
             start_integration_companion("codex", args.project, client_from_args(args))
             print("Proactive native rollout publication enabled for " + str(Path(args.project).resolve()))
-        print("Pair settings separately with: finalechat connector pair codex --project " + shlex.quote(str(Path(args.project).resolve())))
+        configure_integration("codex", args.project, enabled=True)
+        start_integration_companion("codex", args.project, client_from_args(args))
+        print("Agent settings connect automatically and appear in your FinaleChat conversation.")
     return EXIT_OK
 
 

@@ -1097,7 +1097,9 @@ remain authorized. Account deletion removes the related audit along with the acc
 | `GET /artifacts/{id}/revisions/{revision}/preview` | Load a sandboxed website entrypoint |
 | `GET /artifacts/{id}/revisions/{revision}/download` | Download the portable ZIP archive |
 | `GET /artifacts/{id}/revisions/{revision}/message` | Locate a chat message for an archived source anchor |
-| `POST /connectors` | Request pairing and receive a scoped credential |
+| `POST /connectors` | Connect an owned installation and receive a scoped credential |
+| `POST /connectors/{connector}/connect` | Connect an existing owned installation |
+| `GET /threads/{thread}/settings` | List agent settings available in this conversation |
 | `GET /connectors` | List paired and pending installations |
 | `GET /connectors/{connector}` | Connector pairing state and grants |
 | `POST /connectors/{connector}/approve` | Approve a subset of requested grants |

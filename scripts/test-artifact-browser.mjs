@@ -51,6 +51,7 @@ try {
     const json = (value) => route.fulfill({ json: value });
     if (p === "/offline") return route.fulfill({ contentType: "text/html", body: website });
     if (!p.startsWith("/api/")) return route.continue();
+    if (p === "/api/v1/threads/thread/settings") return json({ resources: [{id:"resource",label:"Fixture live session",scope:"session",provider:"fixture",available:true}] });
     if (p === "/api/v1/threads/thread/settings-resources") return json({ resources: (await page.evaluate(() => window.fixture.resource.scope)) === "session" ? [{ id: "resource", label: "Fixture live session", generation: "runtime-one", available: true }] : [] });
     if (p.endsWith("/audit")) return json({ audit: [] });
     if (p === "/api/v1/threads/thread/artifacts") return json({ artifacts: [{ id: "artifact", thread_id: "thread", title: "Fixture archive", current_revision_id: currentRevision }] });
@@ -260,24 +261,25 @@ try {
   await writeFile(path.join(temporary, "manifest.json"), JSON.stringify(manifest));
   await page.goto(`${base}/tests/artifacts.html?runtime=1`);
   await page.getByRole("link", { name: "Live session settings", exact: true }).click();
+  await page.getByRole("button", {name:"Advanced",exact:true}).click();
   await page.getByLabel("Concurrency", { exact: true }).fill("6");
-  assert.match(await page.locator(".proposal-review").innerText(), /Current session value: 2/);
+  await page.getByText("Unsaved changes", {exact:true}).waitFor();
   assert.equal(await page.getByRole("button", { name: "Save draft", exact: true }).count(), 0);
   const priorRuntimeCommands = commands.length;
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await page.waitForFunction(() => document.querySelector(".settings-control button.primary")?.textContent === "Submitting…");
+  await page.waitForFunction(() => document.querySelector(".ts-footer button.primary")?.textContent === "Saving…");
   assert.equal(commands.length, priorRuntimeCommands + 1);
   assert.equal(commands.at(-1).proposal.generation, "runtime-one");
   commandResponse();
-  await page.waitForFunction(() => document.querySelector(".command-result")?.textContent.includes("Applied to this runtime. Takes effect: next task."));
+  await page.waitForFunction(() => document.querySelector(".ts-footer")?.textContent.includes("Saved · next task"));
   await page.evaluate(() => { window.fixture.resource.generation = "runtime-two"; });
   await page.clock.runFor(11000);
   await page.getByLabel("Concurrency", { exact: true }).fill("7");
   await page.evaluate(() => { window.fixture.resource.snapshot.runtime_known = false; });
   await page.clock.runFor(11000);
-  await page.getByText("This process only. Future sessions load project defaults. This runtime is unavailable.", { exact: true }).waitFor();
+  await page.getByText("Reconnect the agent to save changes.", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Save", exact: true }).isDisabled(), true, "offline runtime remained writable");
-  assert.equal(await page.getByRole("button", { name: "Refresh from connector", exact: true }).isDisabled(), true);
+
   console.log("PASS chat-to-live-settings navigation, session generation, native acknowledgement wording, no offline runtime drafts");
 
   await writeFile(path.join(temporary, "session.jsonl"), content);
