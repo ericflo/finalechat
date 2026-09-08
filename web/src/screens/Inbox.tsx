@@ -335,7 +335,9 @@ function ThreadRow({
   const unread = t.unread_count > 0;
   const needs = t.pending_questions > 0;
   const name = t.agent || t.title || "Agent";
-  const activity = useLiveActivity(t.activity);
+  const liveActivity = useLiveActivity(t.activity);
+  // Idle sessions keep their last message preview and never look like typing.
+  const activity = liveActivity?.kind === "waiting" ? null : liveActivity;
   const draft = useStore((s) => s.drafts[t.id]);
   const now = useNow(30000);
   const pressTimer = useRef<number | undefined>(undefined);

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { back } from "../lib/router";
+import { navigate } from "../lib/router";
 import { retryConnection, useStore } from "../lib/store";
 import { IconBack } from "./Icons";
 
-export function TopBar({ title, subtitle, onBack, backTo, right, big, below }: { title: ReactNode; subtitle?: ReactNode; onBack?: () => void; backTo?: string; right?: ReactNode; big?: boolean; below?: ReactNode }) {
-  const showBack = onBack || backTo;
+export function TopBar({ title, subtitle, backTo, right, big, below }: { title: ReactNode; subtitle?: ReactNode; backTo?: string; right?: ReactNode; big?: boolean; below?: ReactNode }) {
+  const showBack = !!backTo;
   const ref = useRef<HTMLElement>(null);
   // Anything that scrolls into view (the "New" divider, a highlighted
   // question) must clear the sticky header, whatever it contains.
@@ -21,7 +21,7 @@ export function TopBar({ title, subtitle, onBack, backTo, right, big, below }: {
     <header ref={ref} className="topbar">
       <div className={`topbar-inner ${big ? "topbar-big" : ""}`}>
         {showBack && (
-          <button type="button" className="icon-btn" aria-label="Back" onClick={() => (onBack ? onBack() : back(backTo))}>
+          <button type="button" className="icon-btn" aria-label="Back" title={backTo === "/settings" ? "Settings" : "Inbox"} onClick={() => navigate(backTo || "/")}>
             <IconBack />
           </button>
         )}

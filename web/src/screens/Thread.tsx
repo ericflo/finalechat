@@ -561,6 +561,9 @@ const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, inspec
 /** The agent's live status: "running tests…" with a timer once it has taken a while. */
 function ActivityBubble({ a }: { a: Activity }) {
   const elapsed = useElapsed(a.since);
+  if (a.kind === "waiting") {
+    return <div className="activity-waiting" role="status" aria-live="polite">{a.text === "Waiting for your next message" ? "Ready for your message" : a.text}</div>;
+  }
   // Only the text is live: the timer ticks every second and would otherwise
   // be re-announced by a screen reader for as long as the agent works.
   return (
