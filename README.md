@@ -19,6 +19,10 @@ Questions and important messages arrive as push notifications.
   images to the model directly.
 - **Remote mode**: a switch on your phone that makes Claude Code wait for your
   phone replies instead of the terminal.
+- **New session from your phone**: when an eagent is running in a project
+  (`eagent serve`, a session, or `eagent connector run`), the inbox offers
+  **New session**; type the first message and the session starts on that
+  machine and opens as a thread.
 - Real-time updates over server-sent events; Web Push with VAPID; installable
   PWA with app badge.
 - Agent integrations: raw HTTPS (`/AGENTS.md`), a zero-dependency Python CLI

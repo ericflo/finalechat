@@ -8,11 +8,13 @@ import {
   IconClose,
   IconInbox,
   IconPhone,
+  IconPlus,
   IconSearch,
   IconSettings,
   IconTerminal,
   IconTrash,
 } from "../components/Icons";
+import { NewSessionSheet, useSessionStarters } from "../components/NewSession";
 import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
 import {
@@ -53,6 +55,8 @@ export function Inbox({ filter }: { filter: string | null }) {
   const [query, setQuery] = useState("");
   const [showAllPending, setShowAllPending] = useState(false);
   const [rowMenu, setRowMenu] = useState<Thread | null>(null);
+  const [newSession, setNewSession] = useState(false);
+  const starters = useSessionStarters();
   const searchTimer = useRef<number | undefined>(undefined);
   const needsYou = filter === "needs-you";
 
@@ -167,12 +171,18 @@ export function Inbox({ filter }: { filter: string | null }) {
               <span className="dot" />
               {settings.remote_mode ? "Remote on" : "Remote off"}
             </button>
+            {starters.length > 0 && (
+              <button type="button" className="icon-btn" aria-label="New session" title="Start a new agent session" onClick={() => setNewSession(true)}>
+                <IconPlus />
+              </button>
+            )}
             <Link href="/settings" className="icon-btn" aria-label="Settings">
               <IconSettings />
             </Link>
           </>
         }
       />
+      {newSession && <NewSessionSheet starters={starters} onClose={() => setNewSession(false)} />}
       <div className="page-body">
         <SetupChecklist hasThreads={Object.keys(threads).length > 0} />
 

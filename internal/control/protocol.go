@@ -35,7 +35,7 @@ func (g Grant) Validate() error {
 		return fmt.Errorf("invalid grant")
 	}
 	for _, op := range g.Operations {
-		if !slices.Contains([]string{"settings.apply", "settings.refresh", "settings.undo", "route.test", "bundle.save", "bundle.delete", "prompt.set", "prompt.reset", "connector.disable"}, op) {
+		if !slices.Contains([]string{"settings.apply", "settings.refresh", "settings.undo", "route.test", "bundle.save", "bundle.delete", "prompt.set", "prompt.reset", "connector.disable", "session.start"}, op) {
 			return fmt.Errorf("unsupported operation %q", op)
 		}
 	}

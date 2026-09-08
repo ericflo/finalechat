@@ -22,3 +22,27 @@ func TestProposalRejectsOverlappingEditsInEitherOrder(t *testing.T) {
 		t.Fatalf("rejected distinct siblings: %v", err)
 	}
 }
+
+func TestSessionStartIsAnActionWithAPrompt(t *testing.T) {
+	g := Grant{Key: "project-x", Label: "x", Scope: "project", Operations: []string{"session.start"}, Classes: []string{"cost"}}
+	if err := g.Validate(); err != nil {
+		t.Fatalf("session.start should be a grantable operation: %v", err)
+	}
+	d := Descriptor{Format: Format, SchemaVersion: "fixture/1", AdapterVersion: "1", Fields: []Field{},
+		Actions: []Action{{Operation: "session.start", Label: "Start a new session", Class: "cost", Parameters: Shape{Type: "object", Properties: map[string]Shape{"prompt": {Type: "string", MaxLength: 32768}}, Required: []string{"prompt"}}}}}
+	if err := d.Validate(g); err != nil {
+		t.Fatalf("descriptor with session.start: %v", err)
+	}
+	ok := Proposal{Operation: "session.start", SchemaVersion: "fixture/1", ExpectedVersion: "v1", Parameters: map[string]any{"prompt": "Build the thing"}}
+	if err := ok.Validate(d, g); err != nil {
+		t.Fatalf("valid session.start rejected: %v", err)
+	}
+	missing := Proposal{Operation: "session.start", SchemaVersion: "fixture/1", ExpectedVersion: "v1", Parameters: map[string]any{}}
+	if err := missing.Validate(d, g); err == nil {
+		t.Fatal("session.start without a prompt was accepted")
+	}
+	ungranted := Grant{Key: "project-x", Label: "x", Scope: "project", Operations: []string{"settings.refresh"}, Classes: []string{"cost"}}
+	if err := ok.Validate(d, ungranted); err == nil {
+		t.Fatal("session.start accepted without the operation granted")
+	}
+}

@@ -42,4 +42,26 @@ func TestOwnAgentConnectAndThreadDiscovery(t *testing.T) {
 	// Old installations can migrate with both owner authentication and the local secret.
 	pending := f.agent.must(201, "POST", "/api/v1/connectors", map[string]any{"name": "Legacy", "provider": "eagent", "requested_grants": []control.Grant{f.grant}})
 	f.agent.must(200, "POST", "/api/v1/connectors/"+str(sub(pending, "connector"), "id")+"/connect", map[string]any{"secret": str(pending, "secret")})
+	// An integration that learned a new capability extends its own grants on
+	// reconnect: owner authentication plus the local secret, no second pairing.
+	wider := f.grant
+	wider.Operations = append(append([]string{}, f.grant.Operations...), "session.start")
+	autoID := str(sub(created, "connector"), "id")
+	out = f.agent.must(200, "POST", "/api/v1/connectors/"+autoID+"/connect", map[string]any{"secret": str(created, "secret"), "requested_grants": []control.Grant{wider}})
+	granted := sub(out, "connector")["grants"].([]any)[0].(map[string]any)["operations"].([]any)
+	found := false
+	for _, op := range granted {
+		found = found || op == "session.start"
+	}
+	if !found {
+		t.Fatalf("reconnect with wider grants did not extend them: %v", granted)
+	}
+	// Without a new grant set the active grants stay exactly as they are.
+	out = f.agent.must(200, "POST", "/api/v1/connectors/"+autoID+"/connect", map[string]any{"secret": str(created, "secret")})
+	if got := len(sub(out, "connector")["grants"].([]any)[0].(map[string]any)["operations"].([]any)); got != len(granted) {
+		t.Fatalf("plain reconnect changed the grants: %d vs %d", got, len(granted))
+	}
+	bad := wider
+	bad.Operations = []string{"session.launch"}
+	f.agent.must(422, "POST", "/api/v1/connectors/"+autoID+"/connect", map[string]any{"secret": str(created, "secret"), "requested_grants": []control.Grant{bad}})
 }

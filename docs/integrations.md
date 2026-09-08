@@ -148,6 +148,35 @@ Verified with Claude Code 2.1.263 and Codex 0.153.4. The Claude fixture uses the
 
 Unknown settings remain in their native files. Permission-related preferences require their own paired capability class and remain subject to the native product's policy. Native version and provenance accompany snapshots; a saved result states when the adapter expects the change to take effect without claiming to have observed another process. Archives preserve original session data independently of native settings API availability. Eagent local export also tolerates invalid project defaults and labels its missing settings context; network publication waits for a valid configuration to resolve the intended destination and opt-in.
 
+## Starting a session from the app
+
+An integration whose connector advertises the `session.start` action can be
+started from the inbox. The app lists every connected resource that offers
+it under the **New session** button, takes the first message, and submits it
+as a trusted command exactly like a settings action: the browser session
+creates the command, the connector claims it, and the result reports the new
+session and its thread (`session_id`, `thread` as an `ext:` reference,
+`host` as `in_process` or `detached`, and `interactive`). The app then opens
+the thread as soon as the integration's mirror creates it.
+
+`session.start` is a cost-class action because a session spends model
+credit and runs commands on the machine. Its only parameter is `prompt`
+(at most 32,768 characters). The connector executes each command at most
+once: a redelivered command returns the original result, and a claim whose
+local journal is missing is reported as `unknown` rather than started
+again. A stale `expected_version` is not a reason to refuse it, since
+starting a session reads the configuration without changing it.
+
+Eagent advertises the action from every process that holds the project's
+connector. `eagent serve` and `eagent connector run` host the new session
+in-process, so it stays interactive for as long as they run; a plain
+terminal session starts the new session as a batch process of its own,
+which runs until the work is done and can be resumed later. An integration
+that learns this capability after it was paired extends its own grants on
+reconnect (`POST /connectors/{id}/connect` with `requested_grants`), which
+needs both the owner's account and the local connector secret and involves
+no second pairing.
+
 ## Thread settings protocol
 
 `settings-connect.v1` advertises automatic owner registration. Set `connect: true` on `POST /connectors`; older pending installations migrate with account authentication plus their locally held scoped secret through `POST /connectors/{id}/connect`. Revoked installations remain disconnected. Scoped credentials still cannot submit settings commands.

@@ -124,7 +124,7 @@ func (s *Server) handleCreateConnector(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Connect {
-		c, err = s.store.ConnectOwnAgent(r.Context(), p.user.ID, c.ID, auth.HashToken(secret))
+		c, err = s.store.ConnectOwnAgent(r.Context(), p.user.ID, c.ID, auth.HashToken(secret), nil)
 		if err != nil {
 			writeError(w, err)
 			return

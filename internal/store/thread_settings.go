@@ -2,17 +2,31 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/google/uuid"
+
+	"github.com/ericflo/finalechat/internal/control"
 )
 
-func (s *Store) ConnectOwnAgent(ctx context.Context, owner, id uuid.UUID, hash []byte) (*Connector, error) {
-	// Existing active grants are preserved. Disconnection is never undone by
-	// a background retry, and another account cannot claim this installation.
+// ConnectOwnAgent activates an installation the account itself created.
+// Existing active grants are preserved unless the integration presents a new
+// grant set, which replaces them: the owner is authenticated and the local
+// secret proves the installation, so an integration that has learned a new
+// capability can request it without a second pairing. Disconnection is never
+// undone by a background retry, and another account cannot claim this
+// installation.
+func (s *Store) ConnectOwnAgent(ctx context.Context, owner, id uuid.UUID, hash []byte, grants []control.Grant) (*Connector, error) {
+	var raw []byte
+	if grants != nil {
+		raw, _ = json.Marshal(grants)
+	}
 	return scanConnector(s.pool.QueryRow(ctx, `UPDATE connectors SET
-		grants=CASE WHEN state='pending' THEN requested_grants ELSE grants END,state='active'
+		requested_grants=COALESCE($4::jsonb, requested_grants),
+		grants=CASE WHEN state='pending' THEN COALESCE($4::jsonb, requested_grants) ELSE COALESCE($4::jsonb, grants) END,
+		state='active'
 		WHERE user_id=$1 AND id=$2 AND token_hash=$3 AND state IN ('pending','active')
-		RETURNING `+connectorColumns, owner, id, hash))
+		RETURNING `+connectorColumns, owner, id, hash, raw))
 }
 
 type ThreadSettingsLink struct {

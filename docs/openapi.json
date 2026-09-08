@@ -6244,7 +6244,7 @@
           "Integration settings"
         ],
         "summary": "Connect an existing owned installation",
-        "description": "Requires account authentication and the locally held connector secret. Activates pending installations, preserves active grants, and never reactivates a revoked installation.",
+        "description": "Requires account authentication and the locally held connector secret. Activates pending installations and preserves active grants unless requested_grants is present, in which case the grant set is replaced (the owner is authenticated and the secret proves the installation). Never reactivates a revoked installation.",
         "responses": {
           "200": {
             "description": "Connect an existing owned installation",
@@ -6300,6 +6300,15 @@
                 "properties": {
                   "secret": {
                     "type": "string"
+                  },
+                  "requested_grants": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 50,
+                    "description": "Optional replacement grant set for an installation this account created itself; omit to keep the current grants.",
+                    "items": {
+                      "$ref": "#/components/schemas/SettingsGrant"
+                    }
                   }
                 },
                 "required": [
