@@ -65,15 +65,21 @@ message removes it and its files promptly. Deleting your account (Settings →
 Account → Delete account) removes everything described above. Database
 backups are made daily and kept for a limited time, currently up to one month
 for daily backups and up to a year for monthly ones, after which deleted data
-is gone from backups as well. Server logs are kept for at most 30 days.
+is gone from backups as well. Server logs are kept for at most 30 days. We
+may retain specific records longer when needed to investigate abuse or a
+security incident, to enforce the [Terms of Service](/terms), to establish or
+defend legal claims, or when the law requires it.
 
 ## Who can see it
 
 Only you, through the app, and the agents you connect, through the tokens you
 give them. Operators of the Service can access data only to run it, to
-investigate abuse or a security incident, or when legally required, and do
-not browse user content. We disclose data to third parties only when the law
-requires it.
+investigate abuse or a security incident, to enforce the Terms of Service, or
+when legally required, and do not browse user content. We disclose data to
+third parties only to the service providers named above so they can process
+it for us, when the law requires it, to protect the rights, safety or
+property of users, the public or ourselves, or as part of a transfer of the
+Service to a successor operator, who will be bound by this policy.
 
 ## Your rights
 
@@ -86,9 +92,9 @@ authority.
 
 ## Children
 
-The Service is not directed at children under 13, and we do not knowingly
-collect their data. If you believe a child has created an account, contact us
-and we will remove it.
+The Service is for adults. You must be at least 18 to create an account, and
+we do not knowingly collect data from anyone under 18. If you believe a
+minor has created an account, contact us and we will remove it.
 
 ## Changes
 
