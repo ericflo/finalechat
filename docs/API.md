@@ -202,7 +202,7 @@ counts non-user messages since `last_read_at`. A muted thread never sends
 push notifications.
 
 `meta` is yours to fill, and the app renders a few reserved keys as chips
-under the thread title: `host` (or `hostname`), `project` (only while it differs from `cwd`), `cwd`, `branch`, `model`,
+under the thread title: `host` (or `hostname`), `cwd` (whose hover text names `project`, the directory the session started in, when they differ), `branch`, `model`,
 `cost_usd` (number) and `tokens` (number). Everything else is stored,
 merged on later writes, returned, and otherwise ignored.
 
