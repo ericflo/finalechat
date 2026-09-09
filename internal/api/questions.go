@@ -138,12 +138,22 @@ func (s *Server) handleCreateQuestion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	thread, created, err := s.resolveThread(r, true)
+	// Title/agent ride along for a freshly auto-created thread; bound them
+	// before creating so a rejected name leaves no empty thread behind.
+	if len(req.Title) > 300 {
+		writeError(w, errValidation("title must be at most 300 characters."))
+		return
+	}
+	if len(req.Agent) > 120 {
+		writeError(w, errValidation("agent must be at most 120 characters."))
+		return
+	}
+	thread, threadCreated, err := s.resolveThread(r, true)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if created && (req.Title != "" || req.Agent != "") {
+	if threadCreated && (req.Title != "" || req.Agent != "") {
 		patch := store.ThreadPatch{}
 		if req.Title != "" {
 			patch.Title = &req.Title
@@ -163,11 +173,14 @@ func (s *Server) handleCreateQuestion(w http.ResponseWriter, r *http.Request) {
 		events, cancel = s.bus.Subscribe(p.user.ID.String())
 		defer cancel()
 	}
-	q, thread, created, err := s.store.CreateQuestion(r.Context(), p.user.ID, thread.ID, in)
+	q, updatedThread, created, err := s.store.CreateQuestion(r.Context(), p.user.ID, thread.ID, in)
 	if err != nil {
-		writeError(w, err)
+		// Like CreateMessage, a failed create hands back no thread; the
+		// cleanup still targets the auto-created one above.
+		s.failAutoCreated(w, r, err, thread, threadCreated)
 		return
 	}
+	thread = updatedThread
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated

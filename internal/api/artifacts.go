@@ -129,14 +129,14 @@ func (s *Server) handlePutArtifact(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errValidation("title must be 1 to 300 bytes"))
 		return
 	}
-	t, _, err := s.resolveThread(r, true)
+	t, threadCreated, err := s.resolveThread(r, true)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	a, err := s.store.UpsertArtifact(r.Context(), principalFrom(r.Context()).user.ID, t.ID, key, in.Title)
 	if err != nil {
-		writeError(w, err)
+		s.failAutoCreated(w, r, err, t, threadCreated)
 		return
 	}
 	s.artifactEvent(context.WithoutCancel(r.Context()), a, bus.ArtifactUpdated)

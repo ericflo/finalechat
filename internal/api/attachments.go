@@ -244,16 +244,36 @@ func (s *Server) readUploads(r *http.Request, threadID uuid.UUID, form *multipar
 	for _, h := range headers {
 		f, err := h.Open()
 		if err != nil {
+			s.abandonUploads(out)
 			return nil, errBadRequest("Could not read %q.", h.Filename)
 		}
 		a, err := s.storeUpload(r, threadID, h.Header.Get("Content-Type"), h.Filename, f)
 		f.Close()
 		if err != nil {
+			// Earlier files in this same request already stored their rows
+			// and bytes; remove them so a failed request leaves nothing
+			// behind (the thread rollback below only drops the rows via
+			// cascade, not the bytes).
+			s.abandonUploads(out)
 			return nil, err
 		}
 		out = append(out, a)
 	}
 	return out, nil
+}
+
+// abandonUploads deletes freshly stored attachments (rows plus bytes) after
+// the request that stored them failed partway through.
+func (s *Server) abandonUploads(list []*store.Attachment) {
+	if len(list) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	for _, a := range list {
+		_ = s.store.DeleteAttachment(ctx, a.ID)
+	}
+	s.deleteAttachmentObjects(ctx, list)
 }
 
 func isMultipart(r *http.Request) bool {
@@ -289,27 +309,49 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	thread, _, err := s.resolveThread(r, true)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
+	// The multipart envelope is parsed before the thread is auto-created so
+	// a malformed request leaves no empty thread behind. Storing the bytes
+	// still needs the thread id, so those failures roll the fresh thread
+	// back instead (see failAutoCreated).
 	uploadDeadline(w)
-	var out []*store.Attachment
-	if isMultipart(r) {
-		form, err := parseMultipart(r)
+	var form *multipart.Form
+	multipart := isMultipart(r)
+	if multipart {
+		var err error
+		form, err = parseMultipart(r)
 		if err != nil {
 			writeError(w, err)
 			return
 		}
 		defer form.RemoveAll()
+		n := 0
+		for _, list := range form.File {
+			n += len(list)
+		}
+		if n == 0 {
+			writeError(w, errValidation("Include at least one file part."))
+			return
+		}
+		if n > store.MaxAttachmentsPerMessage {
+			writeError(w, errValidation("At most %d files per request.", store.MaxAttachmentsPerMessage))
+			return
+		}
+	}
+	thread, threadCreated, err := s.resolveThread(r, true)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var out []*store.Attachment
+	if multipart {
+		var err error
 		out, err = s.readUploads(r, thread.ID, form)
 		if err != nil {
-			writeError(w, err)
+			s.failAutoCreated(w, r, err, thread, threadCreated)
 			return
 		}
 		if len(out) == 0 {
-			writeError(w, errValidation("Include at least one file part."))
+			s.failAutoCreated(w, r, errValidation("Include at least one file part."), thread, threadCreated)
 			return
 		}
 	} else {
@@ -319,7 +361,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		a, err := s.storeUpload(r, thread.ID, r.Header.Get("Content-Type"), filename, r.Body)
 		if err != nil {
-			writeError(w, err)
+			s.failAutoCreated(w, r, err, thread, threadCreated)
 			return
 		}
 		out = []*store.Attachment{a}

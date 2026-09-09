@@ -340,6 +340,22 @@ func (s *Store) DeleteThread(ctx context.Context, userID, id uuid.UUID) error {
 	return nil
 }
 
+// DeleteThreadIfEmpty removes an auto-created thread that never gained
+// content (no messages, attachments, questions or artifacts). It reports
+// whether a row was removed; a thread that gained content in the meantime
+// is left alone, so a concurrent success is never undone by a failed one.
+func (s *Store) DeleteThreadIfEmpty(ctx context.Context, userID, id uuid.UUID) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM threads WHERE id = $1 AND user_id = $2
+		AND NOT EXISTS (SELECT 1 FROM messages WHERE thread_id = threads.id)
+		AND NOT EXISTS (SELECT 1 FROM attachments WHERE thread_id = threads.id)
+		AND NOT EXISTS (SELECT 1 FROM questions WHERE thread_id = threads.id)
+		AND NOT EXISTS (SELECT 1 FROM artifacts WHERE thread_id = threads.id)`, id, userID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 // Counts summarises the inbox for badges.
 type Counts struct {
 	// PendingQuestions counts every question waiting for an answer.

@@ -54,6 +54,36 @@ func (s *Server) resolveThread(r *http.Request, autoCreate bool) (*store.Thread,
 	return t, false, err
 }
 
+// discardAutoCreatedThread removes a thread that resolveThread auto-created
+// moments ago when the follow-up that motivated it failed (bad upload, quota,
+// unknown attachment, ...). Without this the empty title=” agent=” row
+// lingers as an "Untitled thread". The delete is conditional on the thread
+// still being empty, so a concurrent request that landed content wins. The
+// ThreadCreated event already went out, so a deletion follows it.
+func (s *Server) discardAutoCreatedThread(ctx context.Context, userID uuid.UUID, thread *store.Thread) {
+	if thread == nil {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	removed, err := s.store.DeleteThreadIfEmpty(ctx, userID, thread.ID)
+	if err != nil {
+		s.log.Warn("delete orphan auto-created thread", "thread_id", thread.ID, "err", err)
+		return
+	}
+	if removed {
+		s.bus.Publish(ctx, bus.Event{Type: bus.ThreadDeleted, UserID: userID.String(), ThreadID: thread.ID.String()})
+	}
+}
+
+// failAutoCreated writes err and, when the request auto-created its thread,
+// rolls that empty thread back (see discardAutoCreatedThread).
+func (s *Server) failAutoCreated(w http.ResponseWriter, r *http.Request, err error, thread *store.Thread, created bool) {
+	if created && thread != nil {
+		s.discardAutoCreatedThread(r.Context(), principalFrom(r.Context()).user.ID, thread)
+	}
+	writeError(w, err)
+}
+
 type threadRequest struct {
 	ExternalID string          `json:"external_id"`
 	Title      string          `json:"title"`

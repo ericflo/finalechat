@@ -166,12 +166,38 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		}
 		attachmentIDs = append(attachmentIDs, id)
 	}
-	thread, created, err := s.resolveThread(r, true)
+	// Everything above is validated before the thread is auto-created so a
+	// rejected post leaves no empty "Untitled thread" behind. The checks
+	// below need the thread id (uploads) or the database (attachment
+	// ownership); their failures roll the fresh thread back instead.
+	if len(req.Title) > 300 {
+		writeError(w, errValidation("title must be at most 300 characters."))
+		return
+	}
+	if len(req.Agent) > 120 {
+		writeError(w, errValidation("agent must be at most 120 characters."))
+		return
+	}
+	if len(attachmentIDs) > store.MaxAttachmentsPerMessage {
+		writeError(w, errValidation("At most %d attachments per message.", store.MaxAttachmentsPerMessage))
+		return
+	}
+	if hasFiles {
+		n := 0
+		for _, list := range form.File {
+			n += len(list)
+		}
+		if n > store.MaxAttachmentsPerMessage {
+			writeError(w, errValidation("At most %d attachments per message.", store.MaxAttachmentsPerMessage))
+			return
+		}
+	}
+	thread, threadCreated, err := s.resolveThread(r, true)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if created && (req.Title != "" || req.Agent != "") {
+	if threadCreated && (req.Title != "" || req.Agent != "") {
 		patch := store.ThreadPatch{}
 		if req.Title != "" {
 			patch.Title = &req.Title
@@ -200,7 +226,7 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		var err error
 		uploaded, err = s.readUploads(r, thread.ID, form)
 		if err != nil {
-			writeError(w, err)
+			s.failAutoCreated(w, r, err, thread, threadCreated)
 			return
 		}
 		for _, a := range uploaded {
@@ -208,26 +234,30 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(attachmentIDs) > store.MaxAttachmentsPerMessage {
-		writeError(w, errValidation("At most %d attachments per message.", store.MaxAttachmentsPerMessage))
+		s.failAutoCreated(w, r, errValidation("At most %d attachments per message.", store.MaxAttachmentsPerMessage), thread, threadCreated)
 		return
 	}
 	origin := store.OriginToken
 	if !p.viaToken() {
 		origin = store.OriginSession
 	}
-	msg, thread, created, err := s.store.CreateMessage(r.Context(), p.user.ID, thread.ID, store.MessageInput{
+	msg, updatedThread, created, err := s.store.CreateMessage(r.Context(), p.user.ID, thread.ID, store.MessageInput{
 		Sender: req.Sender, Body: req.Body, Format: req.Format, Importance: req.Importance, Meta: meta, AttachmentIDs: attachmentIDs,
 		Origin: origin, MarkRead: req.Sender == store.SenderUser && origin == store.OriginSession,
 		ClientKey: req.ClientKey, Activity: activity, ClearSeq: clearSeq,
 	})
 	if errors.Is(err, store.ErrNotFound) && len(attachmentIDs) > 0 {
-		writeError(w, errValidation("One or more attachments are unknown, belong to another thread, or are already attached."))
+		// CreateMessage threads the insert and the thread touch through one
+		// transaction, so on error it hands back no thread; the cleanup
+		// still targets the auto-created one above.
+		s.failAutoCreated(w, r, errValidation("One or more attachments are unknown, belong to another thread, or are already attached."), thread, threadCreated)
 		return
 	}
 	if err != nil {
-		writeError(w, err)
+		s.failAutoCreated(w, r, err, thread, threadCreated)
 		return
 	}
+	thread = updatedThread
 	decorate(msg)
 	if !created {
 		// A retry of a post that already landed: nothing new to announce,
