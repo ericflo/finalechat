@@ -7379,6 +7379,11 @@
           "text": {
             "type": "string",
             "description": "Free-form reply, at most 32 KiB; only when allow_freeform."
+          },
+          "meta": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Optional message metadata, at most 16 KiB; only eagent.* keys (the eagent capability handshake, v1) are kept and merged onto the transcript message."
           }
         },
         "example": {

@@ -74,6 +74,13 @@ export interface Message {
   body: string;
   format: "markdown" | "text";
   importance: "normal" | "important";
+  /**
+   * Free-form metadata stored and returned verbatim (at most 16 KiB).
+   *
+   * The web client declares its eagent capability handshake (v1) here on
+   * every user message and answer as `meta["eagent.client"]`, a
+   * {@link EagentClientCapsule}. See `web/src/lib/clientCaps.ts`.
+   */
   meta: Record<string, unknown>;
   /** "session" when posted from the app, "token" when an agent posted it. */
   origin: "session" | "token" | "";
@@ -86,6 +93,27 @@ export interface Message {
 export interface QuestionOption {
   label: string;
   description?: string;
+}
+
+/**
+ * Client capability handshake (v1), sent as `meta["eagent.client"]` on user
+ * messages and answers so eagent's reader (`capsFromMeta`) can see what
+ * context this client supplies. Only these documented keys are ever sent:
+ * no userAgent string, no canvas, no battery.
+ */
+export interface EagentClientCapsule {
+  /** IANA timezone name, e.g. "America/Los_Angeles". */
+  timezone?: string;
+  /** BCP 47 locale from the browser, e.g. "en-US". */
+  locale?: string;
+  /** Coarse device class: "phone" | "tablet" | "desktop". */
+  device?: string;
+  /** Client name and version, e.g. "finalechat-web/0.1.0". */
+  app?: string;
+  /** CSS screen size, e.g. "1512x982". */
+  screen?: string;
+  /** Which of "tz", "locale", "screen" this capsule actually carries. */
+  supplies: string[];
 }
 
 export interface Answer {

@@ -901,8 +901,9 @@ interleave them with messages.
 | --- | --- | --- |
 | `selected` | array of strings | Option labels; at most one unless `multi_select` |
 | `text` | string | Free-form reply; only when `allow_freeform` |
+| `meta` | object | Optional message metadata (16 KiB max); only `eagent.*` keys are kept (the eagent capability handshake, v1) and merged onto the transcript message |
 
-At least one of the two is required. Labels must match the offered options
+At least one of `selected` or `text` is required. Labels must match the offered options
 exactly.
 
 ```bash
@@ -922,7 +923,11 @@ curl -sS https://www.finalechat.com/api/v1/questions/01a07a60-a414-72cf-8b9a-308
 ```
 
 Answering also appends a `user` message to the thread recording the choice
-and marks the thread read. A question that is no longer pending returns
+and marks the thread read. The transcript message always carries
+`meta.kind: "answer"` and `meta.question_id`; an `eagent.*` key supplied in
+the request `meta` (e.g. `eagent.client`, the eagent capability handshake
+v1 the web client sends on every reply) is merged alongside, so agents
+polling messages see what context the answering client supplies. A question that is no longer pending returns
 `409 already_resolved` with the current status in the message. Emits
 `question.answered` and `message.created`.
 

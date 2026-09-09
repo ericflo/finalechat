@@ -11,6 +11,7 @@ import type {
   Thread,
   User,
 } from "./types";
+import { clientCapsMeta } from "./clientCaps";
 
 export class APIError extends Error {
   status: number;
@@ -98,14 +99,19 @@ export const api = {
     qs.set("limit", String(params.limit ?? 100));
     return request<{ messages: Message[]; has_more: boolean }>("GET", `${base}/threads/${threadId}/messages?${qs}`);
   },
-  sendMessage: (threadId: string, body: string, attachments: string[] = [], clientKey?: string) =>
-    request<{ message: Message; thread: Thread; created?: boolean }>("POST", `${base}/threads/${threadId}/messages`, {
+  sendMessage: (threadId: string, body: string, attachments: string[] = [], clientKey?: string) => {
+    // Declares the eagent capability handshake (v1); omitted entirely when
+    // the browser yields nothing, so the send is unchanged.
+    const caps = clientCapsMeta();
+    return request<{ message: Message; thread: Thread; created?: boolean }>("POST", `${base}/threads/${threadId}/messages`, {
       body,
       format: "markdown",
       sender: "user",
       attachments,
       client_key: clientKey,
-    }),
+      ...(caps ? { meta: caps } : {}),
+    });
+  },
   /** Uploads one file as a pending attachment; progress is reported in 0..1. */
   uploadAttachment: (threadId: string, file: File, onProgress?: (fraction: number) => void) =>
     new Promise<Attachment>((resolve, reject) => {
@@ -134,8 +140,16 @@ export const api = {
 
   listThreadQuestions: (threadId: string) => request<{ questions: Question[] }>("GET", `${base}/threads/${threadId}/questions`),
   listPendingQuestions: () => request<{ questions: Question[] }>("GET", `${base}/questions?status=pending&attention=true`),
-  answerQuestion: (id: string, answer: { selected: string[]; text?: string }) =>
-    request<{ question: Question; message: Message; thread: Thread }>("POST", `${base}/questions/${id}/answer`, answer),
+  answerQuestion: (id: string, answer: { selected: string[]; text?: string }) => {
+    // Same handshake capsule as sendMessage; the server carries it onto the
+    // transcript message it synthesizes for the answer.
+    const caps = clientCapsMeta();
+    return request<{ question: Question; message: Message; thread: Thread }>(
+      "POST",
+      `${base}/questions/${id}/answer`,
+      { ...answer, ...(caps ? { meta: caps } : {}) },
+    );
+  },
   dismissQuestion: (id: string) => request<{ question: Question }>("POST", `${base}/questions/${id}/dismiss`, {}),
 
   vapid: () => request<{ enabled: boolean; public_key: string }>("GET", `${base}/push/vapid`),

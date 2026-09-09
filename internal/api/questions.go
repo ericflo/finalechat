@@ -334,6 +334,10 @@ func (s *Server) handleListThreadQuestions(w http.ResponseWriter, r *http.Reques
 type answerRequest struct {
 	Selected []string `json:"selected"`
 	Text     string   `json:"text"`
+	// Meta carries client-supplied message metadata. Only `eagent.*` keys
+	// (the eagent capability handshake, v1) are kept, merged onto the
+	// transcript message the server synthesizes for the answer.
+	Meta json.RawMessage `json:"meta"`
 }
 
 // POST /api/v1/questions/{id}/answer
@@ -392,13 +396,18 @@ func (s *Server) handleAnswerQuestion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errValidation("Choose an option or write a reply."))
 		return
 	}
+	clientMeta, err := metaFrom(req.Meta)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	origin := store.OriginToken
 	if !p.viaToken() {
 		origin = store.OriginSession
 	}
 	// The answer, its transcript message (so agents that only poll messages
 	// still see it) and the thread bump commit together; the events follow.
-	answered, msg, thread, err := s.store.AnswerQuestion(r.Context(), p.user.ID, id, store.Answer{Selected: selected, Text: req.Text}, origin)
+	answered, msg, thread, err := s.store.AnswerQuestion(r.Context(), p.user.ID, id, store.Answer{Selected: selected, Text: req.Text}, origin, clientMeta)
 	if errors.Is(err, store.ErrInvalidState) {
 		writeError(w, &apiError{Status: http.StatusConflict, Code: "already_resolved", Message: "This question has already been resolved."})
 		return

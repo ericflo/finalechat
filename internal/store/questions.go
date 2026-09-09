@@ -229,7 +229,12 @@ func (s *Store) ListThreadQuestions(ctx context.Context, userID, threadID uuid.U
 // the thread bump. It fails with ErrInvalidState if the question is no longer
 // pending. The thread's read marker is advanced because answering implies the
 // user has seen the thread.
-func (s *Store) AnswerQuestion(ctx context.Context, userID, id uuid.UUID, a Answer, origin string) (*Question, *Message, *Thread, error) {
+//
+// clientMeta carries caller-supplied message metadata (the eagent capability
+// handshake's `eagent.*` keys from an answer request). Only `eagent.*` keys
+// are kept, so reserved keys like question_id and kind cannot be overridden;
+// the transcript message always carries the synthesized answer identity.
+func (s *Store) AnswerQuestion(ctx context.Context, userID, id uuid.UUID, a Answer, origin string, clientMeta JSON) (*Question, *Message, *Thread, error) {
 	if a.Selected == nil {
 		a.Selected = []string{}
 	}
@@ -263,9 +268,15 @@ func (s *Store) AnswerQuestion(ctx context.Context, userID, id uuid.UUID, a Answ
 			}
 			body.WriteString(a.Text)
 		}
+		msgMeta := JSON{"question_id": q.ID.String(), "kind": "answer"}
+		for k, v := range clientMeta {
+			if strings.HasPrefix(k, "eagent.") {
+				msgMeta[k] = v
+			}
+		}
 		msg, thread, _, err = createMessageTx(ctx, tx, userID, q.ThreadID, MessageInput{
 			Sender: SenderUser, Body: body.String(), Format: "text", Importance: ImportanceNormal, Origin: origin, MarkRead: true,
-			Meta: JSON{"question_id": q.ID.String(), "kind": "answer"},
+			Meta: msgMeta,
 		})
 		return err
 	})

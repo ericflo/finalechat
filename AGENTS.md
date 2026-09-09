@@ -384,7 +384,7 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `GET /threads/{ref}/questions` | Questions in a thread, oldest first |
 | `GET /questions?status=&thread_id=&limit=` | Questions across threads, newest first |
 | `GET /questions/{id}?wait=` | One question; optionally block until resolved |
-| `POST /questions/{id}/answer` | Answer (`selected`, `text`) |
+| `POST /questions/{id}/answer` | Answer (`selected`, `text`; optional `meta` whose `eagent.*` keys join the transcript message) |
 | `POST /questions/{id}/cancel` | Withdraw a pending question |
 | `POST /questions/{id}/dismiss` | The user declines to answer (the app calls this) |
 | `GET /events` | Server-sent events stream (`thread.activity` carries status changes) |
