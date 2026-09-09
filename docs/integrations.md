@@ -151,17 +151,23 @@ Unknown settings remain in their native files. Permission-related preferences re
 ## Starting a session from the app
 
 An integration whose connector advertises the `session.start` action can be
-started from the inbox. The app lists every connected resource that offers
-it under the **New session** button, takes the first message, and submits it
-as a trusted command exactly like a settings action: the browser session
-creates the command, the connector claims it, and the result reports the new
-session and its thread (`session_id`, `thread` as an `ext:` reference,
-`host` as `in_process` or `detached`, and `interactive`). The app then opens
-the thread as soon as the integration's mirror creates it.
+started from the inbox. **New session** opens a draft that looks like a
+thread but exists only in the app: its folder chip chooses where the session
+will start (from the directories the integration publishes in its snapshot
+under `details.directories`: `root`, `recent`, `children`, `siblings`, or an
+absolute path typed in), its Settings button edits the project's own
+settings, and nothing is created until the first message is sent. That
+message is submitted as a trusted command exactly like a settings action:
+the browser session creates the command, the connector claims it, starts the
+session already configured, and the result reports it (`session_id`,
+`thread` as an `ext:` reference, `cwd`, `host` as `in_process` or
+`detached`, and `interactive`). The app then opens the thread as soon as the
+integration's mirror creates it.
 
 `session.start` is a cost-class action because a session spends model
-credit and runs commands on the machine. Its only parameter is `prompt`
-(at most 32,768 characters). The connector executes each command at most
+credit and runs commands on the machine. Its parameters are `prompt` (at
+most 32,768 characters) and an optional `cwd`, an absolute directory the
+session starts in; the integration checks it exists. The connector executes each command at most
 once: a redelivered command returns the original result, and a claim whose
 local journal is missing is reported as `unknown` rather than started
 again. A stale `expected_version` is not a reason to refuse it, since

@@ -27,12 +27,12 @@ function ConnectorRow({ connector: c, refresh }: { connector: Connector; refresh
   </article>;
 }
 
-export function ResourceSettingsScreen({ id }: { id: string }) {
+export function ResourceSettingsScreen({ id, backTo = "/settings" }: { id: string; backTo?: string }) {
   const { view, error } = useSettingsResource(id);
   const [proposal, setProposal] = useState<SettingsProposal | null>(null);
   const [audit, setAudit] = useState<Awaited<ReturnType<typeof controlAPI.audit>> | null>(null);
   const [auditError, setAuditError] = useState("");
   const loadAudit = (before?: string) => { void controlAPI.audit(id, before).then((r) => setAudit((a) => before && a ? { ...r, audit: [...a.audit, ...r.audit] } : r)).catch((e: Error) => setAuditError(e.message)); };
   useEffect(() => { setProposal(null); setAudit(null); loadAudit(); }, [id]);
-  return <div className="page"><TopBar title={view?.resource.label || "Integration settings"} backTo="/settings" /><div className="page-body">{error && <p role="alert" className="artifact-error">{error}</p>}{view ? <><GenericSettingsForm resource={view.resource} proposal={proposal} onProposal={setProposal} /><SettingsControls view={view} proposal={proposal} onProposal={setProposal} onResult={() => loadAudit()} /><details className="settings-audit"><summary>Settings history</summary>{audit?.audit.map((a) => <div key={a.id}><strong>{a.event}</strong> · {new Date(a.created_at).toLocaleString()}<pre>{JSON.stringify(a.detail, null, 2)}</pre></div>)}{audit?.next_before && <button className="btn small" onClick={() => loadAudit(audit.next_before)}>Earlier changes</button>}{auditError && <p>{auditError}</p>}</details></> : !error && <p>Loading settings…</p>}</div></div>;
+  return <div className="page"><TopBar title={view?.resource.label || "Integration settings"} backTo={backTo} /><div className="page-body">{error && <p role="alert" className="artifact-error">{error}</p>}{view ? <><GenericSettingsForm resource={view.resource} proposal={proposal} onProposal={setProposal} /><SettingsControls view={view} proposal={proposal} onProposal={setProposal} onResult={() => loadAudit()} /><details className="settings-audit"><summary>Settings history</summary>{audit?.audit.map((a) => <div key={a.id}><strong>{a.event}</strong> · {new Date(a.created_at).toLocaleString()}<pre>{JSON.stringify(a.detail, null, 2)}</pre></div>)}{audit?.next_before && <button className="btn small" onClick={() => loadAudit(audit.next_before)}>Earlier changes</button>}{auditError && <p>{auditError}</p>}</details></> : !error && <p>Loading settings…</p>}</div></div>;
 }

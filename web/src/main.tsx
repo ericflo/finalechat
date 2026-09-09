@@ -11,6 +11,7 @@ import { AgentsScreen, SettingsScreen } from "./screens/Settings";
 import { ThreadScreen } from "./screens/Thread";
 import { ArtifactScreen } from "./screens/Artifacts";
 import { ResourceSettingsScreen } from "./screens/Connectors";
+import { DraftSessionScreen } from "./screens/Draft";
 
 function App() {
   const route = useRoute();
@@ -76,7 +77,12 @@ function App() {
   const artifact = match("/t/:thread/artifacts/:id", path);
   if (artifact) return <ErrorBoundary key={artifact.id}><ArtifactScreen id={artifact.id!} thread={artifact.thread!} selectedRevision={route.search.get("revision")} selectedViewer={route.search.get("viewer")} initialAnchor={route.search.get("anchor")} surface={route.search.get("surface")} /></ErrorBoundary>;
   const resource = match("/settings/resources/:id", path);
-  if (resource) return <ErrorBoundary key={resource.id}><ResourceSettingsScreen id={resource.id!} /></ErrorBoundary>;
+  if (resource) {
+    const back = route.search.get("back");
+    return <ErrorBoundary key={resource.id}><ResourceSettingsScreen id={resource.id!} backTo={back && back.startsWith("/") && !back.startsWith("//") ? back : undefined} /></ErrorBoundary>;
+  }
+  const draft = match("/new/:resource", path);
+  if (draft) return <ErrorBoundary key={draft.resource}><DraftSessionScreen resourceId={draft.resource!} /></ErrorBoundary>;
   const thread = match("/t/:id", path);
   if (thread) {
     return (
