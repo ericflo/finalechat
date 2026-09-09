@@ -158,9 +158,32 @@ sw.addEventListener("push", (event) => {
 
 async function showNotification(p: PushPayload) {
   const clients = await sw.clients.matchAll({ type: "window", includeUncontrolled: true });
-  // The thread is on screen right now: no buzz for what the user is reading.
-  // (Web Push still requires a visible notification; keep it silent.)
-  const reading = p.thread_id ? clients.some((c) => c.focused && new URL(c.url).pathname === `/t/${p.thread_id}`) : false;
+  // The thread is open on screen right now: no buzz for what the user is
+  // already reading. Web Push requires a visible notification per push
+  // (Chrome shows a generic one otherwise), so post it silent with no
+  // vibration and clear it right away. The in-app view refreshes (via the
+  // postMessage below) so nothing is missed; the badge still updates.
+  if (isViewingThread(clients, p)) {
+    const quiet: NotificationOptions & { renotify?: boolean; timestamp?: number } = {
+      tag: p.tag,
+      body: " ",
+      icon: "/icons/icon-192.png",
+      badge: "/icons/badge-96.png",
+      data: p,
+      silent: true,
+      renotify: false,
+      requireInteraction: false,
+      timestamp: Date.now(),
+    };
+    await sw.registration.showNotification(p.title, quiet);
+    if (typeof p.badge === "number") await setBadge(p.badge);
+    for (const c of clients) c.postMessage({ type: "refresh", payload: p });
+    setTimeout(async () => {
+      const shown = await sw.registration.getNotifications({ tag: p.tag });
+      shown.forEach((n) => n.close());
+    }, 1000);
+    return;
+  }
 
   const actions: NotificationAction[] = [];
   if (p.type === "question" && p.options && p.options.length > 0 && p.options.length <= 3) {
@@ -174,24 +197,47 @@ async function showNotification(p: PushPayload) {
     icon: "/icons/icon-192.png",
     badge: "/icons/badge-96.png",
     data: p,
-    renotify: !reading,
-    requireInteraction: p.type === "question" && !reading,
-    silent: reading,
+    renotify: true,
+    requireInteraction: p.type === "question",
     actions,
     timestamp: Date.now(),
   };
-  if (!reading && (p.type === "question" || p.important)) options.vibrate = [80, 40, 80];
+  if (p.type === "question" || p.important) options.vibrate = [80, 40, 80];
 
   const title = p.type === "question" ? `❓ ${p.title}` : p.important ? `❗ ${p.title}` : p.title;
   await sw.registration.showNotification(title, options);
   if (typeof p.badge === "number") await setBadge(p.badge);
   for (const c of clients) c.postMessage({ type: "refresh", payload: p });
-  if (reading) {
-    // Let it show for a beat so the platform is satisfied, then clear it.
-    setTimeout(async () => {
-      const shown = await sw.registration.getNotifications({ tag: p.tag });
-      shown.forEach((n) => n.close());
-    }, 1500);
+}
+
+// isViewingThread reports whether a visible or focused window client is
+// already on the pushed thread (path /t/<id>, exact or a sub-route such as
+// an artifact view). The thread id comes from the payload's thread_id field,
+// falling back to the notification URL's path so older payloads still match.
+function isViewingThread(clients: readonly WindowClient[], p: PushPayload): boolean {
+  const threadId = p.thread_id || threadIdFromUrl(p.url);
+  if (!threadId) return false;
+  const prefix = `/t/${threadId}`;
+  return clients.some((c) => {
+    if (c.visibilityState !== "visible" && !c.focused) return false;
+    let path: string;
+    try {
+      path = new URL(c.url).pathname.replace(/\/+$/, "") || "/";
+    } catch {
+      return false;
+    }
+    return path === prefix || path.startsWith(prefix + "/");
+  });
+}
+
+function threadIdFromUrl(url: string | undefined): string {
+  if (!url) return "";
+  try {
+    const path = new URL(url, sw.location.origin).pathname;
+    const m = /^\/t\/([^/]+)/.exec(path);
+    return m?.[1] ?? "";
+  } catch {
+    return "";
   }
 }
 

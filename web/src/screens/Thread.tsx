@@ -47,6 +47,9 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   const dividerRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [unseen, setUnseen] = useState(0);
+  // Live mirror of atBottom for layout effects whose deps cannot include it
+  // (re-running the scroll effect on every scroll update would fight the reader).
+  const atBottomRef = useRef(true);
   const lastCount = useRef(0);
   const lastTail = useRef<string | null>(null);
   // Keyed to the oldest message, not the oldest item: an old question can
@@ -82,6 +85,8 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
     lastCount.current = 0;
     setUnseen(0);
     setAtBottom(true);
+    atBottomRef.current = true;
+    justSent.current = false;
     void loadThread(id).then(setLoad);
     return () => setCurrentThread(null);
   }, [id]);
@@ -127,22 +132,37 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   }, []);
 
   // Scroll management: stick to the bottom for appended items, hold the
-  // anchor for prepended history, and never move on a shrink.
+  // anchor for prepended history, and never move on a shrink. A send always
+  // wins: your own message comes into view however far up you had scrolled.
   useLayoutEffect(() => {
     if (!loaded) return;
     const el = document.scrollingElement;
     const head = messages?.[0]?.id ?? null;
+    const tail = items.length ? itemKey(items[items.length - 1] as Item) : null;
+    const stickToBottom = () => {
+      justSent.current = false;
+      scrollToBottom();
+      atBottomRef.current = true;
+      setAtBottom(true);
+      setUnseen(0);
+    };
     // The anchor restore belongs to the prepend: only spend it when the first
     // item changed. A live message that lands first is handled as an append
-    // below and the restore waits for the history page.
+    // below and the restore waits for the history page. Your own send beats
+    // the anchor: it wants the live end, not the restored position.
     if (restore.current && el && head !== restore.current.head) {
-      el.scrollTop = restore.current.top + (el.scrollHeight - restore.current.height);
-      restore.current = null;
-      lastTail.current = items.length ? itemKey(items[items.length - 1] as Item) : null;
-      lastCount.current = items.length;
+      if (justSent.current && tail !== null && tail !== lastTail.current) {
+        restore.current = null;
+        stickToBottom();
+      } else {
+        el.scrollTop = restore.current.top + (el.scrollHeight - restore.current.height);
+        restore.current = null;
+        lastTail.current = tail;
+        lastCount.current = items.length;
+      }
       return;
     }
-    const tail = items.length ? itemKey(items[items.length - 1] as Item) : null;
+    const appended = tail !== null && tail !== lastTail.current;
     if (initialised.current !== id) {
       initialised.current = id;
       lastTail.current = tail;
@@ -152,16 +172,9 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
       else scrollToBottom();
       return;
     }
-    const appended = tail !== null && tail !== lastTail.current;
     if (appended) {
-      if (atBottom || justSent.current) {
-        justSent.current = false;
-        scrollToBottom();
-        if (!atBottom) {
-          setAtBottom(true);
-          setUnseen(0);
-        }
-      } else setUnseen((n) => n + Math.max(1, items.length - lastCount.current));
+      if (atBottomRef.current || justSent.current) stickToBottom();
+      else setUnseen((n) => n + Math.max(1, items.length - lastCount.current));
     }
     lastTail.current = tail;
     lastCount.current = items.length;
@@ -170,7 +183,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
 
   // Keep the agent's status bubble in view while the user is at the bottom.
   useLayoutEffect(() => {
-    if (activity && atBottom && initialised.current === id) scrollToBottom();
+    if (activity && atBottomRef.current && initialised.current === id) scrollToBottom();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activity?.text, !!activity]);
 
@@ -180,6 +193,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
     if (!el || sheetsOpen > 0) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nearBottom = distance < 80;
+    atBottomRef.current = nearBottom;
     setAtBottom(nearBottom);
     if (nearBottom) setUnseen(0);
   }, []);
@@ -189,6 +203,22 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
     onScroll();
     return () => window.removeEventListener("scroll", onScroll);
   }, [onScroll]);
+
+  // A send always drops to the live end: jump there the moment the user
+  // hits send (so it feels instant) and arm justSent so the message itself
+  // lands in view when the round trip completes, however far up the reader
+  // had scrolled. A failed send disarms without moving.
+  const handleSending = useCallback((sending: boolean) => {
+    if (sending) {
+      justSent.current = true;
+      atBottomRef.current = true;
+      setAtBottom(true);
+      setUnseen(0);
+      scrollToBottom();
+    } else {
+      justSent.current = false;
+    }
+  }, [scrollToBottom]);
 
   const loadOlder = async () => {
     const el = document.scrollingElement;
@@ -332,9 +362,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
       <Composer
         threadId={id}
         ended={sessionEnded(messages, questions, thread)}
-        onSending={(sending) => {
-          justSent.current = sending;
-        }}
+        onSending={handleSending}
       />
       {viewing && <ImageViewer items={viewing.items} index={viewing.index} onClose={() => setViewing(null)} />}
 
@@ -717,12 +745,13 @@ function Composer({ threadId, ended, onSending }: { threadId: string; ended: boo
       setUploads([]);
       requestAnimationFrame(resize);
     } catch (e) {
-      onSending(false);
       if (e instanceof AlreadyPostedError) {
         // The earlier attempt did land; what is typed now is a new message.
+        // Keep the send armed so the posted message still scrolls into view.
         keyed.current = null;
         toast(e.message, "error");
       } else {
+        onSending(false);
         toast(e instanceof Error ? e.message : "Could not send", "error", { label: "Retry", onClick: () => sendRef.current() });
       }
     } finally {
