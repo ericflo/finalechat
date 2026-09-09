@@ -286,10 +286,12 @@ type ActivityInput struct {
 
 // activitySet is the SET fragment that records a status line; it keeps
 // activity_since while the previous status is still live so the app can say
-// how long the agent has been busy. Parameters: text, kind, ttl, seq.
+// how long the agent has been busy. Waiting is idle, not busy, so a
+// transition into or out of 'waiting' starts a fresh busy period.
+// Parameters: text, kind, ttl, seq.
 func activitySet(text, kind, ttl, seq string) string {
 	return `activity_text = ` + text + `, activity_kind = ` + kind + `, activity_at = now(),
-		activity_since = CASE WHEN t.activity_expires_at IS NOT NULL AND t.activity_expires_at > now() AND t.activity_since IS NOT NULL
+		activity_since = CASE WHEN t.activity_expires_at IS NOT NULL AND t.activity_expires_at > now() AND t.activity_since IS NOT NULL AND t.activity_kind <> 'waiting' AND ` + kind + ` <> 'waiting'
 			THEN t.activity_since ELSE now() END,
 		activity_expires_at = now() + ` + ttl + `, activity_seq = GREATEST(t.activity_seq, ` + seq + `::bigint)`
 }

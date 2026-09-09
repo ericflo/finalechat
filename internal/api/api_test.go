@@ -1023,6 +1023,29 @@ func TestAgentActivity(t *testing.T) {
 		t.Fatalf("since should restart after a lapse: %s", got)
 	}
 
+	// Waiting is idle, not busy: crossing into or out of it starts a fresh
+	// `since`, so the app's busy timer restarts on the next turn instead of
+	// resuming from e.g. a long "Waiting for your reply".
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "waiting on you", "kind": "waiting"})
+	waitSince := str(sub(sub(out, "thread"), "activity"), "since")
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "thinking again", "kind": "thinking"})
+	if got := str(sub(sub(out, "thread"), "activity"), "since"); got == waitSince {
+		t.Fatalf("waiting->thinking preserved since: %s", got)
+	}
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "still thinking", "kind": "thinking"})
+	thinkSince := str(sub(sub(out, "thread"), "activity"), "since")
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "waiting again", "kind": "waiting"})
+	if got := str(sub(sub(out, "thread"), "activity"), "since"); got == thinkSince {
+		t.Fatalf("thinking->waiting preserved since: %s", got)
+	}
+	// Busy->busy still preserves (guard against overcorrection).
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "running", "kind": "tool"})
+	toolSince := str(sub(sub(out, "thread"), "activity"), "since")
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/"+threadID+"/activity", map[string]any{"text": "pondering", "kind": "thinking"})
+	if got := str(sub(sub(out, "thread"), "activity"), "since"); got != toolSince {
+		t.Fatalf("tool->thinking reset since: %s (want %s)", got, toolSince)
+	}
+
 	// Unknown threads are not created by DELETE.
 	if status, _ := a.do("DELETE", "/api/v1/threads/ext:never-made/activity", nil); status != http.StatusNotFound {
 		t.Fatalf("expected 404 for an unknown thread, got %d", status)
