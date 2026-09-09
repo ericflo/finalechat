@@ -5206,7 +5206,7 @@
           "Integration settings"
         ],
         "summary": "Read latest settings snapshot and connector availability",
-        "description": "",
+        "description": ". The response also carries `website`, the resource's own bound current settings website (`artifact_id`, `revision_id`) or null.",
         "responses": {
           "200": {
             "description": "Read latest settings snapshot and connector availability",
@@ -6445,6 +6445,82 @@
             }
           }
         }
+      }
+    },
+    "/settings-resources/{resource}/website": {
+      "put": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "Register the resource's own settings website",
+        "description": "Registers (or renames) the artifact a settings resource's own editor is served from, owned by the resource rather than by a conversation, so a thread and a new-session draft open the same editor. Requires account authentication (session or API token); the connector credential cannot call it. Upload chunks and commit revisions through the artifact routes, then bind the current revision with PUT /connectors/{connector}/bindings/{id}. GET /settings-resources/{resource} reports the bound current revision as `website`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "maxLength": 200
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The resource's website artifact.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "artifact": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Scope, grant or browser-origin check failed"
+          },
+          "404": {
+            "description": "Not found in this account or connector"
+          },
+          "409": {
+            "description": "Version, generation, lease, idempotency or resource state conflict"
+          },
+          "422": {
+            "description": "Invalid bounded protocol document"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Settings resource id."
+          }
+        ]
       }
     }
   },

@@ -97,6 +97,9 @@ func (s *Server) revisionFor(r *http.Request) (*store.Artifact, *store.ArtifactR
 }
 
 func (s *Server) artifactEvent(ctx context.Context, a *store.Artifact, typ string) {
+	if a.ThreadID == nil {
+		return // a resource's website has no conversation to notify
+	}
 	s.bus.Publish(ctx, bus.Event{Type: typ, UserID: a.UserID.String(), ThreadID: a.ThreadID.String(), ArtifactID: a.ID.String()})
 }
 

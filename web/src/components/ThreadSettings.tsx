@@ -30,6 +30,28 @@ export function ThreadSettingsPanel({ thread, onClose }: { thread: string; onClo
   </Sheet>;
 }
 
+/** The same editor for a settings resource on its own, before any
+ * conversation exists (a new-session draft): the resource's own website is
+ * the page, and Save edits the project's defaults. */
+export function ResourceSettingsSheet({ resourceId, onClose }: { resourceId: string; onClose: () => void }) {
+  const [link, setLink] = useState<ThreadSettingsLink | null>(null);
+  const [error, setError] = useState("");
+  const [dirty, setDirty] = useState(false);
+  const [closing, setClosing] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    controlAPI.resource(resourceId).then(v => { if (alive) setLink({ id: v.resource.id, label: v.resource.label, scope: v.resource.scope, provider: v.connector.provider, available: v.online, artifact_id: v.website?.artifact_id, revision_id: v.website?.revision_id }); }).catch((e: Error) => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, [resourceId]);
+  return <Sheet className="thread-settings-sheet" label="Project settings" onClose={() => dirty ? setClosing(true) : onClose()}>
+    <header className="ts-header"><div><span className="ts-eyebrow">FOR THIS PROJECT</span><h2>Agent settings</h2></div><button className="icon-btn" aria-label="Close settings" onClick={() => dirty ? setClosing(true) : onClose()}><IconClose /></button></header>
+    {closing && <div className="ts-discard">You have unsaved changes.<button className="btn small" onClick={() => setClosing(false)}>Keep editing</button><button className="btn small" onClick={onClose}>Discard changes</button></div>}
+    {error && <p className="ts-message" role="alert">{error}</p>}
+    {link === null && !error && <p className="ts-message">Loading your agent’s settings…</p>}
+    {link && <CurrentSettings key={link.id} link={link} onDirty={setDirty} />}
+  </Sheet>;
+}
+
 function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty: (v: boolean) => void }) {
   const [view, setView] = useState<ResourceView | null>(null);
   const [site, setSite] = useState<{ revision: ArtifactRevision; lease: SettingsSurfaceLease } | null>(null);

@@ -16,10 +16,13 @@ import (
 var ErrQuota = errors.New("artifact storage quota exceeded")
 var ErrUploadBusy = errors.New("artifact blob upload in progress")
 
+// Artifact is a published website with its revisions. It is owned by a
+// conversation (ThreadID) or by a settings resource (ResourceID), never both.
 type Artifact struct {
 	ID                uuid.UUID  `json:"id"`
 	UserID            uuid.UUID  `json:"-"`
-	ThreadID          uuid.UUID  `json:"thread_id"`
+	ThreadID          *uuid.UUID `json:"thread_id"`
+	ResourceID        *uuid.UUID `json:"resource_id,omitempty"`
 	Key               string     `json:"key"`
 	Title             string     `json:"title"`
 	CurrentRevisionID *uuid.UUID `json:"current_revision_id"`
@@ -27,12 +30,49 @@ type Artifact struct {
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
-const artifactColumns = "id, user_id, thread_id, external_key, title, current_revision_id, created_at, updated_at"
+const artifactColumns = "id, user_id, thread_id, resource_id, external_key, title, current_revision_id, created_at, updated_at"
 
 func scanArtifact(row pgx.Row) (*Artifact, error) {
 	var a Artifact
-	err := row.Scan(&a.ID, &a.UserID, &a.ThreadID, &a.Key, &a.Title, &a.CurrentRevisionID, &a.CreatedAt, &a.UpdatedAt)
+	err := row.Scan(&a.ID, &a.UserID, &a.ThreadID, &a.ResourceID, &a.Key, &a.Title, &a.CurrentRevisionID, &a.CreatedAt, &a.UpdatedAt)
 	return &a, translate(err)
+}
+
+// ResourceWebsiteKey is the artifact key of a settings resource's own editor.
+const ResourceWebsiteKey = "agent-settings"
+
+// UpsertResourceArtifact registers (or renames) the settings website a
+// resource's own editor is served from.
+func (s *Store) UpsertResourceArtifact(ctx context.Context, userID, resourceID uuid.UUID, title string) (*Artifact, error) {
+	return scanArtifact(s.pool.QueryRow(ctx, `INSERT INTO artifacts(id,user_id,resource_id,external_key,title)
+		SELECT $1,$2,$3,$4,$5 WHERE EXISTS(SELECT 1 FROM settings_resources WHERE id=$3 AND user_id=$2)
+		ON CONFLICT(resource_id,external_key) WHERE resource_id IS NOT NULL DO UPDATE SET title=EXCLUDED.title,updated_at=now()
+		WHERE artifacts.user_id=EXCLUDED.user_id RETURNING `+artifactColumns, NewID(), userID, resourceID, ResourceWebsiteKey, title))
+}
+
+// SettingsWebsite names the current editor of a resource: the bound, current
+// revision of the artifact the resource owns.
+type SettingsWebsite struct {
+	ArtifactID uuid.UUID `json:"artifact_id"`
+	RevisionID uuid.UUID `json:"revision_id"`
+}
+
+// ResourceWebsite returns the resource's own current settings website, or
+// nil when none is published for its current generation.
+func (s *Store) ResourceWebsite(ctx context.Context, userID, resourceID uuid.UUID) (*SettingsWebsite, error) {
+	var w SettingsWebsite
+	err := s.pool.QueryRow(ctx, `SELECT b.artifact_id,b.revision_id FROM settings_bindings b
+		JOIN artifacts a ON a.id=b.artifact_id AND a.user_id=$1
+		JOIN settings_resources r ON r.id=b.resource_id
+		WHERE a.resource_id=$2 AND b.resource_id=$2 AND a.current_revision_id=b.revision_id AND b.generation=r.generation
+		ORDER BY b.updated_at DESC LIMIT 1`, userID, resourceID).Scan(&w.ArtifactID, &w.RevisionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, translate(err)
+	}
+	return &w, nil
 }
 
 func (s *Store) UpsertArtifact(ctx context.Context, userID, threadID uuid.UUID, key, title string) (*Artifact, error) {

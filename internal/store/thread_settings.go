@@ -45,15 +45,23 @@ func (s *Store) ThreadSettings(ctx context.Context, thread *Thread) ([]ThreadSet
 	if thread.ExternalID != nil {
 		external = *thread.ExternalID
 	}
+	// A conversation's own settings website (its archived editor) links a
+	// resource to it; the resource's own website, published for the
+	// resource itself, is the editor to open when the conversation has none.
 	rows, err := s.pool.Query(ctx, `SELECT r.id,r.label,r.scope,c.provider,
 		COALESCE(c.last_seen_at>now()-interval '90 seconds',false) AND
-		(r.scope<>'session' OR r.snapshot->>'runtime_known'='true'),website.artifact_id,website.revision_id
+		(r.scope<>'session' OR r.snapshot->>'runtime_known'='true'),
+		COALESCE(own.artifact_id,site.artifact_id),COALESCE(own.revision_id,site.revision_id)
 		FROM settings_resources r JOIN connectors c ON c.id=r.connector_id AND c.user_id=r.user_id
 		LEFT JOIN LATERAL (SELECT b.artifact_id,b.revision_id FROM settings_bindings b
 		JOIN artifacts a ON a.id=b.artifact_id AND a.user_id=r.user_id
 		WHERE b.resource_id=r.id AND a.thread_id=$2 AND a.current_revision_id=b.revision_id
-		AND b.generation=r.generation ORDER BY b.updated_at DESC LIMIT 1) website ON true
-		WHERE r.user_id=$1 AND c.state='active' AND (website.artifact_id IS NOT NULL OR
+		AND b.generation=r.generation ORDER BY b.updated_at DESC LIMIT 1) own ON true
+		LEFT JOIN LATERAL (SELECT b.artifact_id,b.revision_id FROM settings_bindings b
+		JOIN artifacts a ON a.id=b.artifact_id AND a.user_id=r.user_id
+		WHERE b.resource_id=r.id AND a.resource_id=r.id AND a.current_revision_id=b.revision_id
+		AND b.generation=r.generation ORDER BY b.updated_at DESC LIMIT 1) site ON true
+		WHERE r.user_id=$1 AND c.state='active' AND (own.artifact_id IS NOT NULL OR
 		($3<>'' AND (r.snapshot->'details'->>'thread_external_id'=$3 OR
 		(r.snapshot->'details'->'thread_external_ids') ? $3)))
 		ORDER BY CASE WHEN r.scope='session' THEN 1 ELSE 0 END,r.updated_at DESC,r.id LIMIT 100`, thread.UserID, thread.ID, external)

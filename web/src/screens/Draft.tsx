@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, Sheet } from "../components/Common";
 import { IconFolder, IconSend, IconSettings } from "../components/Icons";
 import { directoryChoices, startSession, useSessionStarters } from "../components/NewSession";
+import { ResourceSettingsSheet } from "../components/ThreadSettings";
 import { TopBar } from "../components/TopBar";
 import { navigate } from "../lib/router";
 
@@ -24,6 +25,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
     }
   });
   const [picking, setPicking] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
@@ -76,7 +78,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
         backTo="/"
         right={
           starter ? (
-            <button type="button" className="icon-btn" aria-label="Settings" title="Project settings" onClick={() => navigate(`/settings/resources/${resourceId}?back=${encodeURIComponent(`/new/${resourceId}`)}`)}>
+            <button type="button" className="icon-btn" aria-label="Settings" title="Project settings" onClick={() => setSettingsOpen(true)}>
               <IconSettings aria-hidden="true" />
             </button>
           ) : null
@@ -156,6 +158,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
         </div>
       )}
       {picking && choices && <DirectorySheet choices={choices} current={dir} onChoose={choose} onClose={() => setPicking(false)} />}
+      {settingsOpen && <ResourceSettingsSheet resourceId={resourceId} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

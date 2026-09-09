@@ -1131,6 +1131,7 @@ remain authorized. Account deletion removes the related audit along with the acc
 | `POST /connectors/{connector}/release` | Release installation process ownership |
 | `PUT /connectors/{connector}/resources/{key}` | Publish a granted resource descriptor and snapshot |
 | `PUT /connectors/{connector}/bindings/{id}` | Bind a current settings artifact to a resource |
+| `PUT /settings-resources/{resource}/website` | Register the resource's own settings website (account credential); `GET /settings-resources/{resource}` reports its bound current revision as `website` |
 | `GET /artifacts/{id}/settings-binding` | Read the artifact’s current resource binding |
 | `POST /artifacts/{id}/settings-surface` | Open a current settings editing session |
 | `GET /settings-resources/{resource}` | Read latest settings snapshot and connector availability |

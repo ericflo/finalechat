@@ -46,11 +46,15 @@ func (s *Server) handleArtifactMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		message, err = s.store.GetMessage(r.Context(), a.UserID, id)
-		if err == nil && message.ThreadID != a.ThreadID {
+		if err == nil && (a.ThreadID == nil || message.ThreadID != *a.ThreadID) {
 			err = store.ErrNotFound
 		}
 	} else {
-		message, err = s.store.FindSourceMessage(r.Context(), a.UserID, a.ThreadID, anchor)
+		if a.ThreadID == nil {
+			writeError(w, errNotFound)
+			return
+		}
+		message, err = s.store.FindSourceMessage(r.Context(), a.UserID, *a.ThreadID, anchor)
 	}
 	if err != nil {
 		writeError(w, err)

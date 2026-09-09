@@ -28,6 +28,7 @@ func (s *Server) controlRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /api/v1/connectors/{connector}/approve", s.sessionOnly(s.handleApproveConnector))
 	m.HandleFunc("DELETE /api/v1/connectors/{connector}", s.sessionOnly(s.handleRevokeConnector))
 	m.HandleFunc("GET /api/v1/settings-resources/{resource}", s.handleGetSettingsResource)
+	m.HandleFunc("PUT /api/v1/settings-resources/{resource}/website", s.handlePutResourceWebsite)
 	m.HandleFunc("GET /api/v1/settings-resources/{resource}/audit", s.handleSettingsAudit)
 	m.HandleFunc("POST /api/v1/settings-resources/{resource}/commands", s.sessionOnly(s.handleCreateSettingsCommand))
 	m.HandleFunc("GET /api/v1/settings-resources/{resource}/draft", s.sessionOnly(s.handleGetSettingsDraft))
@@ -357,7 +358,54 @@ func (s *Server) handleGetSettingsResource(w http.ResponseWriter, r *http.Reques
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]any{"resource": resource, "connector": c, "online": c.Online()})
+	website, err := s.store.ResourceWebsite(r.Context(), resource.UserID, resource.ID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"resource": resource, "connector": c, "online": c.Online(), "website": website})
+}
+
+// PUT /api/v1/settings-resources/{resource}/website
+//
+// Registers (or renames) the website a resource's own settings editor is
+// served from. The artifact belongs to the resource rather than to one
+// conversation, so a thread and a new-session draft open the same editor;
+// its revisions are uploaded and committed through the ordinary artifact
+// routes and bound with the connector's credential like any other. The
+// account itself must call this; the connector credential cannot.
+func (s *Server) handlePutResourceWebsite(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	if err := s.limitWrite(p, s.artifactLimiter); err != nil {
+		writeError(w, err)
+		return
+	}
+	resource, _, err := s.settingsResourceFor(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var in struct {
+		Title string `json:"title"`
+	}
+	if err := decodeJSON(r, &in); err != nil {
+		writeError(w, err)
+		return
+	}
+	in.Title = strings.TrimSpace(in.Title)
+	if in.Title == "" {
+		in.Title = "Settings"
+	}
+	if len(in.Title) > 200 {
+		writeError(w, errValidation("title must be at most 200 characters"))
+		return
+	}
+	a, err := s.store.UpsertResourceArtifact(r.Context(), resource.UserID, resource.ID, in.Title)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"artifact": a})
 }
 func (s *Server) handleGetSettingsBinding(w http.ResponseWriter, r *http.Request) {
 	a, err := s.artifactFor(r)

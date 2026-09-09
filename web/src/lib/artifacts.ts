@@ -2,7 +2,7 @@ import { request } from "./api";
 
 export interface ArtifactFile { path: string; role: "viewer" | "source" | "asset" | "derived" | "context"; content_type: string; size: number; sha256: string; chunks: { sha256: string; size: number }[] }
 export interface ArtifactManifest { format: string; producer: { name: string; version: string }; entrypoint: string; settings_entrypoint?: string; captured_at: string; dataset: Record<string, unknown>; viewer?: Record<string, unknown>; files: ArtifactFile[] }
-export interface Artifact { id: string; thread_id: string; key: string; title: string; current_revision_id: string | null; updated_at: string; created_at: string }
+export interface Artifact { id: string; thread_id: string | null; resource_id?: string; key: string; title: string; current_revision_id: string | null; updated_at: string; created_at: string }
 export interface ArtifactRevision { id: string; artifact_id: string; manifest: ArtifactManifest; manifest_sha256: string; created_at: string }
 export interface RevisionInfo { id: string; created_at: string; captured_at: string; producer: ArtifactManifest["producer"]; dataset: Record<string, unknown> }
 export interface Grant { key: string; label: string; scope: string; operations: string[]; classes: string[] }
@@ -12,7 +12,7 @@ export interface SettingField { key: string; label: string; description?: string
 export interface SettingsDescriptor { format: string; schema_version: string; adapter_version: string; fields: SettingField[]; actions?: { operation: string; label: string; class: string; parameters: Shape }[] }
 export interface SettingsSnapshot { version: string; context: string; saved: Record<string, unknown>; effective: Record<string, unknown>; runtime_known: boolean; runtime_version?: string; details?: Record<string, unknown> }
 export interface SettingsResource { id: string; connector_id: string; key: string; label: string; scope: string; generation: string; descriptor: SettingsDescriptor; snapshot: SettingsSnapshot; updated_at: string }
-export interface ResourceView { resource: SettingsResource; connector: Connector; online: boolean }
+export interface ResourceView { resource: SettingsResource; connector: Connector; online: boolean; website?: { artifact_id: string; revision_id: string } | null }
 export interface ThreadSettingsLink { id: string; label: string; scope: string; provider: string; available: boolean; artifact_id?: string; revision_id?: string }
 export interface SessionSettingsLink { id: string; label: string; generation: string; available: boolean }
 export interface SettingsBinding { artifact_id: string; resource_id: string; revision_id: string; generation: string }
