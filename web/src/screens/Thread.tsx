@@ -445,6 +445,7 @@ function sessionEnded(messages: Message[] | undefined, questions: Question[] | u
 // Reserved meta keys agents may set; rendered as compact chips under the title.
 const metaChips: { key: string; alt?: string; icon: (p: React.SVGProps<SVGSVGElement>) => React.ReactElement; format?: (v: unknown) => string }[] = [
   { key: "host", alt: "hostname", icon: IconServer },
+  { key: "project", icon: IconFolder, format: (v) => String(v).replace(/^\/(?:home|Users)\/[^/]+/, "~") },
   { key: "cwd", icon: IconFolder, format: (v) => String(v).replace(/^\/(?:home|Users)\/[^/]+/, "~") },
   { key: "branch", icon: IconBranch },
   { key: "model", icon: IconCpu, format: (v) => String(v).split("/").pop() ?? String(v) },
@@ -457,6 +458,8 @@ function MetaStrip({ thread }: { thread: Thread }) {
     .map((c) => {
       const raw = thread.meta[c.key] ?? (c.alt ? thread.meta[c.alt] : undefined);
       if (raw === undefined || raw === null || raw === "") return null;
+      // The project root is only news while the agent works somewhere else.
+      if (c.key === "project" && thread.meta.cwd === raw) return null;
       const text = c.format ? c.format(raw) : String(raw);
       return { key: c.key, icon: c.icon, text, full: String(raw) };
     })

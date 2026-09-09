@@ -220,7 +220,7 @@ expires_at}`, and `since` survives refreshes so the app can say "for 3
 minutes". Clear it early with `DELETE /threads/{ref}/activity` or by posting
 `{"text": ""}`. Unlike messages, a status never creates a thread: post a message first (a
 stray status must not litter the inbox), or the call is a `404`. The app
-also shows a few reserved `meta` keys on the thread as chips: `host`, `cwd`,
+also shows a few reserved `meta` keys on the thread as chips: `host`, `project` (shown only while it differs from `cwd`), `cwd`,
 `branch`, `model`, `cost_usd` and `tokens`; set them with
 `PATCH /threads/{ref}` (`meta` merges) whenever you have them.
 
