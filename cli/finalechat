@@ -407,6 +407,20 @@ class Client:
             params["archived"] = "true"
         return self.request("GET", "/api/v1/threads", params=params).get("threads", [])
 
+    def bulk_threads(self, ids: list, archived: bool | None = None, muted: bool | None = None,
+                     mark_read: bool = False, delete: bool = False) -> dict:
+        """Archive/mute/mark-read/delete up to 100 threads in one request."""
+        body: dict = {"ids": list(ids)}
+        if archived is not None:
+            body["archived"] = bool(archived)
+        if muted is not None:
+            body["muted"] = bool(muted)
+        if mark_read:
+            body["mark_read"] = True
+        if delete:
+            body["delete"] = True
+        return self.request("POST", "/api/v1/threads/bulk", body=body)
+
     def post_message(self, ref: str, body: str, *, sender: str | None = None, important: bool = False,
                      notify: bool | None = None, fmt: str = "markdown", meta: dict | None = None,
                      title: str = "", agent: str = "", files: list | None = None,
@@ -1212,6 +1226,63 @@ def cmd_delete(args) -> int:
         print_json(resp)
     else:
         print(f"deleted · message {args.message_id}")
+    return EXIT_OK
+
+
+def resolve_bulk_ids(client: Client, refs: list) -> list:
+    """Turn bulk refs into the UUIDs the endpoint takes. `ext:` refs are
+    resolved with one GET each; plain UUIDs (whitespace trimmed server-side)
+    pass through, and the server 404s on a malformed one."""
+    ids = []
+    for ref in refs or []:
+        ref = (ref or "").strip()
+        if not ref:
+            continue
+        if ref.startswith("ext:"):
+            try:
+                thread = client.get_thread(ref)
+            except APIError as err:
+                raise missing_thread(err, ThreadTarget(ref)) from None
+            tid = (thread or {}).get("id") or ref
+            ids.append(tid)
+        else:
+            ids.append(ref)
+    return ids
+
+
+def cmd_bulk(args) -> int:
+    client = client_from_args(args)
+    if not args.refs:
+        raise CLIError("Give at least one thread id (UUID) or ext:<external id>.")
+    archived = True if args.archive else False if args.unarchive else None
+    muted = True if args.mute else False if args.unmute else None
+    if args.delete and (archived is not None or muted is not None or args.read):
+        raise CLIError("--delete cannot be combined with --archive/--unarchive, --mute/--unmute or --read.")
+    if archived is None and muted is None and not args.read and not args.delete:
+        raise CLIError("Nothing to do. Pass --archive/--unarchive, --mute/--unmute, --read or --delete.")
+    ids = resolve_bulk_ids(client, args.refs)
+    if not ids:
+        raise CLIError("Give at least one thread id (UUID) or ext:<external id>.")
+    if len(ids) > 100:
+        raise CLIError("At most 100 thread ids per bulk request.")
+    resp = client.bulk_threads(ids, archived=archived, muted=muted, mark_read=args.read, delete=args.delete)
+    if args.json:
+        print_json(resp)
+        return EXIT_OK
+    deleted = resp.get("deleted") or []
+    threads = resp.get("threads") or []
+    if args.delete or deleted:
+        if not deleted:
+            print("deleted 0 threads (unknown ids are skipped)")
+        else:
+            print(f"deleted {len(deleted)} thread(s)")
+            for tid in deleted:
+                print(f"  {tid}")
+        return EXIT_OK
+    print(f"updated {len(threads)} thread(s)")
+    for t in threads:
+        title = t.get("title") or "(untitled)"
+        print(f"  {t.get('id')}  {title}")
     return EXIT_OK
 
 
@@ -2352,6 +2423,31 @@ def mcp_tools() -> list[dict]:
             },
         },
         {
+            "name": "finalechat_bulk",
+            "description": (
+                "Archive/unarchive, mute/unmute, mark read, or delete up to 100 threads in one request. "
+                "Give thread UUIDs (ext: refs are resolved when possible); unknown ids are silently "
+                "skipped. delete=true cannot be combined with archived/muted/mark_read."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "thread_ids": {
+                        "type": "array",
+                        "description": "Thread UUIDs (1 to 100); ext:<external id> refs are resolved.",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 100,
+                    },
+                    "archived": {"type": "boolean", "description": "Archive (true) or unarchive (false)."},
+                    "muted": {"type": "boolean", "description": "Mute (true) or unmute (false)."},
+                    "mark_read": {"type": "boolean", "description": "Must be true when present; marks the threads read."},
+                    "delete": {"type": "boolean", "description": "Must be true when present; deletes the threads. Exclusive."},
+                },
+                "required": ["thread_ids"],
+            },
+        },
+        {
             "name": "finalechat_wait_for_reply",
             "description": (
                 "Wait for the human's next message in the thread (sent from their phone). Use it after "
@@ -2539,6 +2635,32 @@ def mcp_call(client: Client, name: str, arguments: dict, metadata=None):
             raise CLIError("message_id is required")
         client.delete_message(mid)
         return f"Deleted message {mid}."
+
+    if name == "finalechat_bulk":
+        refs = arguments.get("thread_ids") or []
+        if not isinstance(refs, list) or not refs:
+            raise CLIError("thread_ids is required (1 to 100 thread UUIDs)")
+        if len(refs) > 100:
+            raise CLIError("At most 100 thread ids per bulk request.")
+        archived = arguments.get("archived")
+        muted = arguments.get("muted")
+        mark_read = arguments.get("mark_read") is True
+        delete = arguments.get("delete") is True
+        if delete and (archived is not None or muted is not None or mark_read):
+            raise CLIError("delete cannot be combined with archived, muted or mark_read.")
+        if archived is None and muted is None and not mark_read and not delete:
+            raise CLIError("Pass at least one of archived, muted, mark_read or delete.")
+        ids = resolve_bulk_ids(client, [str(r) for r in refs])
+        resp = client.bulk_threads(ids,
+                                   archived=None if archived is None else bool(archived),
+                                   muted=None if muted is None else bool(muted),
+                                   mark_read=mark_read, delete=delete)
+        deleted = resp.get("deleted") or []
+        threads = resp.get("threads") or []
+        if delete:
+            return f"Deleted {len(deleted)} thread(s)." + ("" if not deleted else " " + ", ".join(deleted))
+        return f"Updated {len(threads)} thread(s)." + (
+            "" if not threads else " " + ", ".join(str(t.get("id")) for t in threads))
 
     if name == "finalechat_wait_for_reply":
         timeout = int(arguments.get("timeout_seconds") or 1800)
@@ -4638,6 +4760,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="print the response as JSON")
     p.set_defaults(func=cmd_delete)
 
+    p = sub.add_parser("bulk", help="archive, mute, mark read or delete many threads at once",
+                       formatter_class=Formatter,
+                       description="Archive, mute, mark read or delete up to 100 threads in one request. "
+                                   "Unknown ids are silently skipped; a malformed (non-UUID) id is a 404. "
+                                   "--delete cannot be combined with the other actions.",
+                       epilog="examples:\n  finalechat bulk <id>... --archive\n"
+                              "  finalechat bulk <id>... --unarchive --unmute\n"
+                              "  finalechat bulk <id>... --read\n"
+                              "  finalechat bulk <id>... --delete")
+    p.add_argument("refs", nargs="+", metavar="ID",
+                   help="thread UUIDs (1 to 100); ext:<external id> refs are resolved to UUIDs")
+    archived = p.add_mutually_exclusive_group()
+    archived.add_argument("--archive", dest="archive", action="store_true", help="archive the threads")
+    archived.add_argument("--unarchive", dest="unarchive", action="store_true", help="unarchive the threads")
+    muted = p.add_mutually_exclusive_group()
+    muted.add_argument("--mute", dest="mute", action="store_true", help="mute the threads")
+    muted.add_argument("--unmute", dest="unmute", action="store_true", help="unmute the threads")
+    p.add_argument("--read", action="store_true", help="mark the threads read")
+    p.add_argument("--delete", action="store_true", help="delete the threads (exclusive with the other actions)")
+    p.add_argument("--json", action="store_true", help="print the response as JSON")
+    p.set_defaults(func=cmd_bulk)
+
     p = sub.add_parser("status", help="show what you are doing (a live status line)", formatter_class=Formatter,
                        description="Set the thread's live status line: what you are doing right now. The app "
                                    "shows it as a typing indicator with a timer. It never notifies, is not part "
@@ -4730,7 +4874,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("mcp", help="run the MCP server over stdio", formatter_class=Formatter,
                        description="Model Context Protocol server exposing finalechat_send, finalechat_status, "
                                    "finalechat_ask, finalechat_wait_for_reply, finalechat_read, "
-                                   "finalechat_view_attachment and finalechat_fetch_attachment.")
+                                   "finalechat_bulk, finalechat_view_attachment and finalechat_fetch_attachment.")
     p.set_defaults(func=cmd_mcp)
 
     add_integration_parsers(sub)

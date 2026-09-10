@@ -328,6 +328,116 @@ func (s *Store) MarkThreadRead(ctx context.Context, userID, id uuid.UUID) (*Thre
 	return scanThread(s.pool.QueryRow(ctx, "UPDATE threads t SET last_read_at = now() WHERE t.id = $1 AND t.user_id = $2 RETURNING "+threadColumns, id, userID))
 }
 
+// BulkUpdateThreads applies one patch to every owned thread in ids in a
+// single statement. Ids the user does not own (missing or foreign) are
+// silently skipped: the call is idempotent and returns only affected rows,
+// so a caller can never probe for another user's thread ids. Callers must
+// validate ids (non-empty, bounded) before invoking.
+func (s *Store) BulkUpdateThreads(ctx context.Context, userID uuid.UUID, ids []uuid.UUID, p ThreadPatch, markRead bool) ([]*Thread, error) {
+	ids = dedupeUUIDs(ids)
+	if len(ids) == 0 {
+		return []*Thread{}, nil
+	}
+	sets := []string{"updated_at = now()"}
+	args := []any{userID, ids}
+	add := func(expr string, v any) {
+		args = append(args, v)
+		sets = append(sets, strings.Replace(expr, "?", "$"+itoa(len(args)), 1))
+	}
+	if p.Archived != nil {
+		if *p.Archived {
+			sets = append(sets, "archived_at = COALESCE(archived_at, now())")
+		} else {
+			sets = append(sets, "archived_at = NULL")
+		}
+	}
+	if p.Muted != nil {
+		add("muted = ?", *p.Muted)
+	}
+	if markRead {
+		sets = append(sets, "last_read_at = now()")
+	}
+	sql := "UPDATE threads t SET " + strings.Join(sets, ", ") + " WHERE t.user_id = $1 AND t.id = ANY($2::uuid[]) RETURNING " + threadColumns
+	rows, err := s.pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Thread{}
+	for rows.Next() {
+		t, err := scanThread(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// BulkDeleteThreads removes every owned thread in ids. Like BulkUpdateThreads
+// it silently skips missing/foreign ids (idempotent bulk, no existence leak)
+// and returns only the ids actually deleted. Attachments are collected before
+// the delete (thread rows cascade to attachment metadata) so the caller can
+// remove the stored bytes afterwards.
+func (s *Store) BulkDeleteThreads(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (deleted []uuid.UUID, attachments []*Attachment, err error) {
+	ids = dedupeUUIDs(ids)
+	if len(ids) == 0 {
+		return []uuid.UUID{}, []*Attachment{}, nil
+	}
+	rows, err := s.pool.Query(ctx, "SELECT "+attachmentColumns+" FROM attachments a WHERE a.user_id = $1 AND a.thread_id = ANY($2::uuid[])", userID, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	attachments = []*Attachment{}
+	for rows.Next() {
+		a, err := scanAttachment(rows)
+		if err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		attachments = append(attachments, a)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, nil, err
+	}
+	rows.Close()
+	delRows, err := s.pool.Query(ctx, "DELETE FROM threads WHERE user_id = $1 AND id = ANY($2::uuid[]) RETURNING id", userID, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer delRows.Close()
+	deleted = []uuid.UUID{}
+	for delRows.Next() {
+		var id uuid.UUID
+		if err := delRows.Scan(&id); err != nil {
+			return nil, nil, translate(err)
+		}
+		deleted = append(deleted, id)
+	}
+	if err := delRows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return deleted, attachments, nil
+}
+
+// dedupeUUIDs removes duplicate ids, preserving first-seen order.
+func dedupeUUIDs(ids []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(ids))
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
 // DeleteThread removes a thread and everything in it.
 func (s *Store) DeleteThread(ctx context.Context, userID, id uuid.UUID) error {
 	tag, err := s.pool.Exec(ctx, "DELETE FROM threads WHERE id = $1 AND user_id = $2", id, userID)

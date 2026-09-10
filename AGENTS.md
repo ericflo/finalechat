@@ -103,6 +103,16 @@ cap keeps proxies happy; loop if you need longer.
   the fly; every other route returns 404 for an unknown one.
 - `PATCH /threads/{ref}` sets `title`, `agent`, `archived`, `muted` or merges
   `meta`. A new message or question un-archives a thread automatically.
+- To archive, mute, mark read, or delete many threads at once, use
+  `POST /threads/bulk` with `{"ids": ["<uuid>", ...], "archived": true}` (1 to
+  100 UUIDs; `delete: true` is exclusive). Unknown ids are skipped, a malformed
+  id is 404.
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/threads/bulk \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"ids": ["01a07a60-6dab-780a-bf4d-20ef15c0d7d7"], "archived": true}'
+```
 
 ## What to post, and when
 
@@ -371,6 +381,7 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `GET /threads/{ref}` | One thread |
 | `PATCH /threads/{ref}` | `title`, `agent`, `archived`, `muted`, `meta` |
 | `DELETE /threads/{ref}` | Delete thread and contents |
+| POST /threads/bulk | Archive/mute/mark-read/delete up to 100 threads at once |
 | `POST /threads/{ref}/read` | Mark read |
 | `POST /threads/{ref}/activity` | Set the status line (`text`, `kind`, `ttl_seconds`, `seq`); empty `text` clears; never creates a thread |
 | `DELETE /threads/{ref}/activity` | Clear the status line |

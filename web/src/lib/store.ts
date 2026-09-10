@@ -743,6 +743,51 @@ export async function deleteThread(id: string): Promise<void> {
   forgetThread(id);
 }
 
+export async function bulkUpdateThreads(
+  ids: string[],
+  patch: { archived?: boolean; muted?: boolean; mark_read?: true },
+): Promise<{ threads: Thread[]; deleted: string[] }> {
+  const source = rest();
+  const body: { ids: string[]; archived?: boolean; muted?: boolean; mark_read?: true } = { ids, ...patch };
+  const res = await api.bulkThreads(body);
+  // Partial success: the server skips ids it cannot find; merge whatever came back.
+  if (res.threads.length > 0) upsertThreads(res.threads, source);
+  for (const id of res.deleted) forgetThread(id);
+  try {
+    const counts = await api.counts().catch(() => null);
+    if (counts) applyCounts(counts.counts);
+    else {
+      const me = await api.me().catch(() => null);
+      if (me) applyCounts(me.counts);
+    }
+  } catch {
+    // Counts reconcile on the next load.
+  }
+  return res;
+}
+
+export async function bulkDeleteThreads(ids: string[]): Promise<{ threads: Thread[]; deleted: string[] }> {
+  const res = await api.bulkThreads({ ids, delete: true });
+  // Partial success: the server skips ids it cannot find. Forget what it
+  // confirms, plus requested ids it neither returned nor confirmed (they are
+  // gone from here either way); anything it returned stays.
+  const alive = new Set(res.threads.map((t) => t.id));
+  for (const id of ids) {
+    if (!alive.has(id)) forgetThread(id);
+  }
+  try {
+    const counts = await api.counts().catch(() => null);
+    if (counts) applyCounts(counts.counts);
+    else {
+      const me = await api.me().catch(() => null);
+      if (me) applyCounts(me.counts);
+    }
+  } catch {
+    // Counts reconcile on the next load.
+  }
+  return res;
+}
+
 function forgetThread(id: string) {
   set((s) => {
     const threads = { ...s.threads };

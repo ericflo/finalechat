@@ -1789,3 +1789,142 @@ func TestAttachmentQuota(t *testing.T) {
 	}
 	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+threadID, nil)
 }
+
+func TestBulkThreads(t *testing.T) {
+	_, a := setup(t)
+
+	mk := func(title string) string {
+		t.Helper()
+		out := a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"title": title})
+		return str(sub(out, "thread"), "id")
+	}
+	threadJSON := func(id string) map[string]any {
+		t.Helper()
+		return sub(a.must(http.StatusOK, "GET", "/api/v1/threads/"+id, nil), "thread")
+	}
+
+	id1, id2, id3 := mk("bulk-one"), mk("bulk-two"), mk("bulk-three")
+
+	// Bulk archive.
+	out := a.must(http.StatusOK, "POST", "/api/v1/threads/bulk", map[string]any{"ids": []string{id1, id2}, "archived": true})
+	threads := out["threads"].([]any)
+	if len(threads) != 2 || len(out["deleted"].([]any)) != 0 {
+		t.Fatalf("expected 2 updated threads, got %v", out)
+	}
+	for _, th := range threads {
+		if th.(map[string]any)["archived_at"] == nil {
+			t.Fatalf("expected archived thread, got %v", th)
+		}
+	}
+	if th := threadJSON(id3); th["archived_at"] != nil {
+		t.Fatalf("untouched thread should stay active, got %v", th)
+	}
+
+	// Bulk unarchive with surrounding whitespace in ids.
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/bulk", map[string]any{"ids": []string{"  " + id1 + " "}, "archived": false})
+	if th := out["threads"].([]any)[0].(map[string]any); th["archived_at"] != nil {
+		t.Fatalf("expected unarchived thread, got %v", th)
+	}
+
+	// Bulk mute and unmute.
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/bulk", map[string]any{"ids": []string{id1, id3}, "muted": true})
+	for _, th := range out["threads"].([]any) {
+		if th.(map[string]any)["muted"] != true {
+			t.Fatalf("expected muted thread, got %v", th)
+		}
+	}
+	a.must(http.StatusOK, "POST", "/api/v1/threads/bulk", map[string]any{"ids": []string{id1, id3}, "muted": false})
+	if th := threadJSON(id1); th["muted"] != false {
+		t.Fatalf("expected unmuted thread, got %v", th)
+	}
+
+	// Bulk mark_read clears unread counts.
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/"+id3+"/messages", map[string]any{"body": "hey"})
+	if th := threadJSON(id3); th["unread_count"].(float64) != 1 {
+		t.Fatalf("expected one unread message, got %v", th)
+	}
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/bulk", map[string]any{"ids": []string{id3}, "mark_read": true})
+	if th := out["threads"].([]any)[0].(map[string]any); th["unread_count"].(float64) != 0 {
+		t.Fatalf("expected read thread, got %v", th)
+	}
+
+	// Duplicate ids collapse to one row.
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/bulk", map[string]any{"ids": []string{id1, id1}, "muted": true})
+	if len(out["threads"].([]any)) != 1 {
+		t.Fatalf("expected deduped update, got %v", out)
+	}
+
+	// Unknown ids are silently skipped.
+	ghost := uuid.NewString()
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/bulk", map[string]any{"ids": []string{id1, ghost}, "muted": false})
+	if len(out["threads"].([]any)) != 1 {
+		t.Fatalf("expected unknown id to be skipped, got %v", out)
+	}
+
+	// A thread owned by another user is skipped, not leaked.
+	otherID := uuid.New()
+	if _, err := testPool.Exec(context.Background(), "INSERT INTO users (id, email, password_hash) VALUES ($1, $2, 'x')", otherID, "bulk-other@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	defer testPool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", otherID)
+	foreign, _, err := testAPI.store.CreateThread(context.Background(), otherID, store.ThreadInput{Title: "foreign"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/bulk", map[string]any{"ids": []string{foreign.ID.String(), id1}, "archived": true})
+	threads = out["threads"].([]any)
+	if len(threads) != 1 || str(threads[0].(map[string]any), "id") != id1 {
+		t.Fatalf("expected only the owned thread, got %v", out)
+	}
+
+	// Validation failures.
+	for name, body := range map[string]any{
+		"missing ids":    map[string]any{"archived": true},
+		"empty ids":      map[string]any{"ids": []string{}, "archived": true},
+		"no ops":         map[string]any{"ids": []string{id1}},
+		"mark_read f":    map[string]any{"ids": []string{id1}, "mark_read": false},
+		"delete false":   map[string]any{"ids": []string{id1}, "delete": false},
+		"delete+archive": map[string]any{"ids": []string{id1}, "delete": true, "archived": true},
+		"delete+muted":   map[string]any{"ids": []string{id1}, "delete": true, "muted": false},
+		"delete+read":    map[string]any{"ids": []string{id1}, "delete": true, "mark_read": true},
+	} {
+		if status, res := a.do("POST", "/api/v1/threads/bulk", body); status != http.StatusUnprocessableEntity || str(sub(res, "error"), "code") != "validation_failed" {
+			t.Fatalf("%s: expected validation_failed, got %d %v", name, status, res)
+		}
+	}
+	many := make([]string, 101)
+	for i := range many {
+		many[i] = uuid.NewString()
+	}
+	if status, res := a.do("POST", "/api/v1/threads/bulk", map[string]any{"ids": many, "archived": true}); status != http.StatusUnprocessableEntity || str(sub(res, "error"), "code") != "validation_failed" {
+		t.Fatalf("expected validation_failed for >100 ids, got %d %v", status, res)
+	}
+
+	// A malformed id is a 404, like the single-thread routes.
+	if status, res := a.do("POST", "/api/v1/threads/bulk", map[string]any{"ids": []string{"nope"}, "archived": true}); status != http.StatusNotFound || str(sub(res, "error"), "code") != "not_found" {
+		t.Fatalf("expected not_found for malformed id, got %d %v", status, res)
+	}
+
+	// Bulk delete: removes owned threads, skips the rest.
+	out = a.must(http.StatusOK, "POST", "/api/v1/threads/bulk", map[string]any{"ids": []string{id1, id2, ghost, foreign.ID.String()}, "delete": true})
+	deleted := out["deleted"].([]any)
+	if len(deleted) != 2 || len(out["threads"].([]any)) != 0 {
+		t.Fatalf("expected 2 deleted ids, got %v", out)
+	}
+	for _, id := range []string{id1, id2} {
+		if status, _ := a.do("GET", "/api/v1/threads/"+id, nil); status != http.StatusNotFound {
+			t.Fatalf("expected deleted thread %s to be gone, got %d", id, status)
+		}
+	}
+	if status, _ := a.do("GET", "/api/v1/threads/"+id3, nil); status != http.StatusOK {
+		t.Fatalf("expected surviving thread to remain, got %d", status)
+	}
+
+	// POST /threads/bulk does not collide with POST /threads.
+	created := a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"title": "after-bulk"})
+	if str(sub(created, "thread"), "title") != "after-bulk" {
+		t.Fatalf("POST /threads broke after adding the bulk route: %v", created)
+	}
+	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+id3, nil)
+	a.must(http.StatusOK, "DELETE", "/api/v1/threads/"+str(sub(created, "thread"), "id"), nil)
+}

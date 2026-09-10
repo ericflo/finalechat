@@ -151,6 +151,7 @@ func (s *Server) Handler() http.Handler {
 
 	authed.HandleFunc("GET /api/v1/threads", s.handleListThreads)
 	authed.HandleFunc("POST /api/v1/threads", s.handleCreateThread)
+	authed.HandleFunc("POST /api/v1/threads/bulk", s.handleBulkThreads)
 	authed.HandleFunc("GET /api/v1/threads/{thread}", s.handleGetThread)
 	authed.HandleFunc("PATCH /api/v1/threads/{thread}", s.handleUpdateThread)
 	authed.HandleFunc("DELETE /api/v1/threads/{thread}", s.handleDeleteThread)

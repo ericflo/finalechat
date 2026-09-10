@@ -575,3 +575,46 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .connector-row .btn { justify-self: start; }
 .grant-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; padding-top: 12px; font-size: 13px; }
 .grant-options label, .connector-row legend label { display: flex; align-items: center; gap: 8px; }
+
+/* Bulk selection ---------------------------------------------------------- */
+.thread-row.selecting { grid-template-columns: auto 44px 1fr auto; align-items: center; }
+.thread-row.selected { background: var(--accent-soft); }
+/* 44px touch target wrapping a 24px box: no layout shift, thumb-friendly. */
+.select-hit {
+  width: 44px; height: 44px; margin: -10px 0 -10px -12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: none; cursor: pointer; border-radius: 12px;
+}
+.select-box {
+  width: 24px; height: 24px; margin: 0; padding: 0; flex: none;
+  accent-color: var(--accent); cursor: pointer;
+}
+.select-box:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px;
+}
+/* Header "N selected" + select-all checkbox while in select mode. */
+.select-all {
+  display: inline-flex; align-items: center; gap: 8px;
+  text-transform: none; letter-spacing: 0; cursor: pointer;
+  min-height: 44px;
+}
+.select-all .select-box { pointer-events: auto; }
+.bulk-bar {
+  position: sticky; bottom: calc(12px + var(--sab, env(safe-area-inset-bottom, 0px))); z-index: 30;
+  margin: 12px 12px 0; background: var(--elevated, var(--surface));
+  border: 1px solid var(--border); border-radius: 16px;
+  box-shadow: var(--shadow-lg); padding: 10px 12px calc(10px + var(--sab, env(safe-area-inset-bottom, 0px)));
+  display: grid; gap: 8px;
+}
+.bulk-count { display: flex; align-items: center; gap: 4px; font-size: 14px; font-weight: 700; min-height: 34px; }
+.bulk-count > span:first-child { margin-right: auto; }
+.bulk-count .btn:first-of-type { margin-left: auto; }
+/* Two-by-two grid: all four actions stay visible on 384px phones with
+   no horizontal scrolling hiding the destructive one. */
+.bulk-actions {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+}
+.bulk-actions .btn { width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.bulk-actions .btn svg { width: 16px; height: 16px; }
+.bulk-bar [aria-disabled="true"] { opacity: 0.45; }
+.btn:disabled { opacity: 0.45; }

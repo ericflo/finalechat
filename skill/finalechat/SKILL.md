@@ -168,3 +168,6 @@ The question response has `question.status` and `question.answer`
 - Never post secrets, tokens or credentials. If one slips out, remove the
   message for good with `finalechat delete <message id>` (ids are printed
   by `say`, `read` and `wait`).
+- Tidy many threads at once with `finalechat bulk <id>...` (`--archive`,
+  `--mute`, `--read`, or `--delete`; up to 100 UUIDs, `ext:` refs resolved) or
+  `POST /api/v1/threads/bulk` directly.

@@ -1061,6 +1061,133 @@
         }
       }
     },
+    "/threads/bulk": {
+      "post": {
+        "tags": [
+          "Threads"
+        ],
+        "summary": "Update or delete many threads at once",
+        "description": "Archives/unarchives (`archived`), mutes/unmutes (`muted`), marks read (`mark_read: true`), or deletes (`delete: true`) up to 100 threads in one request. Only threads owned by the caller are affected; unknown or foreign ids are silently skipped (the call is idempotent and returns only affected threads). A malformed (non-UUID) id is a 404, matching the single-thread routes. `delete: true` cannot be combined with `archived`, `muted` or `mark_read`; otherwise at least one of `archived`, `muted` or `mark_read` must be set, and `mark_read`/`delete` must be `true` when present. Updates emit one `thread.updated` event per affected thread; deletes emit one `thread.deleted` event per deleted thread.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "description": "Thread UUIDs (surrounding whitespace is trimmed)."
+                  },
+                  "archived": {
+                    "type": "boolean",
+                    "description": "Archive (true) or unarchive (false) the threads."
+                  },
+                  "muted": {
+                    "type": "boolean",
+                    "description": "Mute (true) or unmute (false) the threads."
+                  },
+                  "mark_read": {
+                    "type": "boolean",
+                    "description": "Must be true when present; sets last_read_at to now."
+                  },
+                  "delete": {
+                    "type": "boolean",
+                    "description": "Must be true when present; deletes the threads. Exclusive with archived/muted/mark_read."
+                  }
+                },
+                "required": [
+                  "ids"
+                ]
+              },
+              "example": {
+                "ids": [
+                  "01a07a60-6dab-780a-bf4d-20ef15c0d7d7"
+                ],
+                "archived": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Affected threads (update path) or deleted ids (delete path).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "threads": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Thread"
+                      }
+                    },
+                    "deleted": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    }
+                  },
+                  "required": [
+                    "threads",
+                    "deleted"
+                  ]
+                },
+                "example": {
+                  "threads": [
+                    {
+                      "id": "01a07a60-6dab-780a-bf4d-20ef15c0d7d7",
+                      "archived_at": "2026-09-07T05:41:00.000000Z",
+                      "muted": false
+                    }
+                  ],
+                  "deleted": []
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "A thread id is malformed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/threads/{ref}": {
       "get": {
         "tags": [

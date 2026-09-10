@@ -576,6 +576,38 @@ Returns `{"thread": {...}}`.
 Deletes the thread with all its messages and questions. Returns `{"ok": true}`
 and emits `thread.deleted`.
 
+### POST /threads/bulk
+
+Archives/unarchives, mutes/unmutes, marks read, or deletes many threads in
+one request. `ids` holds 1 to 100 thread UUIDs (surrounding whitespace is
+trimmed); unknown or foreign ids are silently skipped, so the call is
+idempotent and returns only affected threads without leaking another user's
+thread existence. A malformed (non-UUID) id is a `404`, matching the
+single-thread routes.
+
+```bash
+curl -sS https://www.finalechat.com/api/v1/threads/bulk \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"ids": ["01a07a60-6dab-780a-bf4d-20ef15c0d7d7"], "archived": true}'
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `ids` | array of string | Required, 1 to 100 UUIDs |
+| `archived` | boolean | Optional; archive (`true`) or unarchive (`false`) |
+| `muted` | boolean | Optional; mute (`true`) or unmute (`false`) |
+| `mark_read` | boolean | Optional; must be `true` when present, sets `last_read_at` to now |
+| `delete` | boolean | Optional; must be `true` when present, deletes the threads |
+
+`delete: true` cannot be combined with `archived`, `muted` or `mark_read`;
+otherwise at least one of `archived`, `muted` or `mark_read` must be set
+(empty updates and `mark_read`/`delete` set to `false` are `422`).
+
+Updates return `{"threads": [...], "deleted": []}` and emit one
+`thread.updated` event per affected thread. Deletes return
+`{"threads": [], "deleted": ["<uuid>", ...]}` (only the ids actually
+deleted) and emit one `thread.deleted` event per deleted thread.
+
 ### POST /threads/{ref}/read
 
 Marks everything in the thread as read (`last_read_at` becomes now). Returns

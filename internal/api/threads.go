@@ -276,6 +276,104 @@ func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"thread": updated})
 }
 
+// bulkThreadsRequest is the body for POST /api/v1/threads/bulk.
+type bulkThreadsRequest struct {
+	IDs      []string     `json:"ids"`
+	Archived optionalBool `json:"archived"`
+	Muted    optionalBool `json:"muted"`
+	MarkRead optionalBool `json:"mark_read"`
+	Delete   optionalBool `json:"delete"`
+}
+
+// POST /api/v1/threads/bulk archives/unarchives, mutes/unmutes, marks read,
+// or deletes many threads in one request. Threads the caller does not own
+// (missing or foreign ids) are silently skipped: the call is idempotent and
+// returns only affected threads, so it never leaks another user's thread
+// existence. A malformed (non-UUID) id is a 404, matching the single-thread
+// routes where parseUUID maps a bad id to not_found rather than a validation
+// error (chosen to avoid distinguishing "bad id" from "no such thread").
+func (s *Server) handleBulkThreads(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	var req bulkThreadsRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	if len(req.IDs) == 0 || len(req.IDs) > 100 {
+		writeError(w, errValidation("ids must contain between 1 and 100 thread ids."))
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(req.IDs))
+	for _, raw := range req.IDs {
+		id, err := parseUUID(raw)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		ids = append(ids, id)
+	}
+	if req.MarkRead.Set && !req.MarkRead.Value {
+		writeError(w, errValidation("mark_read must be true when present."))
+		return
+	}
+	if req.Delete.Set && !req.Delete.Value {
+		writeError(w, errValidation("delete must be true when present."))
+		return
+	}
+	isDelete := req.Delete.Set && req.Delete.Value
+	if isDelete {
+		if req.Archived.Set || req.Muted.Set || req.MarkRead.Set {
+			writeError(w, errValidation("delete cannot be combined with archived, muted or mark_read."))
+			return
+		}
+		if err := s.limitWrite(p, s.messageLimiter); err != nil {
+			writeError(w, err)
+			return
+		}
+		deleted, attachments, err := s.store.BulkDeleteThreads(r.Context(), p.user.ID, ids)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if len(attachments) > 0 {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				defer cancel()
+				s.deleteAttachmentObjects(ctx, attachments)
+			}()
+		}
+		ctx := context.WithoutCancel(r.Context())
+		for _, id := range deleted {
+			s.bus.Publish(ctx, bus.Event{Type: bus.ThreadDeleted, UserID: p.user.ID.String(), ThreadID: id.String()})
+		}
+		out := make([]string, 0, len(deleted))
+		for _, id := range deleted {
+			out = append(out, id.String())
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"threads": []*store.Thread{}, "deleted": out})
+		return
+	}
+	if !req.Archived.Set && !req.Muted.Set && !req.MarkRead.Set {
+		writeError(w, errValidation("at least one of archived, muted or mark_read must be set."))
+		return
+	}
+	updated, err := s.store.BulkUpdateThreads(r.Context(), p.user.ID, ids, store.ThreadPatch{
+		Archived: req.Archived.ptr(), Muted: req.Muted.ptr(),
+	}, req.MarkRead.Set && req.MarkRead.Value)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	ctx := context.WithoutCancel(r.Context())
+	for _, t := range updated {
+		s.bus.Publish(ctx, bus.Event{Type: bus.ThreadUpdated, UserID: p.user.ID.String(), ThreadID: t.ID.String()})
+	}
+	if updated == nil {
+		updated = []*store.Thread{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"threads": updated, "deleted": []string{}})
+}
+
 // GET /api/v1/counts
 func (s *Server) handleCounts(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())

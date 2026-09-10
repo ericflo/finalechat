@@ -26,6 +26,8 @@ import {
 } from "../lib/push";
 import { navigate } from "../lib/router";
 import {
+  bulkDeleteThreads,
+  bulkUpdateThreads,
   clearSearch,
   deleteThread,
   loadArchived,
@@ -56,8 +58,14 @@ export function Inbox({ filter }: { filter: string | null }) {
   const [showAllPending, setShowAllPending] = useState(false);
   const [rowMenu, setRowMenu] = useState<Thread | null>(null);
   const [newSession, setNewSession] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const { starters } = useSessionStarters();
   const searchTimer = useRef<number | undefined>(undefined);
+  const lastIndex = useRef<number | null>(null);
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
   const needsYou = filter === "needs-you";
 
   useEffect(() => {
@@ -77,7 +85,66 @@ export function Inbox({ filter }: { filter: string | null }) {
   }, [query]);
 
   const searching = query.trim().length > 0;
-  const list = useMemo(() => {
+  // Bulk selection lives here (not in the store): it clears whenever the
+  // visible set changes meaning — tab switch, new search — or after delete.
+  const switchTab = (next: "active" | "archived") => {
+    setTab(next);
+    setSelected(new Set());
+  };
+  useEffect(() => {
+    setSelected(new Set());
+  }, [query]);
+  const toggleSelect = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    lastIndex.current = null;
+  }, []);
+  // Shift-click range select (desktop): extend from the last toggled row.
+  const toggleSelectRange = useCallback(
+    (id: string, index: number, extend: boolean, ids: string[]) => {
+      if (
+        extend &&
+        lastIndex.current !== null &&
+        lastIndex.current !== index
+      ) {
+        const [from, to] =
+          lastIndex.current < index
+            ? [lastIndex.current, index]
+            : [index, lastIndex.current];
+        const range = ids.slice(from, to + 1);
+        setSelected((prev) => {
+          const next = new Set(prev);
+          // If the anchor row is selected, select the range; else deselect it.
+          const on = next.has(ids[lastIndex.current as number] as string);
+          for (const rid of range) {
+            if (on) next.add(rid);
+            else next.delete(rid);
+          }
+          return next;
+        });
+      } else {
+        toggleSelect(id);
+      }
+      lastIndex.current = index;
+    },
+    [toggleSelect],
+  );
+  // Long-press / right-click enters select mode with the row pre-selected.
+  const enterSelect = useCallback((id: string) => {
+    setSelectMode(true);
+    setSelected(new Set([id]));
+    lastIndex.current = null;
+  }, []);
+  const toggleSelectMode = () => {
+    setSelectMode((v) => {
+      if (v) setSelected(new Set());
+      return !v;
+    });
+  };  const list = useMemo(() => {
     const q = query.trim().toLowerCase();
     const hits =
       searchHits && searchHits.query === query.trim()
@@ -105,6 +172,119 @@ export function Inbox({ filter }: { filter: string | null }) {
         return a.last_activity_at < b.last_activity_at ? 1 : -1;
       });
   }, [threads, tab, query, searchHits, needsYou]);
+
+  const selectedIds = useMemo(() => [...selected], [selected]);
+  // Indeterminate state for the header select-all checkbox.
+  useEffect(() => {
+    const el = selectAllRef.current;
+    if (el) {
+      el.indeterminate =
+        selectedIds.length > 0 && selectedIds.length < list.length;
+    }
+  }, [selectedIds, list.length]);
+  // Drop ids that no longer exist (deleted elsewhere) so the count stays true.
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (threads[id]) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [threads]);
+  const allMuted =
+    selectedIds.length > 0 &&
+    selectedIds.every((id) => threads[id]?.muted);
+  const plural = (n: number, what: string) =>
+    `${n} thread${n === 1 ? "" : "s"} ${what}`;
+
+  const doBulkArchive = async () => {
+    const ids = [...selected];
+    if (ids.length === 0 || bulkBusy) return;
+    const archiving = tab !== "archived";
+    setBulkBusy(true);
+    try {
+      const res = await bulkUpdateThreads(ids, { archived: archiving });
+      const n = res.threads.length || ids.length;
+      if (archiving) {
+        toast(plural(n, "archived"), "info", {
+          label: "Undo",
+          onClick: () =>
+            void bulkUpdateThreads(ids, { archived: false }).catch((e) =>
+              toast(e instanceof Error ? e.message : "Could not undo", "error"),
+            ),
+        });
+      } else {
+        toast(plural(n, "unarchived"), "success");
+      }
+      // Archived threads leave this tab; unarchived ones leave the other.
+      // Keep the selection of whatever remains instead of clearing it all.
+      setSelected((prev) => {
+        const gone = new Set(ids);
+        const next = new Set([...prev].filter((id) => !gone.has(id)));
+        return next;
+      });
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not update", "error");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const doBulkMute = async () => {
+    const ids = [...selected];
+    if (ids.length === 0 || bulkBusy) return;
+    const target = !allMuted;
+    setBulkBusy(true);
+    try {
+      const res = await bulkUpdateThreads(ids, { muted: target });
+      const n = res.threads.length || ids.length;
+      toast(plural(n, target ? "muted" : "unmuted"), "success");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not update", "error");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const doBulkMarkRead = async () => {
+    const ids = [...selected];
+    if (ids.length === 0 || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const res = await bulkUpdateThreads(ids, { mark_read: true });
+      const n = res.threads.length || ids.length;
+      toast(plural(n, "marked read"), "success");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not update", "error");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const doBulkDelete = async () => {
+    const ids = [...selected];
+    if (ids.length === 0 || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const res = await bulkDeleteThreads(ids);
+      const n = res.deleted.length || ids.length;
+      const gone = new Set(ids);
+      const remaining = list.filter((t) => !gone.has(t.id));
+      setSelected(new Set());
+      setConfirmBulkDelete(false);
+      // Nothing left to act on: leave select mode instead of an empty bar.
+      if (remaining.length === 0) setSelectMode(false);
+      toast(plural(n, "deleted"));
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not delete", "error");
+    } finally {
+      setBulkBusy(false);
+    }
+  };
 
   const now = useNow(15000);
   const summary = useMemo(() => {
@@ -242,25 +422,63 @@ export function Inbox({ filter }: { filter: string | null }) {
               className="section-title"
               style={{ justifyContent: "space-between" }}
             >
-              <span>{needsYou ? "Threads that need you" : "Threads"}</span>
+              <span className="threads-label">
+                {selectMode ? (
+                  <label className="select-all">
+                    <input
+                      ref={selectAllRef}
+                      type="checkbox"
+                      className="select-box"
+                      aria-label="Select all visible threads"
+                      checked={
+                        list.length > 0 && selectedIds.length === list.length
+                      }
+                      onChange={() =>
+                        setSelected((prev) =>
+                          prev.size === list.length
+                            ? new Set()
+                            : new Set(list.map((t) => t.id)),
+                        )
+                      }
+                    />
+                    {selectedIds.length === 0
+                      ? "None selected"
+                      : `${selectedIds.length} selected`}
+                  </label>
+                ) : needsYou ? (
+                  "Threads that need you"
+                ) : (
+                  "Threads"
+                )}
+              </span>
               {!needsYou && (
-                <div
-                  className="segmented"
-                  style={{ textTransform: "none", letterSpacing: 0 }}
-                >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <div
+                    className="segmented"
+                    style={{ textTransform: "none", letterSpacing: 0 }}
+                  >
+                    <button
+                      type="button"
+                      className={tab === "active" ? "active" : ""}
+                      onClick={() => switchTab("active")}
+                    >
+                      Active
+                    </button>
+                    <button
+                      type="button"
+                      className={tab === "archived" ? "active" : ""}
+                      onClick={() => switchTab("archived")}
+                    >
+                      Archived
+                    </button>
+                  </div>
                   <button
                     type="button"
-                    className={tab === "active" ? "active" : ""}
-                    onClick={() => setTab("active")}
+                    className={`btn small ${selectMode ? "primary" : ""}`}
+                    aria-pressed={selectMode}
+                    onClick={toggleSelectMode}
                   >
-                    Active
-                  </button>
-                  <button
-                    type="button"
-                    className={tab === "archived" ? "active" : ""}
-                    onClick={() => setTab("archived")}
-                  >
-                    Archived
+                    {selectMode ? "Done" : "Select"}
                   </button>
                 </div>
               )}
@@ -292,12 +510,23 @@ export function Inbox({ filter }: { filter: string | null }) {
               <div
                 className={`thread-list grouped ${fromSnapshot ? "stale" : ""}`}
               >
-                {list.map((t) => (
+                {list.map((t, i) => (
                   <ThreadRow
                     key={t.id}
                     t={t}
                     showArchived={searching}
                     onMenu={() => setRowMenu(t)}
+                    selectMode={selectMode}
+                    selected={selected.has(t.id)}
+                    onToggleSelect={(e) =>
+                      toggleSelectRange(
+                        t.id,
+                        i,
+                        !!(e && (e as { shiftKey?: boolean }).shiftKey),
+                        list.map((x) => x.id),
+                      )
+                    }
+                    onEnterSelect={() => enterSelect(t.id)}
                   />
                 ))}
               </div>
@@ -323,6 +552,106 @@ export function Inbox({ filter }: { filter: string | null }) {
           </>
         )}
       </div>
+      {selectMode && (
+        <div
+          className="bulk-bar"
+          role="toolbar"
+          aria-label="Bulk actions"
+          aria-busy={bulkBusy}
+        >
+          <div className="bulk-count">
+            <span aria-live="polite">
+              {selectedIds.length === 0
+                ? "Nothing selected"
+                : `${selectedIds.length} selected`}
+            </span>
+            {selectedIds.length === 0 ? (
+              <button
+                type="button"
+                className="btn primary small"
+                disabled={bulkBusy}
+                aria-disabled={bulkBusy}
+                onClick={() => setSelected(new Set(list.map((t) => t.id)))}
+              >
+                Select all visible
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="btn ghost small"
+                  disabled={bulkBusy}
+                  aria-disabled={bulkBusy}
+                  onClick={() => setSelected(new Set(list.map((t) => t.id)))}
+                >
+                  Select all visible
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost small"
+                  disabled={bulkBusy}
+                  aria-disabled={bulkBusy}
+                  onClick={() => setSelected(new Set())}
+                >
+                  Clear
+                </button>
+              </>
+            )}
+          </div>
+          <div className="bulk-actions">
+            <button
+              type="button"
+              className="btn small"
+              disabled={selectedIds.length === 0 || bulkBusy}
+              aria-disabled={selectedIds.length === 0 || bulkBusy}
+              onClick={() => void doBulkArchive()}
+            >
+              <IconArchive />
+              {bulkBusy ? "Working…" : tab === "archived" ? "Unarchive" : "Archive"}
+            </button>
+            <button
+              type="button"
+              className="btn small"
+              disabled={selectedIds.length === 0 || bulkBusy}
+              aria-disabled={selectedIds.length === 0 || bulkBusy}
+              onClick={() => void doBulkMute()}
+            >
+              {allMuted ? <IconBell /> : <IconBellOff />}
+              {allMuted ? "Unmute" : "Mute"}
+            </button>
+            <button
+              type="button"
+              className="btn small"
+              disabled={selectedIds.length === 0 || bulkBusy}
+              aria-disabled={selectedIds.length === 0 || bulkBusy}
+              onClick={() => void doBulkMarkRead()}
+            >
+              <IconCheck />
+              Mark read
+            </button>
+            <button
+              type="button"
+              className="btn small danger"
+              disabled={selectedIds.length === 0 || bulkBusy}
+              aria-disabled={selectedIds.length === 0 || bulkBusy}
+              onClick={() => setConfirmBulkDelete(true)}
+            >
+              <IconTrash />
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
+      {confirmBulkDelete && (
+        <ConfirmSheet
+          title={`Delete ${selectedIds.length} thread${selectedIds.length === 1 ? "" : "s"}?`}
+          body="Everything in the selected threads is removed for good. This cannot be undone."
+          confirmLabel="Delete threads"
+          danger
+          onClose={() => setConfirmBulkDelete(false)}
+          onConfirm={() => void doBulkDelete()}
+        />
+      )}
       {rowMenu && (
         <RowSheet
           t={threads[rowMenu.id] ?? rowMenu}
@@ -337,10 +666,18 @@ function ThreadRow({
   t,
   showArchived,
   onMenu,
+  selectMode,
+  selected,
+  onToggleSelect,
+  onEnterSelect,
 }: {
   t: Thread;
   showArchived: boolean;
   onMenu: () => void;
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (e?: { shiftKey?: boolean }) => void;
+  onEnterSelect?: () => void;
 }) {
   const unread = t.unread_count > 0;
   const needs = t.pending_questions > 0;
@@ -368,9 +705,12 @@ function ThreadRow({
     pressTimer.current = window.setTimeout(() => {
       suppressClick.current = true;
       if (navigator.vibrate) navigator.vibrate(8);
-      onMenu();
+      // Selection owns long-press: enter select mode with this row, or
+      // toggle it when already selecting — never open the RowSheet here.
+      if (selectMode) onToggleSelect?.();
+      else onEnterSelect?.();
     }, 480);
-  }, [onMenu]);
+  }, [selectMode, onToggleSelect, onEnterSelect]);
   const endPress = useCallback(
     () => window.clearTimeout(pressTimer.current),
     [],
@@ -379,23 +719,63 @@ function ThreadRow({
   return (
     <Link
       href={`/t/${t.id}`}
-      className={`thread-row ${unread ? "unread" : ""} ${needs ? "needs-you" : ""} ${activity ? "live" : ""}`}
+      className={`thread-row ${unread ? "unread" : ""} ${needs ? "needs-you" : ""} ${activity ? "live" : ""} ${selectMode ? "selecting" : ""} ${selected ? "selected" : ""}`}
       onPointerDown={startPress}
       onPointerUp={endPress}
       onPointerLeave={endPress}
       onPointerCancel={endPress}
       onContextMenu={(e: React.MouseEvent) => {
         e.preventDefault();
-        onMenu();
+        // Right-click enters select mode with this row pre-selected;
+        // in select mode it toggles the row instead.
+        if (selectMode) onToggleSelect?.();
+        else onEnterSelect?.();
+      }}
+      onDoubleClick={(e: React.MouseEvent) => {
+        // Quick actions still live here: double-click opens the RowSheet
+        // when not selecting. Long-press / right-click belong to selection.
+        if (!selectMode) {
+          e.preventDefault();
+          onMenu();
+        }
       }}
       onClickCapture={(e: React.MouseEvent) => {
         if (suppressClick.current) {
           e.preventDefault();
           e.stopPropagation();
           suppressClick.current = false;
+          return;
+        }
+        // In select mode a tap toggles instead of navigating (shift=tap
+        // range on desktop). The checkbox handles its own events below.
+        if (selectMode) {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggleSelect?.({ shiftKey: e.shiftKey });
         }
       }}
     >
+      {selectMode && (
+        <span
+          className="select-hit"
+          onClick={(e: React.MouseEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            // Clicks on the input itself are handled by the input below.
+            if ((e.target as HTMLElement).tagName === "INPUT") return;
+            onToggleSelect?.();
+          }}
+        >
+          <input
+            type="checkbox"
+            className="select-box"
+            aria-label="Select thread"
+            checked={!!selected}
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+            onChange={() => onToggleSelect?.()}
+          />
+        </span>
+      )}
       <Avatar name={name} />
       <div className="thread-main">
         <div className="thread-head">
