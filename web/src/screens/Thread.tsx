@@ -544,7 +544,7 @@ function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () 
     if (overflowing) setExpanded((e) => !e);
   };
   return (
-    <div style={{ padding: "0 12px 8px", maxWidth: 760, margin: "0 auto", display: "flex", alignItems: "flex-start", gap: 4 }}>
+    <div style={{ padding: "0 12px 8px", maxWidth: 760, margin: "0 auto", display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 4, minWidth: 0 }}>
       {desc ? (
         <button
           type="button"
@@ -552,16 +552,16 @@ function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () 
           title={overflowing ? (expanded ? "Show less" : "Show more") : undefined}
           aria-label={overflowing ? (expanded ? "Collapse thread summary" : "Expand thread summary") : "Thread summary"}
           aria-expanded={overflowing ? expanded : undefined}
-          style={{ flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: overflowing ? "pointer" : "default", fontSize: 13, lineHeight: 1.4, color: "var(--text-2)", display: "flex", alignItems: "baseline", gap: 6 }}
+          style={{ flex: 1, minWidth: 0, overflow: "hidden", background: "none", border: "none", padding: 0, textAlign: "left", cursor: overflowing ? "pointer" : "default", fontSize: 13, lineHeight: 1.4, color: "var(--text-2)", display: "flex", alignItems: expanded ? "flex-start" : "center", flexWrap: "nowrap", gap: 6 }}
         >
           <span
             ref={textRef}
-            style={expanded ? { flex: 1, minWidth: 0 } : { flex: 1, minWidth: 0, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+            style={expanded ? { flex: 1, minWidth: 0, whiteSpace: "normal", overflowWrap: "break-word" } : { flex: 1, minWidth: 0, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
           >
             {desc}
           </span>
           {overflowing && (
-            <span style={{ flex: "none", color: "var(--text-3)", whiteSpace: "nowrap" }}>
+            <span style={{ flex: "none", color: "var(--text-3)", whiteSpace: "nowrap", lineHeight: 1.4 }}>
               {expanded ? "less " : "more "}
               <IconDown style={{ width: 12, height: 12, verticalAlign: -1, transform: expanded ? "rotate(180deg)" : undefined }} aria-hidden="true" />
             </span>
@@ -582,9 +582,9 @@ function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () 
         aria-label="Rename thread"
         title="Rename thread"
         onClick={onRename}
-        style={{ flex: "none" }}
+        style={{ flex: "none", alignSelf: "center", width: 28, height: 28, borderRadius: 8 }}
       >
-        <IconEdit aria-hidden="true" />
+        <IconEdit aria-hidden="true" style={{ width: 14, height: 14 }} />
       </button>
     </div>
   );
