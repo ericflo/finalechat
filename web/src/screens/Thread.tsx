@@ -515,13 +515,33 @@ function threadDescription(t: Thread): string {
   return (t.description || t.summary || "").trim();
 }
 
-/** The thread summary shown under the header: tap to edit inline, with an
- * "Add a summary…" placeholder when empty and a pencil for the title. */
+/** The thread summary shown under the header: collapsed to one line by
+ * default, tap to expand when it runs longer, with a pencil to edit and an
+ * "Add a summary…" placeholder when empty. */
 function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () => void }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const textRef = useRef<HTMLSpanElement>(null);
   const desc = threadDescription(thread);
+  useEffect(() => {
+    setExpanded(false);
+  }, [thread.id]);
+  useEffect(() => {
+    if (expanded) {
+      setOverflowing(true);
+      return;
+    }
+    const measure = () => {
+      const el = textRef.current;
+      setOverflowing(!!el && el.scrollHeight > el.clientHeight + 1);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [desc, expanded, thread.id]);
   if (editing) {
     const save = async () => {
       if (saving) return;
@@ -574,15 +594,25 @@ function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () 
         <button
           type="button"
           onClick={() => {
-            setDraft(thread.description || thread.summary || "");
-            setEditing(true);
+            if (overflowing) setExpanded((e) => !e);
           }}
-          title="Edit summary"
-          aria-label="Edit thread summary"
-          style={{ flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", fontSize: 13, lineHeight: 1.4, color: "var(--text-2)" }}
+          title={overflowing ? (expanded ? "Show less" : "Show more") : undefined}
+          aria-label={overflowing ? (expanded ? "Collapse thread summary" : "Expand thread summary") : "Thread summary"}
+          aria-expanded={overflowing ? expanded : undefined}
+          style={{ flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: overflowing ? "pointer" : "default", fontSize: 13, lineHeight: 1.4, color: "var(--text-2)" }}
         >
-          <span>{desc}</span>{" "}
-          <IconEdit style={{ width: 12, height: 12, color: "var(--text-3)", verticalAlign: -1 }} aria-hidden="true" />
+          <span
+            ref={textRef}
+            style={expanded ? undefined : { display: "-webkit-box", WebkitLineClamp: 1, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+          >
+            {desc}
+          </span>{" "}
+          {overflowing && (
+            <span style={{ color: "var(--text-3)", whiteSpace: "nowrap" }}>
+              {expanded ? "less " : "more "}
+              <IconDown style={{ width: 12, height: 12, verticalAlign: -1, transform: expanded ? "rotate(180deg)" : undefined }} aria-hidden="true" />
+            </span>
+          )}
         </button>
       ) : (
         <button
@@ -596,6 +626,19 @@ function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () 
           Add a summary… <IconEdit style={{ width: 12, height: 12, verticalAlign: -1 }} aria-hidden="true" />
         </button>
       )}
+      <button
+        type="button"
+        className="icon-btn"
+        aria-label="Edit thread summary"
+        title="Edit summary"
+        onClick={() => {
+          setDraft(thread.description || thread.summary || "");
+          setEditing(true);
+        }}
+        style={{ flex: "none" }}
+      >
+        <IconEdit aria-hidden="true" />
+      </button>
       <button
         type="button"
         className="icon-btn"
