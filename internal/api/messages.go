@@ -29,6 +29,10 @@ type messageRequest struct {
 	// external thread.
 	Title string `json:"title"`
 	Agent string `json:"agent"`
+	// Description (alias summary) sets the summary line on a freshly
+	// auto-created external thread.
+	Description string `json:"description"`
+	Summary     string `json:"summary"`
 	// Attachments are ids of pending uploads in the same thread.
 	Attachments []string `json:"attachments"`
 	// Activity sets the thread's status line in the same transaction, for an
@@ -61,6 +65,7 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		v := func(name string) string { return strings.TrimSpace(r.FormValue(name)) }
 		req.Body, req.Format, req.Importance, req.Sender = v("body"), v("format"), v("importance"), v("sender")
 		req.Title, req.Agent = v("title"), v("agent")
+		req.Description, req.Summary = v("description"), v("summary")
 		if m := v("meta"); m != "" {
 			req.Meta = json.RawMessage(m)
 		}
@@ -178,6 +183,14 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errValidation("agent must be at most 120 characters."))
 		return
 	}
+	if len(req.Description) > 2000 {
+		writeError(w, errValidation("description must be at most 2000 characters."))
+		return
+	}
+	if len(req.Summary) > 2000 {
+		writeError(w, errValidation("summary must be at most 2000 characters."))
+		return
+	}
 	if len(attachmentIDs) > store.MaxAttachmentsPerMessage {
 		writeError(w, errValidation("At most %d attachments per message.", store.MaxAttachmentsPerMessage))
 		return
@@ -197,13 +210,16 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if threadCreated && (req.Title != "" || req.Agent != "") {
+	if threadCreated && (req.Title != "" || req.Agent != "" || req.Description != "" || req.Summary != "") {
 		patch := store.ThreadPatch{}
 		if req.Title != "" {
 			patch.Title = &req.Title
 		}
 		if req.Agent != "" {
 			patch.Agent = &req.Agent
+		}
+		if desc := threadDescription(req.Description, req.Summary); desc != "" {
+			patch.Description = &desc
 		}
 		if t, err := s.store.UpdateThread(r.Context(), p.user.ID, thread.ID, patch); err == nil {
 			thread = t

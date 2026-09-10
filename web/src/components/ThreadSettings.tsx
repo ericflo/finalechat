@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Sheet } from "./Common";
-import { IconClose } from "./Icons";
+import { IconClose, IconEdit } from "./Icons";
+import { toast, updateThread, useStore } from "../lib/store";
 import { SettingInput } from "./IntegrationSettings";
 import { artifactAPI, controlAPI, effectLabel, validateProposal, type ArtifactRevision, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
 import { connectArtifactFrame } from "../lib/artifact-bridge";
@@ -21,6 +22,7 @@ export function ThreadSettingsPanel({ thread, onClose }: { thread: string; onClo
   const link = links?.find(r => r.id === selected);
   return <Sheet className="thread-settings-sheet" label="Agent settings" onClose={() => dirty ? setClosing(true) : onClose()}>
     <header className="ts-header"><div><span className="ts-eyebrow">IN THIS CONVERSATION</span><h2>Agent settings</h2></div><button className="icon-btn" aria-label="Close settings" onClick={() => dirty ? setClosing(true) : onClose()}><IconClose /></button></header>
+    <ThreadSummaryBlock id={thread} />
     {closing && <div className="ts-discard">You have unsaved changes.<button className="btn small" onClick={() => setClosing(false)}>Keep editing</button><button className="btn small" onClick={onClose}>Discard changes</button></div>}
     {error && <p className="ts-message" role="alert">{error}</p>}
     {links === null && !error && <p className="ts-message">Loading your agent’s settings…</p>}
@@ -50,6 +52,82 @@ export function ResourceSettingsSheet({ resourceId, onClose }: { resourceId: str
     {link === null && !error && <p className="ts-message">Loading your agent’s settings…</p>}
     {link && <CurrentSettings key={link.id} link={link} onDirty={setDirty} />}
   </Sheet>;
+}
+
+/** The conversation's own title + summary, editable here as well as in the
+ * thread header. PATCHes the thread; `summary` is a read alias of `description`. */
+function ThreadSummaryBlock({ id }: { id: string }) {
+  const thread = useStore((s) => s.threads[id]);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  if (!thread) return null;
+  const desc = (thread.description || thread.summary || "").trim();
+  if (editing) {
+    const save = async () => {
+      if (saving) return;
+      setSaving(true);
+      try {
+        await updateThread(id, { description: draft.trim() });
+        setEditing(false);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Could not save", "error");
+      } finally {
+        setSaving(false);
+      }
+    };
+    return (
+      <div className="ts-fields" style={{ padding: "0 12px 8px" }}>
+        <div className="field">
+          <label htmlFor="ts-summary">Conversation summary</label>
+          <textarea
+            id="ts-summary"
+            autoFocus
+            rows={3}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            maxLength={2000}
+            placeholder="What is this conversation about?"
+          />
+          <div className="hint">1–2 sentences, so the inbox stays scannable. {draft.length}/2000</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" className="btn small" disabled={saving} onClick={() => setEditing(false)}>Cancel</button>
+          <button type="button" className="btn small primary" disabled={saving} onClick={() => void save()}>{saving ? "Saving…" : "Save"}</button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={{ padding: "0 12px 8px", display: "flex", alignItems: "flex-start", gap: 4 }}>
+      {desc ? (
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(thread.description || thread.summary || "");
+            setEditing(true);
+          }}
+          title="Edit summary"
+          aria-label="Edit conversation summary"
+          style={{ flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", fontSize: 13, lineHeight: 1.4, color: "var(--text-2)" }}
+        >
+          <span>{desc}</span>{" "}
+          <IconEdit style={{ width: 12, height: 12, color: "var(--text-3)", verticalAlign: -1 }} aria-hidden="true" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setDraft("");
+            setEditing(true);
+          }}
+          style={{ flex: 1, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", fontSize: 13, color: "var(--text-3)", fontStyle: "italic" }}
+        >
+          Add a summary… <IconEdit style={{ width: 12, height: 12, verticalAlign: -1 }} aria-hidden="true" />
+        </button>
+      )}
+    </div>
+  );
 }
 
 function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty: (v: boolean) => void }) {

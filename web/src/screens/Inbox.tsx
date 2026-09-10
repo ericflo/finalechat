@@ -162,6 +162,8 @@ export function Inbox({ filter }: { filter: string | null }) {
           t.title.toLowerCase().includes(q) ||
           t.agent.toLowerCase().includes(q) ||
           t.preview.toLowerCase().includes(q) ||
+          (t.description || "").toLowerCase().includes(q) ||
+          (t.summary || "").toLowerCase().includes(q) ||
           (t.external_id ?? "").toLowerCase().includes(q),
       )
       .sort((a, b) => {
@@ -662,6 +664,11 @@ export function Inbox({ filter }: { filter: string | null }) {
   );
 }
 
+/** The thread's summary: `description`, falling back to its `summary` alias. */
+function threadDescription(t: Thread): string {
+  return (t.description || t.summary || "").trim();
+}
+
 function ThreadRow({
   t,
   showArchived,
@@ -792,6 +799,12 @@ function ThreadRow({
               <span className="live-dot" aria-hidden />
               {activity.text}
             </span>
+          ) : threadDescription(t) ? (
+            <>
+              {draft && <span className="draft-tag">Draft</span>}
+              <span style={{ color: "var(--text-3)" }}>Summary: </span>
+              <span title={threadDescription(t)}>{threadDescription(t)}</span>
+            </>
           ) : (
             <>
               {draft && <span className="draft-tag">Draft</span>}

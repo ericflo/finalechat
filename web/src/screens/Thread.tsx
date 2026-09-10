@@ -291,7 +291,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
             <IconMore />
           </button></>
         }
-        below={thread ? <MetaStrip thread={thread} /> : null}
+        below={thread ? (<><ThreadDescription thread={thread} onRename={() => setRenaming(true)} /><MetaStrip thread={thread} /></>) : null}
       />
       <div ref={listRef} className="messages" onClick={onListClick}>
         {focusedMessage && !items.some(it => it.kind === "message" && it.m.id === focusedMessage.id) && <section aria-label="Selected archived message"><p>Selected message · {fullDateTime(focusedMessage.created_at)}</p><MessageBubble m={focusedMessage} grouped={false} showMeta={true} inspectThread={hasArtifacts ? thread : undefined} onOpen={(items, index) => setViewing({ items, index })} /><button className="btn small" onClick={() => navigate(`/t/${id}`)}>Return to recent conversation</button></section>}
@@ -439,11 +439,12 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
       )}
       {renaming && thread && (
         <RenameSheet
-          initial={thread.title}
+          initialTitle={thread.title}
+          initialDescription={thread.description || thread.summary || ""}
           onClose={() => setRenaming(false)}
-          onSave={(t) => {
+          onSave={(title, description) => {
             setRenaming(false);
-            updateThread(id, { title: t }).catch((e) => toast(e.message, "error"));
+            updateThread(id, { title, description }).catch((e) => toast(e.message, "error"));
           }}
         />
       )}
@@ -509,20 +510,133 @@ function MetaStrip({ thread }: { thread: Thread }) {
   );
 }
 
-function RenameSheet({ initial, onClose, onSave }: { initial: string; onClose: () => void; onSave: (t: string) => void }) {
-  const [value, setValue] = useState(initial);
+/** The thread's summary (`description`, falling back to its `summary` alias). */
+function threadDescription(t: Thread): string {
+  return (t.description || t.summary || "").trim();
+}
+
+/** The thread summary shown under the header: tap to edit inline, with an
+ * "Add a summary…" placeholder when empty and a pencil for the title. */
+function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const desc = threadDescription(thread);
+  if (editing) {
+    const save = async () => {
+      if (saving) return;
+      setSaving(true);
+      try {
+        await updateThread(thread.id, { description: draft.trim() });
+        setEditing(false);
+      } catch (e) {
+        toast(e instanceof Error ? e.message : "Could not save", "error");
+      } finally {
+        setSaving(false);
+      }
+    };
+    return (
+      <div style={{ padding: "0 12px 8px", maxWidth: 760, margin: "0 auto" }}>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+        >
+          <div className="field">
+            <label htmlFor="thread-desc">Summary</label>
+            <textarea
+              id="thread-desc"
+              autoFocus
+              rows={3}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              maxLength={2000}
+              placeholder="What is this thread about?"
+            />
+            <div className="hint">1–2 sentences, so the inbox stays scannable. {draft.length}/2000</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <button type="button" className="btn small" disabled={saving} onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+            <button type="submit" className="btn small primary" disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </form>
+      </div>
+    );
+  }
+  return (
+    <div style={{ padding: "0 12px 8px", maxWidth: 760, margin: "0 auto", display: "flex", alignItems: "flex-start", gap: 4 }}>
+      {desc ? (
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(thread.description || thread.summary || "");
+            setEditing(true);
+          }}
+          title="Edit summary"
+          aria-label="Edit thread summary"
+          style={{ flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", fontSize: 13, lineHeight: 1.4, color: "var(--text-2)" }}
+        >
+          <span>{desc}</span>{" "}
+          <IconEdit style={{ width: 12, height: 12, color: "var(--text-3)", verticalAlign: -1 }} aria-hidden="true" />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => {
+            setDraft("");
+            setEditing(true);
+          }}
+          style={{ flex: 1, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", fontSize: 13, color: "var(--text-3)", fontStyle: "italic" }}
+        >
+          Add a summary… <IconEdit style={{ width: 12, height: 12, verticalAlign: -1 }} aria-hidden="true" />
+        </button>
+      )}
+      <button
+        type="button"
+        className="icon-btn"
+        aria-label="Rename thread"
+        title="Rename thread"
+        onClick={onRename}
+        style={{ flex: "none" }}
+      >
+        <IconEdit aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
+function RenameSheet({ initialTitle, initialDescription, onClose, onSave }: { initialTitle: string; initialDescription: string; onClose: () => void; onSave: (title: string, description: string) => void }) {
+  const [title, setTitle] = useState(initialTitle);
+  const [description, setDescription] = useState(initialDescription);
   return (
     <Sheet onClose={onClose} label="Rename thread">
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onSave(value.trim());
+          onSave(title.trim(), description.trim());
         }}
         style={{ padding: "4px 6px" }}
       >
         <div className="field">
           <label htmlFor="rename">Thread title</label>
-          <input id="rename" autoFocus value={value} onChange={(e) => setValue(e.target.value)} maxLength={300} />
+          <input id="rename" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} maxLength={300} />
+        </div>
+        <div className="field">
+          <label htmlFor="rename-desc">Summary</label>
+          <textarea
+            id="rename-desc"
+            rows={3}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            maxLength={2000}
+            placeholder="What is this thread about?"
+          />
+          <div className="hint">1–2 sentences, so the inbox stays scannable. {description.length}/2000</div>
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button type="button" className="btn" onClick={onClose}>

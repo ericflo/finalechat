@@ -85,10 +85,21 @@ func (s *Server) failAutoCreated(w http.ResponseWriter, r *http.Request, err err
 }
 
 type threadRequest struct {
-	ExternalID string          `json:"external_id"`
-	Title      string          `json:"title"`
-	Agent      string          `json:"agent"`
-	Meta       json.RawMessage `json:"meta"`
+	ExternalID  string          `json:"external_id"`
+	Title       string          `json:"title"`
+	Agent       string          `json:"agent"`
+	Description string          `json:"description"`
+	Summary     string          `json:"summary"`
+	Meta        json.RawMessage `json:"meta"`
+}
+
+// threadDescription resolves the description/summary alias pair: description
+// wins when both are given, otherwise whichever is non-empty.
+func threadDescription(description, summary string) string {
+	if description != "" {
+		return description
+	}
+	return summary
 }
 
 // POST /api/v1/threads
@@ -111,13 +122,22 @@ func (s *Server) handleCreateThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errValidation("external_id must be at most 300 characters."))
 		return
 	}
+	if len(req.Description) > 2000 {
+		writeError(w, errValidation("description must be at most 2000 characters."))
+		return
+	}
+	if len(req.Summary) > 2000 {
+		writeError(w, errValidation("summary must be at most 2000 characters."))
+		return
+	}
 	meta, err := metaFrom(req.Meta)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 	thread, created, err := s.store.CreateThread(r.Context(), p.user.ID, store.ThreadInput{
-		ExternalID: req.ExternalID, Title: req.Title, Agent: req.Agent, Meta: meta,
+		ExternalID: req.ExternalID, Title: req.Title, Agent: req.Agent,
+		Description: threadDescription(req.Description, req.Summary), Meta: meta,
 	})
 	if err != nil {
 		writeError(w, err)
@@ -180,11 +200,13 @@ func (s *Server) handleGetThread(w http.ResponseWriter, r *http.Request) {
 }
 
 type threadPatchRequest struct {
-	Title    optionalString  `json:"title"`
-	Agent    optionalString  `json:"agent"`
-	Archived optionalBool    `json:"archived"`
-	Muted    optionalBool    `json:"muted"`
-	Meta     json.RawMessage `json:"meta"`
+	Title       optionalString  `json:"title"`
+	Agent       optionalString  `json:"agent"`
+	Description optionalString  `json:"description"`
+	Summary     optionalString  `json:"summary"`
+	Archived    optionalBool    `json:"archived"`
+	Muted       optionalBool    `json:"muted"`
+	Meta        json.RawMessage `json:"meta"`
 }
 
 // PATCH /api/v1/threads/{thread}
@@ -208,13 +230,28 @@ func (s *Server) handleUpdateThread(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errValidation("agent must be at most 120 characters."))
 		return
 	}
+	if req.Description.Set && len(req.Description.Value) > 2000 {
+		writeError(w, errValidation("description must be at most 2000 characters."))
+		return
+	}
+	if req.Summary.Set && len(req.Summary.Value) > 2000 {
+		writeError(w, errValidation("summary must be at most 2000 characters."))
+		return
+	}
 	meta, err := metaFrom(req.Meta)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
+	var description *string
+	switch {
+	case req.Description.Set:
+		description = req.Description.ptr()
+	case req.Summary.Set:
+		description = req.Summary.ptr()
+	}
 	updated, err := s.store.UpdateThread(r.Context(), p.user.ID, thread.ID, store.ThreadPatch{
-		Title: req.Title.ptr(), Agent: req.Agent.ptr(), Archived: req.Archived.ptr(), Muted: req.Muted.ptr(), Meta: meta,
+		Title: req.Title.ptr(), Agent: req.Agent.ptr(), Description: description, Archived: req.Archived.ptr(), Muted: req.Muted.ptr(), Meta: meta,
 	})
 	if err != nil {
 		writeError(w, err)

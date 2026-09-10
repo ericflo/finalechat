@@ -35,6 +35,12 @@ The CLI picks the thread automatically: `-t/--thread`, then
 `FINALECHAT_THREAD`, then the Claude Code session thread for this directory,
 then a per-directory default. Name it on the first post with `--title` (the
 project or task) and `--agent` (who you are); later posts ignore both.
+Refresh the title and a 1–2 sentence summary as the work evolves and before
+finishing:
+
+```bash
+finalechat retitle --title "finalechat: release 1.2" --description "Staging deploy is green; waiting on approval to promote to production."
+```
 
 ## The three moves
 
@@ -162,6 +168,9 @@ The question response has `question.status` and `question.answer`
 
 - Post the final summary of every task, and progress on anything longer
   than a few minutes.
+- Keep the thread titled and summarized: refresh the title plus a 1–2
+  sentence `--description` via `finalechat retitle` as the work evolves
+  and before finishing.
 - Keep messages self-contained: the user reads them on a phone without the
   terminal.
 - Mark `--important` sparingly so notifications stay meaningful.

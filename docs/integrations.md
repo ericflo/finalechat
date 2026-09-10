@@ -62,6 +62,8 @@ The adapter distinguishes saved values from defaults resolved through observed u
 
 `FINALECHAT_MIRROR=off` disables hook chat mirroring independently of archive registration and the settings companion. Existing remote-mode behavior remains controlled by FinaleChat's remote-mode setting.
 
+Keep the thread titled and summarized: the hooks name a new thread from the project directory, then periodically refresh it with `finalechat retitle` (or `PATCH /threads/{ref}`) carrying an LLM-written 1–2 sentence `description` of where the session stands. Never overwrite a user's manual title with a generic one — only make it more specific.
+
 ## Codex
 
 ```sh
@@ -75,6 +77,8 @@ The installer registers the existing FinaleChat MCP tools through native, condit
 Codex calls carrying native turn metadata automatically use `ext:codex:THREAD_ID`, so chat messages and the rollout archive land in the same thread. Explicit tool `thread` arguments and `FINALECHAT_THREAD` take precedence; clients without native metadata can use either to choose the archive's thread. The installer preserves Codex's own [per-tool approval settings](https://learn.chatgpt.com/docs/extend/mcp#other-configuration-options). Interactive Codex can request approval for a chat tool; a headless client with approval policy `never` needs an existing explicit tool approval or rejects that call. Registration does not grant that approval.
 
  Artifact publication reads native rollout JSONL files for the explicitly opted-in project, matching their native session ID and working directory before capture. It observes both active and archived rollout directories, including existing sessions for that project. MCP chat tools and transcript archival are independent capabilities.
+
+Keep the thread titled and summarized: a new thread starts named from the project directory, then stays fresh with periodic `finalechat retitle` (or `PATCH /threads/{ref}`) carrying an LLM-written 1–2 sentence `description` of where the session stands. Never overwrite a user's manual title with a generic one — only make it more specific.
 
 Codex settings use the installed App Server's `config/read`, `configRequirements/read`, and conditional `config/batchWrite` APIs. The adapter never rewrites TOML itself. Its current writable scope is **user defaults**; project/profile/managed origins are visible through native provenance and unsupported edits are locked or listed. Model, effort, summary, verbosity, sandbox/approval preferences and other declared fields are typed and validated again locally. Provider choices reference configurations established locally; provider credentials are excluded.
 

@@ -728,7 +728,7 @@ export async function dismissQuestion(id: string): Promise<void> {
   if (counts) applyCounts(counts.counts);
 }
 
-export async function updateThread(id: string, patch: { title?: string; archived?: boolean; muted?: boolean }): Promise<void> {
+export async function updateThread(id: string, patch: { title?: string; agent?: string; archived?: boolean; muted?: boolean; description?: string; summary?: string }): Promise<void> {
   const source = rest();
   const res = await api.updateThread(id, patch);
   upsertThreads([res.thread], source);

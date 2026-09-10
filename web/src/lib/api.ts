@@ -87,7 +87,7 @@ export const api = {
   },
   getThread: (id: string) => request<{ thread: Thread }>("GET", `${base}/threads/${id}`),
   getMessage: (id: string) => request<{ message: Message }>("GET", `${base}/messages/${encodeURIComponent(id)}`),
-  updateThread: (id: string, patch: { title?: string; agent?: string; archived?: boolean; muted?: boolean }) =>
+  updateThread: (id: string, patch: { title?: string; agent?: string; archived?: boolean; muted?: boolean; description?: string; summary?: string }) =>
     request<{ thread: Thread }>("PATCH", `${base}/threads/${id}`, patch),
   deleteThread: (id: string) => request<{ ok: true }>("DELETE", `${base}/threads/${id}`),
   bulkThreads: (input: { ids: string[]; archived?: boolean; muted?: boolean; mark_read?: true; delete?: true }) =>

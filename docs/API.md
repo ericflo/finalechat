@@ -96,6 +96,7 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | Question `options` | 20; `label` 200 characters, unique; `description` 1000 characters |
 | Answer `text` | 32 KiB |
 | Thread `title` / `agent` / `external_id` | 300 / 120 / 300 characters |
+| Thread `description` (`summary` alias) | 2000 characters |
 | `meta` | 16 KiB JSON object |
 | `wait` | 0 to 600 seconds (larger values are clamped to 600) |
 | `timeout_seconds` | 1 to 604800 (7 days) |
@@ -190,11 +191,20 @@ timed-out question wait returns the question with `"status": "pending"`.
   "preview_sender": "question",
   "unread_count": 1,
   "pending_questions": 1,
+  "description": "Staging deploy thread; promote only after checks pass.",
+  "summary": "Staging deploy thread; promote only after checks pass.",
   "activity": {"text": "Running the test suite…", "kind": "tool",
                "at": "2026-09-07T05:40:02.114532Z", "since": "2026-09-07T05:38:57.301176Z",
                "expires_at": "2026-09-07T05:40:47.114532Z"}
 }
 ```
+
+`description` is a 1–2 sentence summary of where the thread stands, kept
+fresh by the agent as the work evolves and shown under the title (at most
+2000 characters). `summary` is an accepted write alias of `description`:
+send either one (`description` wins when both are given) and every thread
+response includes both with identical values. Sending an empty
+`description` clears it.
 
 `preview` is a plain-text excerpt of the latest message or question;
 `preview_sender` is `agent`, `user`, `system` or `question`. `unread_count`
@@ -511,12 +521,15 @@ Revokes the token immediately. Returns `{"ok": true}` or `404`.
 ### POST /threads
 
 Creates a thread, or returns the existing one when `external_id` matches a
-thread you already have. All fields are optional.
+thread you already have. All fields are optional. `description` (alias
+`summary`, at most 2000 characters; `description` wins when both are given)
+sets the thread's 1–2 sentence summary.
 
 ```bash
 curl -sS https://www.finalechat.com/api/v1/threads \
   -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
   -d '{"external_id": "claude-code:7f3a9c2e", "title": "finalechat", "agent": "Claude Code",
+       "description": "Staging deploy thread; promote only after checks pass.",
        "meta": {"cwd": "/home/eric/finalechat"}}'
 ```
 
@@ -526,20 +539,23 @@ curl -sS https://www.finalechat.com/api/v1/threads \
   "created_at": "2026-09-07T05:38:55.019126Z", "updated_at": "2026-09-07T05:38:55.019126Z",
   "last_activity_at": "2026-09-07T05:38:55.019126Z", "last_read_at": "2026-09-07T05:38:55.019126Z",
   "archived_at": null, "muted": false, "preview": "", "preview_sender": "",
-  "unread_count": 0, "pending_questions": 0, "activity": null}}
+  "unread_count": 0, "pending_questions": 0,
+  "description": "Staging deploy thread; promote only after checks pass.",
+  "summary": "Staging deploy thread; promote only after checks pass.",
+  "activity": null}}
 ```
 
 Status is `201` with `"created": true` for a new thread and `200` with
 `"created": false` for an existing one. On the existing thread, a blank
-`title` or `agent` is filled from the request and `meta` is merged; a
-non-blank title is left alone (use `PATCH` to rename).
+`title`, `agent` or `description` is filled from the request and `meta` is
+merged; a non-blank title is left alone (use `PATCH` to rename).
 
 ### GET /threads
 
 | Parameter | Meaning |
 | --- | --- |
 | `archived` | `true`/`1` lists archived threads instead of active ones |
-| `q` | Case-insensitive substring match on title, agent and preview |
+| `q` | Case-insensitive substring match on title, agent, description and preview |
 | `limit` | 1 to 200, default 50 |
 | `cursor` | `next_cursor` from a previous page |
 
@@ -560,13 +576,23 @@ Threads are ordered by `last_activity_at`, newest first.
 
 ### PATCH /threads/{ref}
 
-Any subset of `title`, `agent`, `archived` (boolean), `muted` (boolean),
-`meta` (merged). Emits `thread.updated`.
+Any subset of `title`, `agent`, `description` (alias `summary`, at most 2000
+characters each; `description` wins when both are given), `archived`
+(boolean), `muted` (boolean), `meta` (merged). Emits `thread.updated`.
 
 ```bash
 curl -sS -X PATCH https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e \
   -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
   -d '{"title": "finalechat: release 1.2", "archived": true}'
+```
+
+Retitle and re-describe in one call:
+
+```bash
+curl -sS -X PATCH https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"title": "finalechat: release 1.2",
+       "description": "Staging deploy thread; promote only after checks pass."}'
 ```
 
 Returns `{"thread": {...}}`.
@@ -672,6 +698,7 @@ Creates a missing `ext:` thread on demand.
 | `notify` | boolean | Force (`true`) or suppress (`false`) the push for this message |
 | `meta` | object | Stored verbatim |
 | `title`, `agent` | string | Applied only when this request creates the `ext:` thread |
+| `description`, `summary` | string | Alias pair (at most 2000 characters each; `description` wins), applied only when this request creates the `ext:` thread |
 | `attachments` | array of ids | Pending uploads from the same thread (see [Attachments](#attachments)); at most 8 |
 
 The same request can be sent as `multipart/form-data`: every field above
@@ -864,6 +891,7 @@ unless the thread is muted.
 | `wait` | integer | Block up to this many seconds for the answer (also accepted as `?wait=`) |
 | `meta` | object | Stored verbatim |
 | `title`, `agent` | string | Applied only when this request creates the `ext:` thread |
+| `description`, `summary` | string | Alias pair (at most 2000 characters each; `description` wins), applied only when this request creates the `ext:` thread |
 
 ```bash
 curl -sS "https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/questions?wait=600" \

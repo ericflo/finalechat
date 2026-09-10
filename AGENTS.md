@@ -101,7 +101,8 @@ cap keeps proxies happy; loop if you need longer.
 - Anywhere a path takes a thread you may use its UUID or `ext:<external_id>`.
   `POST …/messages` and `POST …/questions` create a missing `ext:` thread on
   the fly; every other route returns 404 for an unknown one.
-- `PATCH /threads/{ref}` sets `title`, `agent`, `archived`, `muted` or merges
+- `PATCH /threads/{ref}` sets `title`, `agent`, `description` (or its
+  alias `summary`), `archived`, `muted` or merges
   `meta`. A new message or question un-archives a thread automatically.
 - To archive, mute, mark read, or delete many threads at once, use
   `POST /threads/bulk` with `{"ids": ["<uuid>", ...], "archived": true}` (1 to
@@ -112,6 +113,24 @@ cap keeps proxies happy; loop if you need longer.
 curl -sS https://www.finalechat.com/api/v1/threads/bulk \
   -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
   -d '{"ids": ["01a07a60-6dab-780a-bf4d-20ef15c0d7d7"], "archived": true}'
+```
+
+## Keep the thread titled and summarized
+
+Set a short title on the first post (the project or task name) so the
+thread is recognizable in the inbox. As the work evolves, refresh the title
+and PATCH a 1–2 sentence `description` of where things stand: after major
+findings, when the course changes, and before finishing. `summary` is
+accepted as an alias of `description` everywhere (if both are sent,
+`description` wins); thread JSON carries both with identical values.
+
+```bash
+curl -sS -X PATCH https://www.finalechat.com/api/v1/threads/ext:my-session-42 \
+  -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"title": "finalechat: release 1.2", "description": "Staging deploy is green; waiting on approval to promote to production."}'
+
+finalechat retitle -t ext:my-session-42 --title "finalechat: release 1.2" \
+  --description "Staging deploy is green; waiting on approval to promote to production."
 ```
 
 ## What to post, and when
@@ -358,8 +377,8 @@ Errors are JSON with a stable `code` and a human `message`:
 
 Limits: JSON bodies 1 MiB; message `body` 256 KiB; question `prompt` 8000
 bytes; up to 20 options with labels of 200 and descriptions of 1000
-characters; `meta` 16 KiB; `title` 300, `agent` 120, `external_id` 300
-characters; `wait` is clamped to 600 seconds; `timeout_seconds` 1 to 604800;
+characters; `meta` 16 KiB; `title` 300, `agent` 120, `external_id` 300,
+`description`/`summary` 2000 characters; `wait` is clamped to 600 seconds; `timeout_seconds` 1 to 604800;
 attachments 10 MiB each, 8 per message; activity `text` 200 characters on
 one line with `ttl_seconds` 1 to 600; a question with no `timeout_seconds`
 expires after 7 days. All timestamps are UTC RFC 3339; all ids are UUIDs.
@@ -379,7 +398,7 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `GET /threads?archived=&q=&limit=&cursor=` | List threads, newest activity first |
 | `POST /threads` | Create or fetch by `external_id` (idempotent) |
 | `GET /threads/{ref}` | One thread |
-| `PATCH /threads/{ref}` | `title`, `agent`, `archived`, `muted`, `meta` |
+| `PATCH /threads/{ref}` | `title`, `agent`, `description`/`summary`, `archived`, `muted`, `meta` |
 | `DELETE /threads/{ref}` | Delete thread and contents |
 | POST /threads/bulk | Archive/mute/mark-read/delete up to 100 threads at once |
 | `POST /threads/{ref}/read` | Mark read |

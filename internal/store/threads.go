@@ -16,6 +16,8 @@ type Thread struct {
 	ExternalID       *string    `json:"external_id"`
 	Title            string     `json:"title"`
 	Agent            string     `json:"agent"`
+	Description      string     `json:"description"`
+	Summary          string     `json:"summary"`
 	Meta             JSON       `json:"meta"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
@@ -61,10 +63,13 @@ var ActivityKinds = []string{ActivityThinking, ActivityWorking, ActivityTyping, 
 // MaxActivityTextRunes bounds a status line.
 const MaxActivityTextRunes = 200
 
+// MaxDescriptionRunes bounds the LLM-derived thread summary.
+const MaxDescriptionRunes = 2000
+
 // Archived reports whether the thread is archived.
 func (t *Thread) Archived() bool { return t.ArchivedAt != nil }
 
-const threadColumns = `t.id, t.user_id, t.external_id, t.title, t.agent, t.meta, t.created_at, t.updated_at,
+const threadColumns = `t.id, t.user_id, t.external_id, t.title, t.agent, t.description, t.meta, t.created_at, t.updated_at,
 	t.last_activity_at, t.last_read_at, t.archived_at, t.muted, t.preview, t.preview_sender,
 	(SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND m.sender <> 'user' AND m.deleted_at IS NULL AND m.created_at > t.last_read_at)::int,
 	(SELECT count(*) FROM questions q WHERE q.thread_id = t.id AND q.status = 'pending')::int,
@@ -95,12 +100,13 @@ func scanThread(row pgx.Row) (*Thread, error) {
 	var a Activity
 	var at, since, expires *time.Time
 	var live bool
-	if err := row.Scan(&t.ID, &t.UserID, &t.ExternalID, &t.Title, &t.Agent, &meta, &t.CreatedAt, &t.UpdatedAt,
+	if err := row.Scan(&t.ID, &t.UserID, &t.ExternalID, &t.Title, &t.Agent, &t.Description, &meta, &t.CreatedAt, &t.UpdatedAt,
 		&t.LastActivityAt, &t.LastReadAt, &t.ArchivedAt, &t.Muted, &t.Preview, &t.PreviewSender,
 		&t.UnreadCount, &t.PendingQuestions,
 		&a.Text, &a.Kind, &at, &since, &expires, &live); err != nil {
 		return nil, translate(err)
 	}
+	t.Summary = t.Description
 	scanJSON(meta, &t.Meta)
 	if live && at != nil && expires != nil {
 		a.At, a.ExpiresAt = *at, *expires
@@ -115,10 +121,11 @@ func scanThread(row pgx.Row) (*Thread, error) {
 
 // ThreadInput describes a thread to create.
 type ThreadInput struct {
-	ExternalID string
-	Title      string
-	Agent      string
-	Meta       JSON
+	ExternalID  string
+	Title       string
+	Agent       string
+	Description string
+	Meta        JSON
 }
 
 // CreateThread inserts a thread. When ExternalID is set and a thread with that
@@ -128,6 +135,7 @@ type ThreadInput struct {
 func (s *Store) CreateThread(ctx context.Context, userID uuid.UUID, in ThreadInput) (thread *Thread, created bool, err error) {
 	in.Title = truncate(strings.TrimSpace(in.Title), 300)
 	in.Agent = truncate(strings.TrimSpace(in.Agent), 120)
+	in.Description = truncate(strings.TrimSpace(in.Description), MaxDescriptionRunes)
 	in.ExternalID = truncate(strings.TrimSpace(in.ExternalID), 300)
 	var external *string
 	if in.ExternalID != "" {
@@ -138,10 +146,11 @@ func (s *Store) CreateThread(ctx context.Context, userID uuid.UUID, in ThreadInp
 			existing, err := scanThread(tx.QueryRow(ctx, `UPDATE threads t SET
 					title = CASE WHEN t.title = '' THEN $3 ELSE t.title END,
 					agent = CASE WHEN t.agent = '' THEN $4 ELSE t.agent END,
-					meta = t.meta || $5::jsonb,
+					description = CASE WHEN t.description = '' THEN $5 ELSE t.description END,
+					meta = t.meta || $6::jsonb,
 					updated_at = now()
 				WHERE t.user_id = $1 AND t.external_id = $2
-				RETURNING `+threadColumns, userID, *external, in.Title, in.Agent, in.Meta.value()))
+				RETURNING `+threadColumns, userID, *external, in.Title, in.Agent, in.Description, in.Meta.value()))
 			if err == nil {
 				thread = existing
 				return nil
@@ -151,10 +160,10 @@ func (s *Store) CreateThread(ctx context.Context, userID uuid.UUID, in ThreadInp
 			}
 		}
 		inserted, err := scanThread(tx.QueryRow(ctx, `WITH t AS (
-				INSERT INTO threads (id, user_id, external_id, title, agent, meta)
-				VALUES ($1, $2, $3, $4, $5, $6) RETURNING *
+				INSERT INTO threads (id, user_id, external_id, title, agent, description, meta)
+				VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *
 			) SELECT `+threadColumns+` FROM t`,
-			NewID(), userID, external, in.Title, in.Agent, in.Meta.value()))
+			NewID(), userID, external, in.Title, in.Agent, in.Description, in.Meta.value()))
 		if err != nil {
 			return err
 		}
@@ -188,7 +197,7 @@ type ThreadFilter struct {
 	Limit int
 	// Cursor continues a previous page.
 	Cursor *Cursor
-	// Query is a case-insensitive substring match on title and agent.
+	// Query is a case-insensitive substring match on title, agent and description.
 	Query string
 }
 
@@ -207,7 +216,7 @@ func (s *Store) ListThreads(ctx context.Context, userID uuid.UUID, f ThreadFilte
 	if q := strings.TrimSpace(f.Query); q != "" {
 		args = append(args, "%"+escapeLike(q)+"%")
 		n := itoa(len(args))
-		where += " AND (t.title ILIKE $" + n + " ESCAPE '\\' OR t.agent ILIKE $" + n + " ESCAPE '\\' OR t.preview ILIKE $" + n + " ESCAPE '\\' OR t.external_id ILIKE $" + n + " ESCAPE '\\')"
+		where += " AND (t.title ILIKE $" + n + " ESCAPE '\\' OR t.agent ILIKE $" + n + " ESCAPE '\\' OR t.description ILIKE $" + n + " ESCAPE '\\' OR t.preview ILIKE $" + n + " ESCAPE '\\' OR t.external_id ILIKE $" + n + " ESCAPE '\\')"
 	}
 	rows, err := s.pool.Query(ctx, "SELECT "+threadColumns+" FROM threads t WHERE "+where+" ORDER BY t.last_activity_at DESC, t.id DESC LIMIT $2", args...)
 	if err != nil {
@@ -236,11 +245,12 @@ func (s *Store) ListThreads(ctx context.Context, userID uuid.UUID, f ThreadFilte
 
 // ThreadPatch updates selected fields; nil pointers are left untouched.
 type ThreadPatch struct {
-	Title    *string
-	Agent    *string
-	Archived *bool
-	Muted    *bool
-	Meta     JSON
+	Title       *string
+	Agent       *string
+	Description *string
+	Archived    *bool
+	Muted       *bool
+	Meta        JSON
 }
 
 // UpdateThread applies a patch.
@@ -256,6 +266,9 @@ func (s *Store) UpdateThread(ctx context.Context, userID, id uuid.UUID, p Thread
 	}
 	if p.Agent != nil {
 		add("agent = ?", truncate(strings.TrimSpace(*p.Agent), 120))
+	}
+	if p.Description != nil {
+		add("description = ?", truncate(strings.TrimSpace(*p.Description), MaxDescriptionRunes))
 	}
 	if p.Archived != nil {
 		if *p.Archived {

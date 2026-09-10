@@ -43,6 +43,10 @@ export interface Thread {
   muted: boolean;
   preview: string;
   preview_sender: string;
+  /** One-to-two sentence summary of the thread (max 2000 chars). `summary` is an alias with identical value. */
+  description: string;
+  /** Alias of `description`; identical value. Prefer `description`. */
+  summary: string;
   unread_count: number;
   pending_questions: number;
   activity: Activity | null;

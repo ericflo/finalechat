@@ -358,7 +358,7 @@ class Client:
         return self.request("PATCH", "/api/v1/settings", body=fields).get("settings", {})
 
     def create_thread(self, external_id: str | None = None, title: str = "", agent: str = "",
-                      meta: dict | None = None) -> dict:
+                      meta: dict | None = None, description: str = "", summary: str = "") -> dict:
         body: dict = {}
         if external_id:
             body["external_id"] = external_id
@@ -368,7 +368,21 @@ class Client:
             body["agent"] = agent
         if meta:
             body["meta"] = meta
+        effective = description or summary or ""
+        if effective:
+            body["description"] = effective
         return self.request("POST", "/api/v1/threads", body=body)
+
+    def patch_thread(self, ref: str, *, title: str | None = None, agent: str | None = None,
+                     description: str | None = None) -> dict:
+        body: dict = {}
+        if title is not None:
+            body["title"] = title
+        if agent is not None:
+            body["agent"] = agent
+        if description is not None:
+            body["description"] = description
+        return self.request("PATCH", f"/api/v1/threads/{self.ref_path(ref)}", body=body).get("thread", {})
 
     def delete_message(self, message_id: str) -> dict:
         return self.request("DELETE", f"/api/v1/messages/{urllib.parse.quote(message_id, safe='')}")
@@ -377,7 +391,8 @@ class Client:
         return self.request("GET", f"/api/v1/threads/{self.ref_path(ref)}").get("thread", {})
 
     def set_activity(self, ref: str, text: str, *, kind: str | None = None, ttl: int | None = None,
-                     seq: int | None = None, title: str = "", agent: str = "") -> dict:
+                     seq: int | None = None, title: str = "", agent: str = "",
+                     description: str = "") -> dict:
         """Set the thread's live status line; an empty text clears it. The
         thread must exist: an `ext:` reference is created first when it is
         missing (so `finalechat status` works before the first message)."""
@@ -394,7 +409,7 @@ class Client:
         except APIError as err:
             if err.status != 404 or not ref.startswith("ext:"):
                 raise
-            self.create_thread(ref[4:], title=title, agent=agent)
+            self.create_thread(ref[4:], title=title, agent=agent, description=description)
             return self.request("POST", path, body=body, timeout=10, retries=0)
 
     def clear_activity(self, ref: str, seq: int | None = None) -> dict:
@@ -423,7 +438,8 @@ class Client:
 
     def post_message(self, ref: str, body: str, *, sender: str | None = None, important: bool = False,
                      notify: bool | None = None, fmt: str = "markdown", meta: dict | None = None,
-                     title: str = "", agent: str = "", files: list | None = None,
+                     title: str = "", agent: str = "", description: str = "", summary: str = "",
+                     files: list | None = None,
                      client_key: str | None = None, activity: dict | None = None) -> dict:
         """Post a message; with `files` (list of (filename, content_type, bytes)) it is one multipart request.
         A `client_key` makes the post safe to retry (the server dedupes it). `activity` is the
@@ -443,6 +459,9 @@ class Client:
             payload["title"] = title
         if agent:
             payload["agent"] = agent
+        effective_description = description or summary or ""
+        if effective_description:
+            payload["description"] = effective_description
         path = f"/api/v1/threads/{self.ref_path(ref)}/messages"
         if files:
             fields = dict(payload)
@@ -464,7 +483,8 @@ class Client:
         return self.request("GET", f"/api/v1/threads/{self.ref_path(ref)}/messages", params=params, timeout=timeout)
 
     def ask(self, ref: str, prompt: str, options: list, *, multi: bool = False, freeform: bool = True,
-            timeout_seconds: int | None = None, meta: dict | None = None, title: str = "", agent: str = "") -> dict:
+            timeout_seconds: int | None = None, meta: dict | None = None, title: str = "", agent: str = "",
+            description: str = "", summary: str = "") -> dict:
         payload: dict = {"prompt": prompt, "options": options, "allow_freeform": freeform, "multi_select": multi,
                          "client_key": secrets.token_hex(16)}
         if timeout_seconds:
@@ -475,6 +495,9 @@ class Client:
             payload["title"] = title
         if agent:
             payload["agent"] = agent
+        effective_description = description or summary or ""
+        if effective_description:
+            payload["description"] = effective_description
         return self.request("POST", f"/api/v1/threads/{self.ref_path(ref)}/questions", body=payload)
 
     def get_question(self, qid: str, wait: int | None = None) -> dict:
@@ -927,13 +950,19 @@ def _ancestor_pids_ordered() -> list:
 class ThreadTarget:
     """A thread reference plus the naming to use if it has to be created."""
 
-    def __init__(self, ref: str, title: str = "", agent: str = ""):
+    def __init__(self, ref: str, title: str = "", agent: str = "", description: str = ""):
         self.ref = ref
         self.title = title
         self.agent = agent
+        self.description = description
 
     def __str__(self) -> str:
         return self.ref
+
+
+def resolve_description(description: str | None = None, summary: str | None = None) -> str:
+    """--description wins over --summary; both are creation-time aliases."""
+    return description or summary or ""
 
 
 def default_agent(fallback: str = "Terminal") -> str:
@@ -941,6 +970,7 @@ def default_agent(fallback: str = "Terminal") -> str:
 
 
 def resolve_target(explicit: str | None = None, title: str | None = None, agent: str | None = None,
+                   description: str | None = None, summary: str | None = None,
                    fallback_agent: str = "Terminal", fallback_prefix: str = "cli") -> ThreadTarget:
     """Which thread a command means, in order: an explicit ref, $FINALECHAT_THREAD,
     the Claude Code session this process runs inside (Claude Code names it in
@@ -948,22 +978,23 @@ def resolve_target(explicit: str | None = None, title: str | None = None, agent:
     ancestor of ours), the most recent live session in this directory or a
     parent of it, and last a thread per directory."""
     cwd = os.getcwd()
+    desc = resolve_description(description, summary)
     if explicit:
-        return ThreadTarget(explicit, title or "", agent or "")
+        return ThreadTarget(explicit, title or "", agent or "", desc)
     env = os.environ.get("FINALECHAT_THREAD")
     if env:
-        return ThreadTarget(env, title or "", agent or "")
+        return ThreadTarget(env, title or "", agent or "", desc)
     session = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
     if session:
-        return ThreadTarget("ext:claude-code:" + session, title or "", agent or "")
+        return ThreadTarget("ext:claude-code:" + session, title or "", agent or "", desc)
     pointer = read_by_pid_pointer()
     if pointer:
-        return ThreadTarget("ext:" + pointer["external_id"], title or "", agent or "")
+        return ThreadTarget("ext:" + pointer["external_id"], title or "", agent or "", desc)
     directory = os.path.abspath(cwd)
     while True:
         pointer = read_by_cwd_pointer(directory)
         if pointer:
-            return ThreadTarget("ext:" + pointer["external_id"], title or "", agent or "")
+            return ThreadTarget("ext:" + pointer["external_id"], title or "", agent or "", desc)
         parent = os.path.dirname(directory)
         if parent == directory:
             break
@@ -972,7 +1003,7 @@ def resolve_target(explicit: str | None = None, title: str | None = None, agent:
     if sys.stderr.isatty():
         print(f"finalechat: no agent session found here; using this directory's thread ({ext})", file=sys.stderr)
     return ThreadTarget(ext, title or os.path.basename(os.path.abspath(cwd)) or "Terminal",
-                        agent or default_agent(fallback_agent))
+                        agent or default_agent(fallback_agent), desc)
 
 
 def missing_thread(err: APIError, target: ThreadTarget) -> APIError:
@@ -1143,6 +1174,9 @@ def cmd_threads(args) -> int:
             head += f"  [{agent}]"
         head += f"  {when}"
         print(head)
+        description = t.get("description") or t.get("summary") or ""
+        if description:
+            print("     " + truncate(description, 120))
         preview = t.get("preview") or ""
         if preview:
             print("     " + truncate(preview, max(20, width - 6)))
@@ -1192,7 +1226,8 @@ def cmd_say(args) -> int:
         body = ""
     if not body.strip() and not files:
         raise CLIError("Nothing to send. Pass the message as arguments, on stdin, or attach a file with -f.")
-    target = resolve_target(args.thread, args.title, args.agent)
+    target = resolve_target(args.thread, args.title, args.agent,
+                            getattr(args, "description", None), getattr(args, "summary", None))
     notify = None
     if args.notify is True:
         notify = True
@@ -1200,6 +1235,7 @@ def cmd_say(args) -> int:
         notify = False
     resp = client.post_message(target.ref, body, important=args.important, notify=notify,
                                fmt="text" if args.text else "markdown", title=target.title, agent=target.agent,
+                               description=target.description,
                                files=files)
     if args.json:
         print_json(resp)
@@ -1297,7 +1333,8 @@ def describe_activity(activity: dict | None) -> str:
 
 def cmd_status(args) -> int:
     client = client_from_args(args)
-    target = resolve_target(args.thread, args.title, args.agent)
+    target = resolve_target(args.thread, args.title, args.agent,
+                            getattr(args, "description", None), getattr(args, "summary", None))
     text = " ".join(args.text or []).strip()
     # Every writer of a thread's status line shares one clock (nanoseconds),
     # the hooks included, so a slow earlier write can never overtake this one
@@ -1308,7 +1345,8 @@ def cmd_status(args) -> int:
             resp = client.clear_activity(target.ref, seq=seq)
         elif text:
             resp = client.set_activity(target.ref, text, kind=args.kind, ttl=args.ttl, seq=seq,
-                                       title=target.title, agent=target.agent)
+                                       title=target.title, agent=target.agent,
+                                       description=target.description)
         else:
             resp = None
             thread = client.get_thread(target.ref)
@@ -1382,9 +1420,11 @@ def cmd_ask(args) -> int:
     options = parse_options(args.option)
     if not options and args.no_freeform:
         raise CLIError("A question without options must allow free-form answers.")
-    target = resolve_target(args.thread, args.title, args.agent)
+    target = resolve_target(args.thread, args.title, args.agent,
+                            getattr(args, "description", None), getattr(args, "summary", None))
     resp = client.ask(target.ref, prompt, options, multi=args.multi, freeform=not args.no_freeform,
-                      timeout_seconds=args.timeout, title=target.title, agent=target.agent)
+                      timeout_seconds=args.timeout, title=target.title, agent=target.agent,
+                      description=target.description)
     question = resp.get("question") or {}
     if not question.get("id"):
         raise CLIError("The server did not return a question.", EXIT_API)
@@ -1392,6 +1432,43 @@ def cmd_ask(args) -> int:
         print(f"asked · question {question['id']} · waiting up to {args.wait}s", file=sys.stderr)
         question = wait_for_answer(client, question["id"], args.wait)
     return finish_question(question, args.json)
+
+
+def cmd_retitle(args) -> int:
+    client = client_from_args(args)
+    description = getattr(args, "description", None)
+    summary = getattr(args, "summary", None)
+    clear = bool(getattr(args, "clear_description", False))
+    if (args.title is None and args.agent is None and not description
+            and not summary and not clear):
+        raise CLIError("Nothing to change. Pass --title, --agent, --description/--summary or --clear-description.")
+    target = resolve_target(args.thread)
+    patch: dict = {}
+    if args.title is not None:
+        patch["title"] = args.title
+    if args.agent is not None:
+        patch["agent"] = args.agent
+    if clear:
+        patch["description"] = ""
+    elif description or summary:
+        patch["description"] = description or summary or ""
+    try:
+        thread = client.patch_thread(target.ref, **patch)
+    except APIError as err:
+        raise missing_thread(err, target) from None
+    if args.json:
+        print_json(thread)
+        return EXIT_OK
+    desc = thread.get("description") or thread.get("summary") or ""
+    line = f"retitled · thread {thread.get('id')} · {thread.get('title') or '(untitled)'}"
+    if thread.get("agent"):
+        line += f"  [{thread.get('agent')}]"
+    print(line)
+    if desc:
+        print("  " + truncate(desc, 120))
+    elif clear:
+        print("  description cleared")
+    return EXIT_OK
 
 
 def cmd_wait_answer(args) -> int:
@@ -2346,8 +2423,28 @@ def mcp_tools() -> list[dict]:
                     },
                     "thread": thread_prop,
                     "title": {"type": "string", "description": "Title to give the thread if it is created."},
+                    "description": {"type": "string", "description": "1-2 sentence summary to give the thread if it is created (max 2000 characters)."},
+                    "summary": {"type": "string", "description": "Alias of description (creation-time only)."},
                 },
                 "required": ["message"],
+            },
+        },
+        {
+            "name": "finalechat_retitle",
+            "description": (
+                "Rename a Finalechat thread and/or refresh its 1-2 sentence summary. "
+                "PATCHes the thread immediately; unlike finalechat_send/finalechat_ask, "
+                "this works on an existing thread. At least one of title, description/summary or agent is required."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "thread": thread_prop,
+                    "title": {"type": "string", "description": "New thread title."},
+                    "description": {"type": "string", "description": "New 1-2 sentence thread summary (max 2000 characters)."},
+                    "summary": {"type": "string", "description": "Alias of description."},
+                    "agent": {"type": "string", "description": "New agent name."},
+                },
             },
         },
         {
@@ -2381,6 +2478,9 @@ def mcp_tools() -> list[dict]:
                     "timeout_seconds": {"type": "integer", "default": 1800, "minimum": 1, "maximum": 604800,
                                         "description": "How long to wait for an answer."},
                     "thread": thread_prop,
+                    "title": {"type": "string", "description": "Title to give the thread if it is created."},
+                    "description": {"type": "string", "description": "1-2 sentence summary to give the thread if it is created (max 2000 characters)."},
+                    "summary": {"type": "string", "description": "Alias of description (creation-time only)."},
                 },
                 "required": ["prompt"],
             },
@@ -2510,6 +2610,8 @@ def mcp_tools() -> list[dict]:
 def mcp_target(arguments: dict, metadata=None) -> ThreadTarget:
     explicit = arguments.get("thread")
     title = arguments.get("title")
+    description = arguments.get("description")
+    summary = arguments.get("summary")
     # Codex shares MCP processes across turns. Use this call's native thread
     # metadata, never a process-wide "most recent Codex session" pointer.
     # Explicit caller/environment targets keep their existing precedence.
@@ -2518,9 +2620,13 @@ def mcp_target(arguments: dict, metadata=None) -> ThreadTarget:
         thread = native.get("thread_id") if isinstance(native, dict) else None
         if isinstance(thread, str) and re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", thread) and metadata.get("threadId", thread) == thread:
             return ThreadTarget("ext:codex:" + thread.lower(),
-                                title if isinstance(title, str) and title else os.path.basename(os.getcwd()), "Codex")
+                                title if isinstance(title, str) and title else os.path.basename(os.getcwd()), "Codex",
+                                resolve_description(description if isinstance(description, str) else None,
+                                                    summary if isinstance(summary, str) else None))
     return resolve_target(explicit if isinstance(explicit, str) and explicit else None,
                           title if isinstance(title, str) else None, None,
+                          description if isinstance(description, str) else None,
+                          summary if isinstance(summary, str) else None,
                           fallback_agent="MCP agent", fallback_prefix="mcp")
 
 
@@ -2570,7 +2676,8 @@ def mcp_call(client: Client, name: str, arguments: dict, metadata=None):
             raise CLIError("message is required unless attachments are given")
         target = mcp_target(arguments, metadata)
         resp = client.post_message(target.ref, message, important=bool(arguments.get("important")),
-                                   title=target.title, agent=target.agent, files=files)
+                                   title=target.title, agent=target.agent,
+                                   description=target.description, files=files)
         thread = resp.get("thread") or {}
         out = f"Sent to thread {thread.get('id')} ({thread.get('title') or 'untitled'}); message id {(resp.get('message') or {}).get('id')}"
         for att in message_attachments(resp.get("message") or {}):
@@ -2597,7 +2704,8 @@ def mcp_call(client: Client, name: str, arguments: dict, metadata=None):
         timeout = int(arguments.get("timeout_seconds") or 1800)
         target = mcp_target(arguments, metadata)
         resp = client.ask(target.ref, prompt, options, multi=bool(arguments.get("multi_select")),
-                          freeform=freeform, timeout_seconds=timeout, title=target.title, agent=target.agent)
+                          freeform=freeform, timeout_seconds=timeout, title=target.title, agent=target.agent,
+                          description=target.description)
         question = resp.get("question") or {}
         question = wait_for_answer(client, question["id"], timeout)
         status = question.get("status")
@@ -2611,6 +2719,33 @@ def mcp_call(client: Client, name: str, arguments: dict, metadata=None):
         if status == "pending":
             return f"No answer within {timeout} seconds; question {question.get('id')} still pending."
         return f"The question was {status} before it was answered."
+
+    if name == "finalechat_retitle":
+        title = arguments.get("title")
+        agent = arguments.get("agent")
+        description = arguments.get("description")
+        summary = arguments.get("summary")
+        patch: dict = {}
+        if isinstance(title, str) and title:
+            patch["title"] = title
+        if isinstance(agent, str) and agent:
+            patch["agent"] = agent
+        desc = resolve_description(description if isinstance(description, str) else None,
+                                   summary if isinstance(summary, str) else None)
+        if desc:
+            patch["description"] = desc
+        if not patch:
+            raise CLIError("Pass at least one of title, description/summary or agent.")
+        target = mcp_target(arguments, metadata)
+        try:
+            thread = client.patch_thread(target.ref, **patch)
+        except APIError as err:
+            raise missing_thread(err, target) from None
+        out_desc = thread.get("description") or thread.get("summary") or ""
+        out = f"Thread {thread.get('id')} now titled '{thread.get('title') or '(untitled)'}'"
+        if out_desc:
+            out += f": {out_desc}"
+        return out
 
     if name == "finalechat_status":
         text = " ".join(str(arguments.get("text") or "").split())
@@ -4670,6 +4805,11 @@ def add_thread_args(parser: argparse.ArgumentParser, naming: bool = True) -> Non
         parser.add_argument("--title", help="title for the thread if it has to be created")
         parser.add_argument("--agent", help="agent name for the thread if it has to be created "
                                             "(default: $FINALECHAT_AGENT or Terminal)")
+        parser.add_argument("--description", metavar="TEXT",
+                            help="1-2 sentence summary for the thread if it has to be created "
+                                 "(--summary is an alias; --description wins)")
+        parser.add_argument("--summary", metavar="TEXT",
+                            help="alias of --description (creation-time only)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -4819,6 +4959,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="print the question as JSON")
     p.set_defaults(func=cmd_ask)
 
+    p = sub.add_parser("retitle", help="rename a thread and/or refresh its summary", formatter_class=Formatter,
+                       aliases=["describe"],
+                       description="Rename a thread and/or refresh its 1-2 sentence summary "
+                                   "(PATCH /threads/{ref}). At least one of --title, --agent, "
+                                   "--description/--summary or --clear-description is required.",
+                       epilog="examples:\n  finalechat retitle -t ext:my-session --title \"Deploy v2\" --description \"Rolling out v2 to staging.\"\n"
+                              "  finalechat retitle --clear-description")
+    p.add_argument("-t", "--thread", metavar="REF",
+                   help="thread id or ext:<external id> (default: $FINALECHAT_THREAD, "
+                        "the current Claude Code session, or one thread per directory)")
+    p.add_argument("--title", metavar="TEXT", help="new thread title")
+    p.add_argument("--agent", metavar="TEXT", help="new agent name")
+    p.add_argument("--description", metavar="TEXT",
+                   help="new 1-2 sentence thread summary (--summary is an alias; --description wins)")
+    p.add_argument("--summary", metavar="TEXT", help="alias of --description")
+    p.add_argument("--clear-description", action="store_true", help="clear the thread summary (sends an empty description)")
+    p.add_argument("--json", action="store_true", help="print the raw thread as JSON")
+    p.set_defaults(func=cmd_retitle)
+
     p = sub.add_parser("fetch", help="download an attachment the human sent", formatter_class=Formatter,
                        description="Download an attachment (by id or Finalechat URL) to a local file and print "
                                    "the path. Existing files are never overwritten; a numbered name is used.")
@@ -4873,7 +5032,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("mcp", help="run the MCP server over stdio", formatter_class=Formatter,
                        description="Model Context Protocol server exposing finalechat_send, finalechat_status, "
-                                   "finalechat_ask, finalechat_wait_for_reply, finalechat_read, "
+                                   "finalechat_ask, finalechat_retitle, finalechat_wait_for_reply, finalechat_read, "
                                    "finalechat_bulk, finalechat_view_attachment and finalechat_fetch_attachment.")
     p.set_defaults(func=cmd_mcp)
 

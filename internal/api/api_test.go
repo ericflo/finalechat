@@ -367,6 +367,102 @@ func TestThreadsAndMessages(t *testing.T) {
 	}
 }
 
+func TestThreadDescription(t *testing.T) {
+	_, a := setup(t)
+
+	// Create with description: responses carry description and summary alike.
+	created := a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{
+		"external_id": "desc:1", "title": "deploy", "description": "Staging deploy thread.",
+	})
+	thread := sub(created, "thread")
+	id := str(thread, "id")
+	if str(thread, "description") != "Staging deploy thread." || str(thread, "summary") != "Staging deploy thread." {
+		t.Fatalf("expected description/summary pair, got %v", thread)
+	}
+
+	// The summary alias works on create too.
+	aliased := a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{
+		"external_id": "desc:2", "summary": "Release tracking.",
+	})
+	ath := sub(aliased, "thread")
+	if str(ath, "description") != "Release tracking." || str(ath, "summary") != "Release tracking." {
+		t.Fatalf("expected summary alias on create, got %v", ath)
+	}
+
+	// Both given: description wins.
+	both := a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{
+		"external_id": "desc:3", "description": "winner", "summary": "loser",
+	})
+	bth := sub(both, "thread")
+	if str(bth, "description") != "winner" || str(bth, "summary") != "winner" {
+		t.Fatalf("expected description to win, got %v", bth)
+	}
+
+	// Patch via the summary alias.
+	patched := a.must(http.StatusOK, "PATCH", "/api/v1/threads/"+id, map[string]any{"summary": "Patched summary."})
+	pth := sub(patched, "thread")
+	if str(pth, "description") != "Patched summary." || str(pth, "summary") != "Patched summary." {
+		t.Fatalf("expected patched pair, got %v", pth)
+	}
+
+	// Patch with both: description wins.
+	patched = a.must(http.StatusOK, "PATCH", "/api/v1/threads/"+id, map[string]any{"description": "D", "summary": "S"})
+	pth = sub(patched, "thread")
+	if str(pth, "description") != "D" || str(pth, "summary") != "D" {
+		t.Fatalf("expected description to win on patch, got %v", pth)
+	}
+
+	// Auto-create via POST message with description.
+	auto := a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:desc:msg/messages", map[string]any{"body": "hi", "description": "From a message."})
+	autoID := str(sub(auto, "thread"), "id")
+	if mth := sub(auto, "thread"); str(mth, "description") != "From a message." || str(mth, "summary") != "From a message." {
+		t.Fatalf("expected description on auto-created thread, got %v", mth)
+	}
+
+	// Auto-create via POST question with summary.
+	asked := a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:desc:q/questions", map[string]any{"prompt": "Ship it?", "summary": "From a question."})
+	askedID := str(sub(asked, "question"), "id")
+	if qth := sub(asked, "thread"); str(qth, "description") != "From a question." || str(qth, "summary") != "From a question." {
+		t.Fatalf("expected summary on auto-created thread, got %v", qth)
+	}
+	// Withdraw it so no pending question leaks into other tests (the
+	// long-poll test grabs the newest pending question).
+	a.must(http.StatusOK, "POST", "/api/v1/questions/"+askedID+"/cancel", nil)
+
+	// Search matches the description.
+	found := a.must(http.StatusOK, "GET", "/api/v1/threads?q=From+a+message", nil)
+	seen := false
+	for _, it := range found["threads"].([]any) {
+		if str(it.(map[string]any), "id") == autoID {
+			seen = true
+		}
+	}
+	if !seen {
+		t.Fatalf("expected search to match the description, got %v", found)
+	}
+
+	// Over-long values are rejected everywhere.
+	tooLong := strings.Repeat("x", 2001)
+	for _, tc := range []struct {
+		name   string
+		status int
+		method string
+		path   string
+		body   map[string]any
+	}{
+		{"create description", 0, "POST", "/api/v1/threads", map[string]any{"description": tooLong}},
+		{"create summary", 0, "POST", "/api/v1/threads", map[string]any{"summary": tooLong}},
+		{"patch description", 0, "PATCH", "/api/v1/threads/" + id, map[string]any{"description": tooLong}},
+		{"patch summary", 0, "PATCH", "/api/v1/threads/" + id, map[string]any{"summary": tooLong}},
+		{"message description", 0, "POST", "/api/v1/threads/" + id + "/messages", map[string]any{"body": "x", "description": tooLong}},
+		{"question summary", 0, "POST", "/api/v1/threads/" + id + "/questions", map[string]any{"prompt": "x", "summary": tooLong}},
+	} {
+		if status, out := a.do(tc.method, tc.path, tc.body); status != http.StatusUnprocessableEntity || str(sub(out, "error"), "code") != "validation_failed" {
+			t.Fatalf("%s: expected validation failure, got %d %v", tc.name, status, out)
+		}
+	}
+}
+
 func TestQuestionLifecycleWithLongPoll(t *testing.T) {
 	b, a := setup(t)
 	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "q:1", "title": "questions"}), "thread"), "id")

@@ -27,6 +27,8 @@ type questionRequest struct {
 	Meta           json.RawMessage        `json:"meta"`
 	Title          string                 `json:"title"`
 	Agent          string                 `json:"agent"`
+	Description    string                 `json:"description"`
+	Summary        string                 `json:"summary"`
 	// Activity keeps a status line on the thread while the agent waits (it
 	// may keep working); absent, asking clears the status.
 	Activity *activityBody `json:"activity"`
@@ -148,18 +150,29 @@ func (s *Server) handleCreateQuestion(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errValidation("agent must be at most 120 characters."))
 		return
 	}
+	if len(req.Description) > 2000 {
+		writeError(w, errValidation("description must be at most 2000 characters."))
+		return
+	}
+	if len(req.Summary) > 2000 {
+		writeError(w, errValidation("summary must be at most 2000 characters."))
+		return
+	}
 	thread, threadCreated, err := s.resolveThread(r, true)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if threadCreated && (req.Title != "" || req.Agent != "") {
+	if threadCreated && (req.Title != "" || req.Agent != "" || req.Description != "" || req.Summary != "") {
 		patch := store.ThreadPatch{}
 		if req.Title != "" {
 			patch.Title = &req.Title
 		}
 		if req.Agent != "" {
 			patch.Agent = &req.Agent
+		}
+		if desc := threadDescription(req.Description, req.Summary); desc != "" {
+			patch.Description = &desc
 		}
 		if t, err := s.store.UpdateThread(r.Context(), p.user.ID, thread.ID, patch); err == nil {
 			thread = t

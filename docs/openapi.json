@@ -828,7 +828,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Case-insensitive substring match on title, agent and preview."
+            "description": "Case-insensitive substring match on title, agent, description and preview."
           },
           {
             "name": "limit",
@@ -6886,7 +6886,9 @@
           "preview_sender",
           "unread_count",
           "pending_questions",
-          "activity"
+          "activity",
+          "description",
+          "summary"
         ],
         "properties": {
           "id": {
@@ -6975,6 +6977,16 @@
               }
             ],
             "description": "The agent's live status line, or null when there is none or it has lapsed."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "LLM-derived summary shown under the title in the archive."
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Alias of description; always identical in responses."
           }
         },
         "example": {
@@ -7001,7 +7013,9 @@
             "at": "2026-09-07T05:40:02.114532Z",
             "since": "2026-09-07T05:38:57.301176Z",
             "expires_at": "2026-09-07T05:40:47.114532Z"
-          }
+          },
+          "description": "",
+          "summary": ""
         }
       },
       "Message": {
@@ -7306,6 +7320,16 @@
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "LLM-derived summary shown under the title in the archive."
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Alias of description; description wins when both are given."
           }
         },
         "example": {
@@ -7314,7 +7338,8 @@
           "agent": "Claude Code",
           "meta": {
             "cwd": "/home/eric/finalechat"
-          }
+          },
+          "description": ""
         }
       },
       "ThreadPatchRequest": {
@@ -7336,11 +7361,21 @@
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Alias of description; description wins when both are given."
           }
         },
         "example": {
           "title": "finalechat: release 1.2",
-          "archived": true
+          "archived": true,
+          "description": "Staging deploy thread; promote only after checks pass."
         }
       },
       "MessageCreateRequest": {
@@ -7409,6 +7444,16 @@
             "type": "string",
             "maxLength": 200,
             "description": "Idempotency key scoped to the thread (the Idempotency-Key header is equivalent): a repeat returns the original with 200 and created=false."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Applied only when this request creates the ext: thread."
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Alias of description; applied only when this request creates the ext: thread."
           }
         },
         "example": {
@@ -7476,6 +7521,16 @@
             "type": "string",
             "maxLength": 200,
             "description": "Idempotency key scoped to the thread (the Idempotency-Key header is equivalent): a repeat returns the original with 200 and created=false."
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Applied only when this request creates the ext: thread."
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Alias of description; applied only when this request creates the ext: thread."
           }
         },
         "example": {
@@ -7934,6 +7989,14 @@
           "client_key": {
             "type": "string",
             "maxLength": 200
+          },
+          "description": {
+            "type": "string",
+            "description": "Applied only when this request creates the ext: thread."
+          },
+          "summary": {
+            "type": "string",
+            "description": "Alias of description; applied only when this request creates the ext: thread."
           }
         }
       },
