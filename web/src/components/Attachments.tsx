@@ -173,6 +173,12 @@ export function ImageViewer({ items, index, onClose }: { items: Attachment[]; in
     }
     if (g.start.scale === 1 && view.scale === 1) setView({ scale: 1, x: 0, y: 0 });
     if (!g.moved) {
+      // Single tap on the backdrop (outside the image) dismisses the viewer.
+      const t = e.target as HTMLElement | null;
+      if (t && t.tagName !== "IMG" && !t.closest?.("img")) {
+        onClose();
+        return;
+      }
       const now = Date.now();
       if (now - lastTap.current < 320) {
         // Double tap: zoom in around the tap, or back out.
