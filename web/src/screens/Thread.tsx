@@ -515,13 +515,10 @@ function threadDescription(t: Thread): string {
   return (t.description || t.summary || "").trim();
 }
 
-/** The thread summary shown under the header: collapsed to one line by
- * default, tap to expand when it runs longer, with a pencil to edit and an
- * "Add a summary…" placeholder when empty. */
+/** The thread summary shown under the header: a single line by default with
+ * a more/less toggle when it runs longer. Editing lives in the rename sheet
+ * behind the one pencil; empty threads show an "Add a summary…" shortcut. */
 function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () => void }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const textRef = useRef<HTMLSpanElement>(null);
@@ -530,85 +527,41 @@ function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () 
     setExpanded(false);
   }, [thread.id]);
   useEffect(() => {
+    if (!desc) return;
     if (expanded) {
       setOverflowing(true);
       return;
     }
     const measure = () => {
       const el = textRef.current;
-      setOverflowing(!!el && el.scrollHeight > el.clientHeight + 1);
+      setOverflowing(!!el && el.scrollWidth > el.clientWidth + 1);
     };
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, [desc, expanded, thread.id]);
-  if (editing) {
-    const save = async () => {
-      if (saving) return;
-      setSaving(true);
-      try {
-        await updateThread(thread.id, { description: draft.trim() });
-        setEditing(false);
-      } catch (e) {
-        toast(e instanceof Error ? e.message : "Could not save", "error");
-      } finally {
-        setSaving(false);
-      }
-    };
-    return (
-      <div style={{ padding: "0 12px 8px", maxWidth: 760, margin: "0 auto" }}>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void save();
-          }}
-        >
-          <div className="field">
-            <label htmlFor="thread-desc">Summary</label>
-            <textarea
-              id="thread-desc"
-              autoFocus
-              rows={3}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              maxLength={2000}
-              placeholder="What is this thread about?"
-            />
-            <div className="hint">1–2 sentences, so the inbox stays scannable. {draft.length}/2000</div>
-          </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-            <button type="button" className="btn small" disabled={saving} onClick={() => setEditing(false)}>
-              Cancel
-            </button>
-            <button type="submit" className="btn small primary" disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </button>
-          </div>
-        </form>
-      </div>
-    );
-  }
+  const toggle = () => {
+    if (overflowing) setExpanded((e) => !e);
+  };
   return (
     <div style={{ padding: "0 12px 8px", maxWidth: 760, margin: "0 auto", display: "flex", alignItems: "flex-start", gap: 4 }}>
       {desc ? (
         <button
           type="button"
-          onClick={() => {
-            if (overflowing) setExpanded((e) => !e);
-          }}
+          onClick={toggle}
           title={overflowing ? (expanded ? "Show less" : "Show more") : undefined}
           aria-label={overflowing ? (expanded ? "Collapse thread summary" : "Expand thread summary") : "Thread summary"}
           aria-expanded={overflowing ? expanded : undefined}
-          style={{ flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: overflowing ? "pointer" : "default", fontSize: 13, lineHeight: 1.4, color: "var(--text-2)" }}
+          style={{ flex: 1, minWidth: 0, background: "none", border: "none", padding: 0, textAlign: "left", cursor: overflowing ? "pointer" : "default", fontSize: 13, lineHeight: 1.4, color: "var(--text-2)", display: "flex", alignItems: "baseline", gap: 6 }}
         >
           <span
             ref={textRef}
-            style={expanded ? undefined : { display: "-webkit-box", WebkitLineClamp: 1, WebkitBoxOrient: "vertical", overflow: "hidden" }}
+            style={expanded ? { flex: 1, minWidth: 0 } : { flex: 1, minWidth: 0, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
           >
             {desc}
-          </span>{" "}
+          </span>
           {overflowing && (
-            <span style={{ color: "var(--text-3)", whiteSpace: "nowrap" }}>
+            <span style={{ flex: "none", color: "var(--text-3)", whiteSpace: "nowrap" }}>
               {expanded ? "less " : "more "}
               <IconDown style={{ width: 12, height: 12, verticalAlign: -1, transform: expanded ? "rotate(180deg)" : undefined }} aria-hidden="true" />
             </span>
@@ -617,28 +570,12 @@ function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () 
       ) : (
         <button
           type="button"
-          onClick={() => {
-            setDraft("");
-            setEditing(true);
-          }}
+          onClick={onRename}
           style={{ flex: 1, background: "none", border: "none", padding: 0, textAlign: "left", cursor: "pointer", fontSize: 13, color: "var(--text-3)", fontStyle: "italic" }}
         >
           Add a summary… <IconEdit style={{ width: 12, height: 12, verticalAlign: -1 }} aria-hidden="true" />
         </button>
       )}
-      <button
-        type="button"
-        className="icon-btn"
-        aria-label="Edit thread summary"
-        title="Edit summary"
-        onClick={() => {
-          setDraft(thread.description || thread.summary || "");
-          setEditing(true);
-        }}
-        style={{ flex: "none" }}
-      >
-        <IconEdit aria-hidden="true" />
-      </button>
       <button
         type="button"
         className="icon-btn"
