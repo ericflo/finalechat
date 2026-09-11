@@ -75,6 +75,17 @@ func TestMain(m *testing.M) {
 	go b.Run(ctx)
 	sender := push.New(st, log, "", "", cfg.VAPIDSubject)
 	testAPI = New(cfg, st, b, sender, blob.NewMemory(), log)
+	// The suite shares one agent token and issues bursts of writes far
+	// faster than the production per-token budgets allow (e.g. connector
+	// creates share the 30/min question budget), which flakes timing-
+	// dependent tests with 429s. Relax the write budgets for the test
+	// server only; production limits in New are untouched. Tests that
+	// exercise limiting swap in their own tight limiter and restore it.
+	testAPI.messageLimiter = newRateLimiter(1000000)
+	testAPI.questionLimiter = newRateLimiter(1000000)
+	testAPI.uploadLimiter = newRateLimiter(1000000)
+	testAPI.activityLimiter = newRateLimiter(1000000)
+	testAPI.artifactLimiter = newRateLimiter(1000000)
 	testSrv = httptest.NewServer(testAPI.Handler())
 	// Give the LISTEN connection a moment to attach so events are not lost.
 	time.Sleep(200 * time.Millisecond)
