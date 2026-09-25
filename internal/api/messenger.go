@@ -287,6 +287,7 @@ const messengerHelp = `Commands:
 /skip — decline the open question
 /more — rest of a long message
 /quiet, /loud — only questions and important messages, or everything
+/pause, /resume — stop or restart the relay (keeps the link)
 /remote on|off — Claude Code waits for your replies
 /unlink — disconnect this chat
 Swipe-reply to a message to answer its thread. Anything else starting with / goes to the agent.`
@@ -324,6 +325,9 @@ func (c *mchat) handle() error {
 		}
 	}
 	// A session being set up takes the next plain message as its prompt.
+	if c.link.PausedAt != nil {
+		defer c.say("(The relay is paused: agent replies won't arrive here. /resume turns it back on.)", nil)
+	}
 	if st := c.newState(); st != nil && st.Step == "prompt" && in.replyTo == "" && !strings.HasPrefix(in.text, "/") {
 		return c.startSession(st.Resource, st.Cwd, in.text)
 	}

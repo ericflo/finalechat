@@ -291,9 +291,11 @@ function MessengerCard() {
           <>
             <div className="setting">
               <div>
-                <div className="label">Linked</div>
+                <div className="label">{link.paused_at ? "Linked · paused" : "Linked"}</div>
                 <div className="desc">
-                  {link.window_closed_at
+                  {link.paused_at
+                    ? `Paused ${relativeTime(link.paused_at)}: agent messages stay here. Send /resume in Messenger to turn it back on.`
+                    : link.window_closed_at
                     ? "Paused: Messenger lets the Page write only within 24 hours of your last message there. Send it anything to resume."
                     : `Agent messages and questions arrive in Messenger. Last message from you ${relativeTime(link.last_inbound_at)}.`}
                   {link.important_only && " Only questions and important messages (send /loud for everything)."}

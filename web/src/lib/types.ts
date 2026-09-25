@@ -171,6 +171,8 @@ export interface MessengerStatus {
     pinned_thread_id: string | null;
     last_thread_id: string | null;
     important_only: boolean;
+    /** Set while the relay is paused from Messenger (/pause). */
+    paused_at: string | null;
   } | null;
 }
 

@@ -24,8 +24,10 @@ type MessengerLink struct {
 	LastInboundAt  time.Time  `json:"last_inbound_at"`
 	WindowClosedAt *time.Time `json:"window_closed_at"`
 	ImportantOnly  bool       `json:"important_only"`
-	State          JSON       `json:"-"`
-	CreatedAt      time.Time  `json:"linked_at"`
+	// PausedAt is set while the person has paused the relay (/pause).
+	PausedAt  *time.Time `json:"paused_at"`
+	State     JSON       `json:"-"`
+	CreatedAt time.Time  `json:"linked_at"`
 }
 
 // Target is the thread a plain reply goes to, or nil.
@@ -36,13 +38,13 @@ func (l *MessengerLink) Target() *uuid.UUID {
 	return l.LastThreadID
 }
 
-const messengerLinkColumns = "user_id, psid, page_id, pinned_thread_id, last_thread_id, message_at, message_id, question_at, question_id, last_inbound_at, window_closed_at, important_only, state, created_at"
+const messengerLinkColumns = "user_id, psid, page_id, pinned_thread_id, last_thread_id, message_at, message_id, question_at, question_id, last_inbound_at, window_closed_at, important_only, paused_at, state, created_at"
 
 func scanMessengerLink(row pgx.Row) (*MessengerLink, error) {
 	var l MessengerLink
 	var state []byte
 	if err := row.Scan(&l.UserID, &l.PSID, &l.PageID, &l.PinnedThreadID, &l.LastThreadID, &l.MessageAt, &l.MessageID, &l.QuestionAt, &l.QuestionID,
-		&l.LastInboundAt, &l.WindowClosedAt, &l.ImportantOnly, &state, &l.CreatedAt); err != nil {
+		&l.LastInboundAt, &l.WindowClosedAt, &l.ImportantOnly, &l.PausedAt, &state, &l.CreatedAt); err != nil {
 		return nil, translate(err)
 	}
 	scanJSON(state, &l.State)
@@ -146,6 +148,20 @@ func (s *Store) SetMessengerLastThread(ctx context.Context, userID, threadID uui
 // SetMessengerImportantOnly switches quiet relaying on or off.
 func (s *Store) SetMessengerImportantOnly(ctx context.Context, userID uuid.UUID, on bool) error {
 	_, err := s.pool.Exec(ctx, "UPDATE messenger_links SET important_only = $2 WHERE user_id = $1", userID, on)
+	return err
+}
+
+// PauseMessenger stops the relay for the link without unlinking it.
+func (s *Store) PauseMessenger(ctx context.Context, userID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, "UPDATE messenger_links SET paused_at = COALESCE(paused_at, now()) WHERE user_id = $1", userID)
+	return err
+}
+
+// ResumeMessenger restarts the relay from now: what arrived while paused
+// is not replayed (the caller re-sends questions still open).
+func (s *Store) ResumeMessenger(ctx context.Context, userID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `UPDATE messenger_links SET paused_at = NULL, message_at = now(), message_id = NULL, question_at = now(), question_id = NULL
+		WHERE user_id = $1`, userID)
 	return err
 }
 

@@ -66,6 +66,13 @@ func (c *mchat) command() (bool, error) {
 			return true, err
 		}
 		c.say("Every agent message arrives here again.", nil)
+	case "/pause", "/off":
+		if err := c.s.store.PauseMessenger(c.ctx, c.link.UserID); err != nil {
+			return true, err
+		}
+		c.say("Paused. Agent messages stay in Finalechat and stop arriving here; the link is kept. /resume turns it back on.", nil)
+	case "/resume", "/on":
+		return true, c.resume()
 	case "/remote":
 		return true, c.remote(strings.ToLower(args))
 	case "/unlink":
@@ -307,6 +314,34 @@ func (c *mchat) more() error {
 	}
 	_, err = c.s.messengerSendPieces(c.ctx, c.link, thread, msg, int(next))
 	return err
+}
+
+// resume restarts the relay from now and re-sends the questions still
+// waiting, since those are what an agent is blocked on.
+func (c *mchat) resume() error {
+	if err := c.s.store.ResumeMessenger(c.ctx, c.link.UserID); err != nil {
+		return err
+	}
+	c.link.PausedAt = nil
+	open, err := c.s.store.ListQuestions(c.ctx, c.user.ID, nil, store.QuestionPending, 5, true)
+	if err != nil {
+		return err
+	}
+	text := "Resumed: new agent messages and questions arrive here again. /ls shows where things stand."
+	if len(open) > 0 {
+		text += " Still waiting on you:"
+	}
+	c.say(text, nil)
+	for i := len(open) - 1; i >= 0; i-- {
+		thread, err := c.s.store.GetThread(c.ctx, c.user.ID, open[i].ThreadID)
+		if err != nil {
+			continue
+		}
+		if err := c.s.messengerSendQuestion(c.ctx, c.link, thread, open[i]); err != nil {
+			return nil // the relay's own errors are not the webhook's
+		}
+	}
+	return nil
 }
 
 func (c *mchat) remote(arg string) error {

@@ -42,6 +42,7 @@ Once linked, open the chat with the Page in Messenger.
 | `/skip` | Decline the current thread's open question |
 | `/more` | The rest of a long message |
 | `/quiet`, `/loud` | Only questions and important messages, or everything |
+| `/pause`, `/resume` | Stop the relay while you are back at your desk, and start it again when you leave; the link stays. Resuming starts from that moment and re-sends the questions still waiting on you |
 | `/remote on`, `/remote off` | Claude Code's remote mode: its hooks wait for your replies instead of the terminal |
 | `/unlink` | Disconnect this chat |
 | `/help` | This list |

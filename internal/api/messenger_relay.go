@@ -179,6 +179,9 @@ func (s *Server) messengerTyping(ctx context.Context, ev bus.Event, typed map[uu
 }
 
 func (s *Server) messengerWindowOpen(l *store.MessengerLink) bool {
+	if l.PausedAt != nil {
+		return false
+	}
 	if l.WindowClosedAt != nil && !l.WindowClosedAt.Before(l.LastInboundAt) {
 		return false
 	}

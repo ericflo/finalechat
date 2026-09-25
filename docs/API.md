@@ -1101,7 +1101,7 @@ tell the user is reading plain text on a phone and keep messages short.
 
 `{"enabled": true, "page_url": "https://m.me/…", "link": {...} | null}`.
 `link` has `linked_at`, `last_inbound_at`, `window_closed_at`,
-`pinned_thread_id`, `last_thread_id` and `important_only`.
+`pinned_thread_id`, `last_thread_id`, `important_only` and `paused_at`.
 
 ### POST /messenger/code
 

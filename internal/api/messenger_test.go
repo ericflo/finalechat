@@ -534,3 +534,50 @@ func TestMessengerNewSession(t *testing.T) {
 	}
 	b.must(200, "DELETE", "/api/v1/connectors/"+id, nil)
 }
+
+func TestMessengerPauseResume(t *testing.T) {
+	b, a := setup(t)
+	g := withMessenger(t)
+	psid := "psid-" + uuid.NewString()[:8]
+	linkMessenger(t, g, psid)
+	ext := "msgp-" + uuid.NewString()[:8]
+
+	say(t, psid, "/pause")
+	if st := b.must(http.StatusOK, "GET", "/api/v1/messenger", nil); sub(st, "link")["paused_at"] == nil {
+		t.Fatalf("pause not reported: %v", st)
+	}
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+ext+"/messages", map[string]any{"title": "paused", "body": "while you were at your desk"})
+	q := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+ext+"/questions", map[string]any{"prompt": "Still need this?", "options": []map[string]any{{"label": "Yes"}}}), "question"), "id")
+	from := g.mark()
+	relay(t)
+	if n := len(g.texts(from)); n != 0 {
+		t.Fatalf("relayed %d messages while paused", n)
+	}
+	// Resuming keeps the link, skips what was said meanwhile, and re-sends
+	// the open question.
+	from = g.mark()
+	say(t, psid, "/resume")
+	relay(t)
+	got := g.texts(from)
+	sawQuestion := false
+	for _, m := range got {
+		if strings.Contains(m.Text, "while you were at your desk") {
+			t.Fatalf("replayed a message from the pause: %q", m.Text)
+		}
+		if strings.Contains(m.Text, "Still need this?") {
+			sawQuestion = true
+			if m.Quick[0].Payload != "a:"+q+":0" {
+				t.Fatalf("re-sent question buttons: %+v", m.Quick)
+			}
+		}
+	}
+	if !sawQuestion || !strings.HasPrefix(got[0].Text, "Resumed") {
+		t.Fatalf("resume: %+v", got)
+	}
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+ext+"/messages", map[string]any{"body": "after resume"})
+	from = g.mark()
+	relay(t)
+	if txt := lastText(t, g, from); !strings.Contains(txt, "after resume") {
+		t.Fatalf("relay after resume: %q", txt)
+	}
+}

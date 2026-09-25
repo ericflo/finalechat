@@ -6717,6 +6717,14 @@
                         },
                         "important_only": {
                           "type": "boolean"
+                        },
+                        "paused_at": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time",
+                          "description": "Set while the relay is paused from Messenger (/pause); /resume clears it."
                         }
                       }
                     }
