@@ -301,7 +301,6 @@ const messengerHelp = `Commands:
 /more — rest of a long message
 /quiet, /loud — only questions and important messages, or everything
 /pause, /resume — stop or restart the relay (keeps the link)
-/files off|on — leave out images and files (text-only connections)
 /remote on|off — Claude Code waits for your replies
 /unlink — disconnect this chat
 Swipe-reply to a message to answer its thread. Anything else starting with / goes to the agent.`

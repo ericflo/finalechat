@@ -633,17 +633,6 @@ func TestMessengerFiles(t *testing.T) {
 	if len(got) != 2 || !strings.Contains(got[0].Text, "📎 shot.png") || got[1].Attachment != "image:shot.png:"+strconv.Itoa(len(png)) {
 		t.Fatalf("relayed file: %+v", got)
 	}
-	// /files off keeps only the text line.
-	say(t, psid, "/files off")
-	postFile("Another one.")
-	from = g.mark()
-	relay(t)
-	got = g.texts(from)
-	if len(got) != 1 || got[0].Attachment != "" {
-		t.Fatalf("files off: %+v", got)
-	}
-	say(t, psid, "/files on")
-
 	// A photo from Messenger becomes an attachment on the user's message.
 	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")

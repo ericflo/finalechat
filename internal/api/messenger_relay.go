@@ -403,14 +403,10 @@ func (s *Server) messengerSendPieces(ctx context.Context, link *store.MessengerL
 }
 
 // messengerSendFiles sends a message's attachments as Messenger media (an
-// image shows inline, anything else as a download card) unless the person
-// turned files off (/files off, for text-only connections). A file
-// Messenger refuses is only logged: the text already names it.
+// image shows inline, anything else as a download card). A file Messenger
+// refuses is only logged: the text already names it.
 func (s *Server) messengerSendFiles(ctx context.Context, link *store.MessengerLink, thread *store.Thread, m *store.Message) error {
 	if s.blobs == nil || len(m.Attachments) == 0 {
-		return nil
-	}
-	if off, _ := link.State["files_off"].(bool); off {
 		return nil
 	}
 	for _, a := range m.Attachments {

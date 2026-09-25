@@ -20,8 +20,7 @@ Once linked, open the chat with the Page in Messenger.
   reduced to what Messenger shows: bold, italics, `code` and code blocks. A
   long message arrives as up to three bubbles; `/more` sends the rest.
   Files are named on a `📎 name (size)` line and then sent: images show
-  inline, other files as download cards. On a text-only connection,
-  `/files off` keeps just the line.
+  inline, other files as download cards.
 - **Questions.** They arrive with a numbered list, one button per option,
   and **Skip**. Tap a button, or type the number (`1, 3` for several), or
   type a free answer when the question takes one. Skip is the app's
@@ -44,7 +43,6 @@ Once linked, open the chat with the Page in Messenger.
 | `/skip` | Decline the current thread's open question |
 | `/more` | The rest of a long message |
 | `/quiet`, `/loud` | Only questions and important messages, or everything |
-| `/files off`, `/files on` | Leave images and files out (for text-only connections), or send them again |
 | `/pause`, `/resume` | Stop the relay while you are back at your desk, and start it again when you leave; the link stays. Resuming starts from that moment and re-sends the questions still waiting on you |
 | `/remote on`, `/remote off` | Claude Code's remote mode: its hooks wait for your replies instead of the terminal |
 | `/unlink` | Disconnect this chat |
@@ -63,7 +61,7 @@ to the agent. `/quit` asks first, because it would stop the session; send
 - **Files.** Photos and files you send from Messenger (up to 10 MB) are
   attached to your reply in the thread, where the agent can fetch them.
   The thumbs-up button arrives as 👍. Free in-flight passes usually block
-  images in both directions; `/files off` avoids waiting on them.
+  images in both directions; the text still gets through.
 - **New sessions need a running eagent.** `/new` needs `eagent connector
   run` (or `eagent serve`) running in the project on your machine. A reply
   to a session that has finished restarts it the same way.
