@@ -44,10 +44,15 @@ func decorateAttachment(a *store.Attachment) {
 // storeUpload validates one uploaded file, renders a thumbnail for images,
 // writes the bytes to object storage, and records a pending attachment.
 func (s *Server) storeUpload(r *http.Request, threadID uuid.UUID, contentType, filename string, body io.Reader) (*store.Attachment, error) {
+	return s.storeAttachment(r.Context(), principalFrom(r.Context()).user.ID, threadID, contentType, filename, body)
+}
+
+// storeAttachment is storeUpload for callers without a request (the
+// Messenger connector storing a photo the user sent).
+func (s *Server) storeAttachment(ctx context.Context, userID, threadID uuid.UUID, contentType, filename string, body io.Reader) (*store.Attachment, error) {
 	if s.blobs == nil {
 		return nil, errAttachmentsDisabled
 	}
-	p := principalFrom(r.Context())
 	data, err := io.ReadAll(io.LimitReader(body, store.MaxAttachmentBytes+1))
 	if err != nil {
 		return nil, errBadRequest("Could not read the upload: %v", err)
@@ -62,7 +67,7 @@ func (s *Server) storeUpload(r *http.Request, threadID uuid.UUID, contentType, f
 	// insert repeats the check under a per-account lock so concurrent
 	// uploads cannot slip past it together.
 	if s.cfg.AttachmentQuotaBytes > 0 {
-		used, err := s.store.AttachmentBytesUsed(r.Context(), p.user.ID)
+		used, err := s.store.AttachmentBytesUsed(ctx, userID)
 		if err != nil {
 			return nil, err
 		}
@@ -81,7 +86,7 @@ func (s *Server) storeUpload(r *http.Request, threadID uuid.UUID, contentType, f
 		// run at once regardless of how many uploads arrive together.
 		select {
 		case decoding <- struct{}{}:
-		case <-r.Context().Done():
+		case <-ctx.Done():
 			return nil, errBadRequest("The upload was cancelled.")
 		case <-time.After(20 * time.Second):
 			return nil, &apiError{Status: http.StatusServiceUnavailable, Code: "busy", Message: "Too many images are being processed right now. Try again shortly.", RetryAfter: 5}
@@ -99,14 +104,14 @@ func (s *Server) storeUpload(r *http.Request, threadID uuid.UUID, contentType, f
 		in.Width, in.Height = info.Width, info.Height
 		in.ThumbKey = fmt.Sprintf("a/%s/thumb.jpg", id)
 		in.ThumbWidth, in.ThumbHeight = tinfo.Width, tinfo.Height
-		obj, err := s.blobs.Put(r.Context(), in.ThumbKey, "image/jpeg", thumb)
+		obj, err := s.blobs.Put(ctx, in.ThumbKey, "image/jpeg", thumb)
 		if err != nil {
 			s.log.Error("store thumbnail", "err", err)
 			return nil, errStorage
 		}
 		in.ThumbID = obj.ID
 	}
-	obj, err := s.blobs.Put(r.Context(), in.ObjectKey, contentType, data)
+	obj, err := s.blobs.Put(ctx, in.ObjectKey, contentType, data)
 	if err != nil {
 		s.log.Error("store attachment", "err", err, "size", len(data))
 		if thumb != nil {
@@ -115,7 +120,7 @@ func (s *Server) storeUpload(r *http.Request, threadID uuid.UUID, contentType, f
 		return nil, errStorage
 	}
 	in.ObjectID = obj.ID
-	a, err := s.store.CreateAttachment(r.Context(), p.user.ID, threadID, in, s.cfg.AttachmentQuotaBytes)
+	a, err := s.store.CreateAttachment(ctx, userID, threadID, in, s.cfg.AttachmentQuotaBytes)
 	if err != nil {
 		_ = s.blobs.Delete(context.Background(), in.ObjectKey, in.ObjectID)
 		if in.ThumbKey != "" {

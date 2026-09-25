@@ -14,7 +14,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"time"
 )
@@ -36,7 +39,7 @@ func NewClient(graphURL, pageID, pageToken string) *Client {
 	if graphURL == "" {
 		graphURL = DefaultGraphURL
 	}
-	return &Client{GraphURL: strings.TrimRight(graphURL, "/"), PageID: pageID, PageToken: pageToken, HTTP: &http.Client{Timeout: 20 * time.Second}}
+	return &Client{GraphURL: strings.TrimRight(graphURL, "/"), PageID: pageID, PageToken: pageToken, HTTP: &http.Client{Timeout: 60 * time.Second}}
 }
 
 // QuickReply is a button under a message; tapping it sends Title back as a
@@ -105,6 +108,77 @@ func (c *Client) SendText(ctx context.Context, psid, text string, quick []QuickR
 	return out.MessageID, err
 }
 
+// AttachmentKind is how Messenger shows a file: "image", "video", "audio",
+// or "file" (a download card) for anything else.
+func AttachmentKind(contentType string) string {
+	switch contentType {
+	case "image/png", "image/jpeg", "image/gif":
+		return "image"
+	case "video/mp4":
+		return "video"
+	case "audio/mpeg", "audio/mp4", "audio/aac", "audio/wav", "audio/ogg":
+		return "audio"
+	}
+	return "file"
+}
+
+// MaxAttachmentBytes is the largest file the Send API accepts.
+const MaxAttachmentBytes = 25 << 20
+
+// SendAttachment uploads a file as its own message and returns its id.
+func (c *Client) SendAttachment(ctx context.Context, psid, filename, contentType string, data []byte) (string, error) {
+	var body bytes.Buffer
+	w := multipart.NewWriter(&body)
+	recipient, _ := json.Marshal(map[string]string{"id": psid})
+	message, _ := json.Marshal(map[string]any{"attachment": map[string]any{"type": AttachmentKind(contentType), "payload": map[string]any{"is_reusable": false}}})
+	_ = w.WriteField("recipient", string(recipient))
+	_ = w.WriteField("messaging_type", "RESPONSE")
+	_ = w.WriteField("message", string(message))
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": "filedata", "filename": filename}))
+	h.Set("Content-Type", contentType)
+	part, err := w.CreatePart(h)
+	if err != nil {
+		return "", err
+	}
+	if _, err := part.Write(data); err != nil {
+		return "", err
+	}
+	if err := w.Close(); err != nil {
+		return "", err
+	}
+	var out struct {
+		MessageID string `json:"message_id"`
+	}
+	err = c.do(ctx, w.FormDataContentType(), body.Bytes(), &out)
+	return out.MessageID, err
+}
+
+// Download fetches a file the person sent (Messenger hands out short-lived
+// CDN links), refusing anything larger than limit.
+func (c *Client) Download(ctx context.Context, url string, limit int64) (data []byte, contentType string, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode/100 != 2 {
+		return nil, "", fmt.Errorf("messenger: download: HTTP %d", res.StatusCode)
+	}
+	data, err = io.ReadAll(io.LimitReader(res.Body, limit+1))
+	if err != nil {
+		return nil, "", err
+	}
+	if int64(len(data)) > limit {
+		return nil, "", errors.New("messenger: the file is too large")
+	}
+	return data, res.Header.Get("Content-Type"), nil
+}
+
 // SenderAction shows "typing_on", "typing_off" or "mark_seen".
 func (c *Client) SenderAction(ctx context.Context, psid, action string) error {
 	return c.post(ctx, map[string]any{"recipient": map[string]string{"id": psid}, "sender_action": action}, nil)
@@ -115,6 +189,10 @@ func (c *Client) post(ctx context.Context, body any, out any) error {
 	if err != nil {
 		return err
 	}
+	return c.do(ctx, "application/json", raw, out)
+}
+
+func (c *Client) do(ctx context.Context, contentType string, raw []byte, out any) error {
 	page := c.PageID
 	if page == "" {
 		page = "me"
@@ -123,7 +201,7 @@ func (c *Client) post(ctx context.Context, body any, out any) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	// A header keeps the token out of URLs and therefore out of logs.
 	req.Header.Set("Authorization", "Bearer "+c.PageToken)
 	res, err := c.HTTP.Do(req)
@@ -199,7 +277,8 @@ type Event struct {
 		Attachments []struct {
 			Type    string `json:"type"`
 			Payload struct {
-				URL string `json:"url"`
+				URL       string `json:"url"`
+				StickerID int64  `json:"sticker_id"`
 			} `json:"payload"`
 		} `json:"attachments"`
 	} `json:"message"`

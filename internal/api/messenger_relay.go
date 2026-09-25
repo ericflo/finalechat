@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -379,6 +380,11 @@ func (s *Server) messengerSendPieces(ctx context.Context, link *store.MessengerL
 		sent++
 		_ = s.store.RecordMessengerSent(ctx, link.UserID, mid, &thread.ID, nil)
 	}
+	if from == 0 {
+		if err := s.messengerSendFiles(ctx, link, thread, m); err != nil {
+			return sent, err
+		}
+	}
 	state := store.JSON{}
 	for k, v := range link.State {
 		state[k] = v
@@ -394,6 +400,44 @@ func (s *Server) messengerSendPieces(ctx context.Context, link *store.MessengerL
 	}
 	link.LastThreadID = &thread.ID
 	return sent, s.store.SetMessengerLastThread(ctx, link.UserID, thread.ID)
+}
+
+// messengerSendFiles sends a message's attachments as Messenger media (an
+// image shows inline, anything else as a download card) unless the person
+// turned files off (/files off, for text-only connections). A file
+// Messenger refuses is only logged: the text already names it.
+func (s *Server) messengerSendFiles(ctx context.Context, link *store.MessengerLink, thread *store.Thread, m *store.Message) error {
+	if s.blobs == nil || len(m.Attachments) == 0 {
+		return nil
+	}
+	if off, _ := link.State["files_off"].(bool); off {
+		return nil
+	}
+	for _, a := range m.Attachments {
+		if a.Size > messenger.MaxAttachmentBytes {
+			continue
+		}
+		body, _, _, err := s.blobs.Get(ctx, a.ObjectKey)
+		if err != nil {
+			s.log.Warn("messenger: read attachment", "err", err, "id", a.ID)
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(body, messenger.MaxAttachmentBytes+1))
+		body.Close()
+		if err != nil {
+			continue
+		}
+		mid, err := s.messenger.SendAttachment(ctx, link.PSID, a.Filename, a.ContentType, data)
+		if err != nil {
+			if messenger.IsWindowClosed(err) {
+				return err
+			}
+			s.log.Warn("messenger: send attachment", "err", err, "id", a.ID)
+			continue
+		}
+		_ = s.store.RecordMessengerSent(ctx, link.UserID, mid, &thread.ID, nil)
+	}
+	return nil
 }
 
 // messengerSendQuestion sends a question with numbered options, one quick

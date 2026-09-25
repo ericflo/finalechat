@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -30,12 +31,14 @@ type fakeGraph struct {
 }
 
 type sentMsg struct {
-	MID     string
-	PSID    string
-	Text    string
-	Quick   []messenger.QuickReply
-	Action  string
-	ReplyTo string
+	// Attachment is "kind:filename:size" for a file message.
+	Attachment string
+	MID        string
+	PSID       string
+	Text       string
+	Quick      []messenger.QuickReply
+	Action     string
+	ReplyTo    string
 }
 
 func (f *fakeGraph) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -47,8 +50,22 @@ func (f *fakeGraph) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			QuickReplies []messenger.QuickReply `json:"quick_replies"`
 		} `json:"message"`
 	}
-	raw, _ := io.ReadAll(r.Body)
-	_ = json.Unmarshal(raw, &body)
+	var attachment string
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+		if err := r.ParseMultipartForm(32 << 20); err == nil {
+			_ = json.Unmarshal([]byte(r.FormValue("recipient")), &body.Recipient)
+			var m struct {
+				Attachment struct{ Type string } `json:"attachment"`
+			}
+			_ = json.Unmarshal([]byte(r.FormValue("message")), &m)
+			if fh := r.MultipartForm.File["filedata"]; len(fh) == 1 {
+				attachment = m.Attachment.Type + ":" + fh[0].Filename + ":" + strconv.FormatInt(fh[0].Size, 10)
+			}
+		}
+	} else {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &body)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.refuse != "" {
@@ -64,7 +81,7 @@ func (f *fakeGraph) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	f.next++
 	mid := "m_page_" + strconv.Itoa(f.next)
-	f.sent = append(f.sent, sentMsg{MID: mid, PSID: body.Recipient.ID, Text: body.Message.Text, Quick: body.Message.QuickReplies})
+	f.sent = append(f.sent, sentMsg{MID: mid, PSID: body.Recipient.ID, Text: body.Message.Text, Quick: body.Message.QuickReplies, Attachment: attachment})
 	_, _ = io.WriteString(w, `{"recipient_id":"`+body.Recipient.ID+`","message_id":"`+mid+`"}`)
 }
 
@@ -579,5 +596,77 @@ func TestMessengerPauseResume(t *testing.T) {
 	relay(t)
 	if txt := lastText(t, g, from); !strings.Contains(txt, "after resume") {
 		t.Fatalf("relay after resume: %q", txt)
+	}
+}
+
+func TestMessengerFiles(t *testing.T) {
+	_, a := setup(t)
+	g := withMessenger(t)
+	psid := "psid-" + uuid.NewString()[:8]
+	linkMessenger(t, g, psid)
+	ext := "msgf-" + uuid.NewString()[:8]
+	png := makePNG(t, 40, 30)
+
+	// An agent's screenshot arrives as an image after the text.
+	postFile := func(body string) {
+		t.Helper()
+		var buf bytes.Buffer
+		w := multipart.NewWriter(&buf)
+		_ = w.WriteField("body", body)
+		_ = w.WriteField("title", "files")
+		fw, _ := w.CreateFormFile("file", "shot.png")
+		_, _ = fw.Write(png)
+		_ = w.Close()
+		req, _ := http.NewRequest("POST", testSrv.URL+"/api/v1/threads/ext:"+ext+"/messages", &buf)
+		req.Header.Set("Authorization", "Bearer "+a.token)
+		req.Header.Set("Content-Type", w.FormDataContentType())
+		res, err := http.DefaultClient.Do(req)
+		if err != nil || res.StatusCode != http.StatusCreated {
+			t.Fatalf("multipart post: %v %v", err, res.StatusCode)
+		}
+		res.Body.Close()
+	}
+	postFile("Here is the new layout.")
+	from := g.mark()
+	relay(t)
+	got := g.texts(from)
+	if len(got) != 2 || !strings.Contains(got[0].Text, "📎 shot.png") || got[1].Attachment != "image:shot.png:"+strconv.Itoa(len(png)) {
+		t.Fatalf("relayed file: %+v", got)
+	}
+	// /files off keeps only the text line.
+	say(t, psid, "/files off")
+	postFile("Another one.")
+	from = g.mark()
+	relay(t)
+	got = g.texts(from)
+	if len(got) != 1 || got[0].Attachment != "" {
+		t.Fatalf("files off: %+v", got)
+	}
+	say(t, psid, "/files on")
+
+	// A photo from Messenger becomes an attachment on the user's message.
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(png)
+	}))
+	defer cdn.Close()
+	if code := hook(t, psid, map[string]any{"text": "the bug, see top left", "attachments": []any{map[string]any{"type": "image", "payload": map[string]any{"url": cdn.URL + "/v/t1/IMG_0421.png?stp=dst&oh=abc"}}}}, nil); code != 200 {
+		t.Fatal(code)
+	}
+	msgs := a.must(http.StatusOK, "GET", "/api/v1/threads/ext:"+ext+"/messages?sender=user", nil)["messages"].([]any)
+	last := msgs[len(msgs)-1].(map[string]any)
+	atts := last["attachments"].([]any)
+	if last["body"] != "the bug, see top left" || last["origin"] != "session" || len(atts) != 1 {
+		t.Fatalf("inbound photo message: %v", last)
+	}
+	att := atts[0].(map[string]any)
+	if att["kind"] != "image" || att["filename"] != "IMG_0421.png" {
+		t.Fatalf("inbound attachment: %v", att)
+	}
+	// The thumbs-up button (a sticker) reads as 👍.
+	hook(t, psid, map[string]any{"attachments": []any{map[string]any{"type": "image", "payload": map[string]any{"url": cdn.URL + "/sticker.png", "sticker_id": 369239263222822}}}}, nil)
+	msgs = a.must(http.StatusOK, "GET", "/api/v1/threads/ext:"+ext+"/messages?sender=user", nil)["messages"].([]any)
+	if body := msgs[len(msgs)-1].(map[string]any)["body"]; body != "👍" {
+		t.Fatalf("sticker: %v", body)
 	}
 }

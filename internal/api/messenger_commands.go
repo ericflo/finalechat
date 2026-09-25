@@ -73,6 +73,34 @@ func (c *mchat) command() (bool, error) {
 		c.say("Paused. Agent messages stay in Finalechat and stop arriving here; the link is kept. /resume turns it back on.", nil)
 	case "/resume", "/on":
 		return true, c.resume()
+	case "/files":
+		off := strings.EqualFold(args, "off")
+		if !off && !strings.EqualFold(args, "on") {
+			state := "on"
+			if v, _ := c.link.State["files_off"].(bool); v {
+				state = "off"
+			}
+			c.say("Files are "+state+". /files off sends only text (for text-only connections); /files on sends images and files again.", nil)
+			return true, nil
+		}
+		state := store.JSON{}
+		for k, v := range c.link.State {
+			state[k] = v
+		}
+		if off {
+			state["files_off"] = true
+		} else {
+			delete(state, "files_off")
+		}
+		c.link.State = state
+		if err := c.s.store.SetMessengerState(c.ctx, c.link.UserID, state); err != nil {
+			return true, err
+		}
+		if off {
+			c.say("Files off: images and files are named in the text but not sent. /files on to get them again.", nil)
+		} else {
+			c.say("Files on: agents' images and files arrive here.", nil)
+		}
 	case "/remote":
 		return true, c.remote(strings.ToLower(args))
 	case "/unlink":

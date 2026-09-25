@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -8,7 +9,10 @@ import (
 	"errors"
 	"io"
 	"math/big"
+	"mime"
 	"net/http"
+	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -173,7 +177,13 @@ type inbound struct {
 	text    string
 	payload string
 	replyTo string
-	files   int
+	files   []inboundFile
+}
+
+type inboundFile struct {
+	kind    string // image, video, audio, file
+	url     string
+	sticker bool
 }
 
 func (s *Server) messengerEvent(ctx context.Context, ev messenger.Event) error {
@@ -183,7 +193,10 @@ func (s *Server) messengerEvent(ctx context.Context, ev messenger.Event) error {
 		if ev.Message.IsEcho {
 			return nil
 		}
-		in.mid, in.text, in.files = ev.Message.MID, strings.TrimSpace(ev.Message.Text), len(ev.Message.Attachments)
+		in.mid, in.text = ev.Message.MID, strings.TrimSpace(ev.Message.Text)
+		for _, a := range ev.Message.Attachments {
+			in.files = append(in.files, inboundFile{kind: a.Type, url: a.Payload.URL, sticker: a.Payload.StickerID != 0})
+		}
 		if ev.Message.QuickReply != nil {
 			in.payload = ev.Message.QuickReply.Payload
 		}
@@ -288,6 +301,7 @@ const messengerHelp = `Commands:
 /more — rest of a long message
 /quiet, /loud — only questions and important messages, or everything
 /pause, /resume — stop or restart the relay (keeps the link)
+/files off|on — leave out images and files (text-only connections)
 /remote on|off — Claude Code waits for your replies
 /unlink — disconnect this chat
 Swipe-reply to a message to answer its thread. Anything else starting with / goes to the agent.`
@@ -308,10 +322,10 @@ func (c *mchat) handle() error {
 	if in.payload != "" {
 		return c.payload(in.payload)
 	}
+	if len(in.files) > 0 {
+		return c.postFiles()
+	}
 	if in.text == "" {
-		if in.files > 0 {
-			c.say("Files from Messenger are not relayed yet; describe it in words, or send it from the Finalechat app.", nil)
-		}
 		return nil
 	}
 	if strings.HasPrefix(in.text, "/") {
@@ -338,28 +352,8 @@ func (c *mchat) handle() error {
 // (answering its question if it asked one), anything else to the pinned
 // thread or the one that spoke last.
 func (c *mchat) reply(text string) error {
-	var target *uuid.UUID
-	var question *uuid.UUID
-	if c.in.replyTo != "" {
-		t, q, err := c.s.store.LookupMessengerSent(c.ctx, c.link.UserID, c.in.replyTo)
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		target, question = t, q
-	}
-	if target == nil {
-		target = c.link.Target()
-	}
-	if target == nil {
-		c.say("There is no thread to reply to yet. /ls lists threads, /go 2 picks one, /new starts a session.", nil)
-		return nil
-	}
-	thread, err := c.s.store.GetThread(c.ctx, c.user.ID, *target)
-	if errors.Is(err, store.ErrNotFound) {
-		c.say("That thread no longer exists. /ls lists the current ones.", nil)
-		return nil
-	}
-	if err != nil {
+	thread, question, err := c.target()
+	if thread == nil || err != nil {
 		return err
 	}
 	// An open question in the thread takes the reply as its answer, the way
@@ -385,6 +379,120 @@ func (c *mchat) reply(text string) error {
 		}
 	}
 	return c.post(thread, text)
+}
+
+// target resolves where a reply goes: the thread of the message it
+// swipe-replies to (and that message's question, if any), else the pinned
+// thread or the one that spoke last. A nil thread means the person has
+// been told why there is nowhere to go.
+func (c *mchat) target() (*store.Thread, *uuid.UUID, error) {
+	var target, question *uuid.UUID
+	if c.in.replyTo != "" {
+		t, q, err := c.s.store.LookupMessengerSent(c.ctx, c.link.UserID, c.in.replyTo)
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return nil, nil, err
+		}
+		target, question = t, q
+	}
+	if target == nil {
+		target = c.link.Target()
+	}
+	if target == nil {
+		c.say("There is no thread to reply to yet. /ls lists threads, /go 2 picks one, /new starts a session.", nil)
+		return nil, nil, nil
+	}
+	thread, err := c.s.store.GetThread(c.ctx, c.user.ID, *target)
+	if errors.Is(err, store.ErrNotFound) {
+		c.say("That thread no longer exists. /ls lists the current ones.", nil)
+		return nil, nil, nil
+	}
+	return thread, question, err
+}
+
+// postFiles relays photos and files the person sent into the target
+// thread as one message (with any text as its body), the way the app
+// uploads and posts. Stickers are not files; a lone one (the thumbs-up
+// button) reads as 👍.
+func (c *mchat) postFiles() error {
+	var files []inboundFile
+	for _, f := range c.in.files {
+		if !f.sticker && f.url != "" {
+			files = append(files, f)
+		}
+	}
+	if len(files) == 0 {
+		if c.in.text == "" {
+			return c.reply("👍")
+		}
+		return c.reply(c.in.text)
+	}
+	if c.s.blobs == nil {
+		c.say("This server does not store files, so photos cannot be relayed. Describe it in words instead.", nil)
+		return nil
+	}
+	thread, _, err := c.target()
+	if thread == nil || err != nil {
+		return err
+	}
+	var ids []uuid.UUID
+	for i, f := range files {
+		if i == store.MaxAttachmentsPerMessage {
+			break
+		}
+		data, contentType, err := c.s.messenger.Download(c.ctx, f.url, store.MaxAttachmentBytes)
+		if err != nil {
+			c.s.log.Warn("messenger: download", "err", err)
+			c.say("One file could not be fetched from Messenger (files must be under 10 MB). Try again or describe it.", nil)
+			continue
+		}
+		a, err := c.s.storeAttachment(c.ctx, c.user.ID, thread.ID, contentType, inboundFilename(f, contentType), bytes.NewReader(data))
+		if err != nil {
+			var ae *apiError
+			if errors.As(err, &ae) {
+				c.say("A file was not relayed: "+ae.Message, nil)
+				continue
+			}
+			return err
+		}
+		ids = append(ids, a.ID)
+	}
+	if len(ids) == 0 && c.in.text == "" {
+		return nil
+	}
+	msg, _, created, err := c.s.store.CreateMessage(c.ctx, c.user.ID, thread.ID, store.MessageInput{
+		Sender: store.SenderUser, Body: c.in.text, Format: "text", Importance: store.ImportanceNormal,
+		Meta: c.s.messengerCapsule(), Origin: store.OriginSession, MarkRead: true, ClientKey: "messenger:" + c.in.mid, AttachmentIDs: ids,
+	})
+	if err != nil {
+		return err
+	}
+	if created {
+		c.s.bus.Publish(context.WithoutCancel(c.ctx), bus.Event{Type: bus.MessageCreated, UserID: c.user.ID.String(), ThreadID: thread.ID.String(), MessageID: msg.ID.String()})
+	}
+	c.routed(thread, "")
+	return nil
+}
+
+// inboundFilename names a file from its CDN link, or by its kind.
+func inboundFilename(f inboundFile, contentType string) string {
+	if u, err := url.Parse(f.url); err == nil {
+		if base := path.Base(u.Path); base != "" && base != "/" && base != "." && strings.Contains(base, ".") {
+			return base
+		}
+	}
+	ext := ".bin"
+	if exts, _ := mime.ExtensionsByType(contentType); len(exts) > 0 {
+		ext = exts[0]
+	}
+	switch f.kind {
+	case "image":
+		return "photo" + ext
+	case "video":
+		return "video" + ext
+	case "audio":
+		return "voice" + ext
+	}
+	return "file" + ext
 }
 
 // post writes the user's message into the thread, as the app would.
