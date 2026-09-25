@@ -652,6 +652,21 @@ func TestMessengerFiles(t *testing.T) {
 	if att["kind"] != "image" || att["filename"] != "IMG_0421.png" {
 		t.Fatalf("inbound attachment: %v", att)
 	}
+	// A link Messenger previews is not a file: the text stays, and nothing
+	// is downloaded from Facebook's redirect page.
+	shim := "https://l.facebook.com/l.php?u=http%3A%2F%2Ffinalechat.com%2F&h=AUB"
+	hook(t, psid, map[string]any{"text": "see finalechat.com", "attachments": []any{map[string]any{"type": "fallback", "payload": map[string]any{"url": shim}}}}, nil)
+	msgs = a.must(http.StatusOK, "GET", "/api/v1/threads/ext:"+ext+"/messages?sender=user", nil)["messages"].([]any)
+	last = msgs[len(msgs)-1].(map[string]any)
+	if last["body"] != "see finalechat.com" || len(last["attachments"].([]any)) != 0 {
+		t.Fatalf("link preview became a file: %v", last)
+	}
+	// A bare share becomes its real URL.
+	hook(t, psid, map[string]any{"attachments": []any{map[string]any{"type": "fallback", "payload": map[string]any{"url": shim}}}}, nil)
+	msgs = a.must(http.StatusOK, "GET", "/api/v1/threads/ext:"+ext+"/messages?sender=user", nil)["messages"].([]any)
+	if body := msgs[len(msgs)-1].(map[string]any)["body"]; body != "http://finalechat.com/" {
+		t.Fatalf("bare share: %v", body)
+	}
 	// The thumbs-up button (a sticker) reads as 👍.
 	hook(t, psid, map[string]any{"attachments": []any{map[string]any{"type": "image", "payload": map[string]any{"url": cdn.URL + "/sticker.png", "sticker_id": 369239263222822}}}}, nil)
 	msgs = a.must(http.StatusOK, "GET", "/api/v1/threads/ext:"+ext+"/messages?sender=user", nil)["messages"].([]any)

@@ -195,7 +195,17 @@ func (s *Server) messengerEvent(ctx context.Context, ev messenger.Event) error {
 		}
 		in.mid, in.text = ev.Message.MID, strings.TrimSpace(ev.Message.Text)
 		for _, a := range ev.Message.Attachments {
-			in.files = append(in.files, inboundFile{kind: a.Type, url: a.Payload.URL, sticker: a.Payload.StickerID != 0})
+			switch a.Type {
+			case "image", "video", "audio", "file":
+				in.files = append(in.files, inboundFile{kind: a.Type, url: unwrapLinkShim(a.Payload.URL), sticker: a.Payload.StickerID != 0})
+			default:
+				// A link Messenger previews ("fallback") is not a file: its
+				// URL is Facebook's redirect page. The text already carries
+				// the link; a bare share becomes the unwrapped URL.
+				if in.text == "" && a.Payload.URL != "" {
+					in.text = unwrapLinkShim(a.Payload.URL)
+				}
+			}
 		}
 		if ev.Message.QuickReply != nil {
 			in.payload = ev.Message.QuickReply.Payload
@@ -470,6 +480,19 @@ func (c *mchat) postFiles() error {
 	}
 	c.routed(thread, "")
 	return nil
+}
+
+// unwrapLinkShim turns Facebook's outbound-link redirect
+// (l.facebook.com/l.php?u=…) into the link it stands for.
+func unwrapLinkShim(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || !strings.HasSuffix(u.Hostname(), "facebook.com") || u.Path != "/l.php" {
+		return raw
+	}
+	if target := u.Query().Get("u"); target != "" {
+		return target
+	}
+	return raw
 }
 
 // inboundFilename names a file from its CDN link, or by its kind.
