@@ -59,6 +59,10 @@
     },
     {
       "name": "Integration settings"
+    },
+    {
+      "name": "Messenger",
+      "description": "Link a Facebook Messenger chat to the account (app only)."
     }
   ],
   "security": [
@@ -6649,6 +6653,229 @@
           }
         ]
       }
+    },
+    "/messenger": {
+      "get": {
+        "tags": [
+          "Messenger"
+        ],
+        "summary": "Messenger connector status and the linked chat",
+        "description": "Browser session only.",
+        "responses": {
+          "200": {
+            "description": "Status.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Whether this server has the connector configured."
+                    },
+                    "page_url": {
+                      "type": "string",
+                      "description": "m.me link to the Page, when enabled."
+                    },
+                    "link": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "description": "The linked Messenger chat, or null.",
+                      "properties": {
+                        "linked_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "last_inbound_at": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "When the person last wrote from Messenger; the page may only write within 24 hours of it."
+                        },
+                        "window_closed_at": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "date-time",
+                          "description": "Set when Messenger refused a send because that window lapsed; delivery resumes on the next inbound message."
+                        },
+                        "pinned_thread_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "uuid"
+                        },
+                        "last_thread_id": {
+                          "type": [
+                            "string",
+                            "null"
+                          ],
+                          "format": "uuid"
+                        },
+                        "important_only": {
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "enabled",
+                    "link"
+                  ]
+                },
+                "example": {
+                  "enabled": true,
+                  "page_url": "https://m.me/1359515167241068",
+                  "link": null
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Agent tokens cannot manage the link (`forbidden`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Messenger"
+        ],
+        "summary": "Unlink the Messenger chat",
+        "description": "Browser session only.",
+        "responses": {
+          "200": {
+            "description": "Unlinked (or nothing was linked).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Agent tokens cannot manage the link (`forbidden`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/messenger/code": {
+      "post": {
+        "tags": [
+          "Messenger"
+        ],
+        "summary": "Create a one-time link code",
+        "description": "Browser session only. Send `link CODE` to the Page from Messenger within 15 minutes to link that chat; a new code replaces the previous one.",
+        "responses": {
+          "201": {
+            "description": "Code created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "page_url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "expires_at",
+                    "page_url"
+                  ]
+                },
+                "example": {
+                  "code": "K7QM-3XPD",
+                  "expires_at": "2026-09-24T18:15:00Z",
+                  "page_url": "https://m.me/1359515167241068"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Agent tokens cannot manage the link (`forbidden`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The connector is not configured (`messenger_disabled`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6713,7 +6940,8 @@
                   "busy",
                   "upload_in_progress",
                   "storage_quota",
-                  "connector_offline"
+                  "connector_offline",
+                  "messenger_disabled"
                 ]
               },
               "message": {
@@ -7684,7 +7912,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Optional capabilities: activity, idempotency, dismiss, push, attachments."
+            "description": "Optional capabilities: activity, idempotency, dismiss, push, attachments, messenger."
           }
         },
         "example": {
@@ -7742,7 +7970,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Optional capabilities: activity, idempotency, dismiss, push, attachments."
+            "description": "Optional capabilities: activity, idempotency, dismiss, push, attachments, messenger."
           },
           "storage": {
             "type": "object",

@@ -124,8 +124,8 @@ problem.
 ### Features
 
 `GET /auth/status` and `GET /me` list optional capabilities in `features`:
-`activity`, `idempotency`, `dismiss`, and `push` / `attachments` when those
-are configured. Clients that must work against older deployments can
+`activity`, `idempotency`, `dismiss`, and `push` / `attachments` /
+`messenger` when those are configured. Clients that must work against older deployments can
 feature-detect with it.
 
 ### Thread references
@@ -1083,6 +1083,36 @@ true, "devices": 1}`, `409 no_subscriptions`, or `503 push_disabled`.
 
 Endpoints that the push service reports gone (404 or 410) are removed
 automatically, as are endpoints that fail 20 times in a row.
+
+## Messenger
+
+The Messenger connector relays agent messages and questions to a linked
+Facebook Messenger chat and turns what the user writes there into replies,
+answers and new sessions (see [the setup guide](https://www.finalechat.com/docs/messenger.md)).
+These routes are for the app; agent tokens get `403`.
+
+A reply that arrives from Messenger is an ordinary user message (`sender:
+"user"`, `origin: "session"`), and answers go through the normal answer
+path. Both carry the client capsule `meta["eagent.client"]` with `app:
+"finalechat-messenger/<version>"` and `device: "phone"`, so an agent can
+tell the user is reading plain text on a phone and keep messages short.
+
+### GET /messenger
+
+`{"enabled": true, "page_url": "https://m.me/…", "link": {...} | null}`.
+`link` has `linked_at`, `last_inbound_at`, `window_closed_at`,
+`pinned_thread_id`, `last_thread_id` and `important_only`.
+
+### POST /messenger/code
+
+Returns `201 {"code": "K7QM-3XPD", "expires_at": "…", "page_url": "…"}`.
+Sending `link K7QM-3XPD` to the Page within 15 minutes links that
+Messenger chat to the account, replacing any earlier link.
+`503 messenger_disabled` when the server has no connector configured.
+
+### DELETE /messenger
+
+Unlinks the chat. Returns `{"ok": true}`.
 
 ## Health
 

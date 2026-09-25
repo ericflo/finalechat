@@ -7,7 +7,7 @@ import { currentPushEndpoint, getPushState, isIOS, isStandalone, subscribeToPush
 import { navigate } from "../lib/router";
 import { accountDeleted, setUser, signOut, toast, updateSettings, useStore } from "../lib/store";
 import { relativeTime } from "../lib/time";
-import type { APIToken, Me, PushSubscriptionInfo } from "../lib/types";
+import type { APIToken, Me, MessengerStatus, PushSubscriptionInfo } from "../lib/types";
 import { ConnectorsCard } from "./Connectors";
 
 export function SettingsScreen() {
@@ -109,6 +109,8 @@ export function SettingsScreen() {
         </div>
 
         {pushEnabled && <DevicesCard push={push} />}
+
+        <MessengerCard />
 
         <div className="section-title">Agents</div>
         <div className="card settings-list">
@@ -226,6 +228,124 @@ function DevicesCard({ push }: { push: PushState | null }) {
           );
         })}
       </div>
+    </>
+  );
+}
+
+/** Links a Facebook Messenger chat, for when Messenger is the only app
+ * that works (in-flight messaging passes). Hidden when the server has no
+ * connector configured. */
+function MessengerCard() {
+  const [status, setStatus] = useState<MessengerStatus | null>(null);
+  const [code, setCode] = useState<{ code: string; expires_at: string; page_url: string } | null>(null);
+  const [unlinking, setUnlinking] = useState(false);
+  const linked = status?.link != null;
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .messenger()
+        .then((s) => alive && setStatus(s))
+        .catch(() => alive && setStatus((cur) => cur ?? { enabled: false, link: null }));
+    void load();
+    // While a code is on screen, notice the moment it is used.
+    if (!code) return () => {
+      alive = false;
+    };
+    const timer = window.setInterval(() => void load(), 3000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [code]);
+  useEffect(() => {
+    if (linked && code) {
+      setCode(null);
+      toast("Messenger linked", "success");
+    }
+  }, [linked, code]);
+  if (!status?.enabled) return null;
+
+  const getCode = async () => {
+    try {
+      setCode(await api.messengerCode());
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not create a code", "error");
+    }
+  };
+  const unlink = async () => {
+    try {
+      await api.messengerUnlink();
+      setStatus({ ...status, link: null });
+      toast("Messenger unlinked");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Could not unlink", "error");
+    }
+  };
+  const link = status.link;
+  return (
+    <>
+      <div className="section-title">Messenger</div>
+      <div className="card settings-list">
+        {link ? (
+          <>
+            <div className="setting">
+              <div>
+                <div className="label">Linked</div>
+                <div className="desc">
+                  {link.window_closed_at
+                    ? "Paused: Messenger lets the Page write only within 24 hours of your last message there. Send it anything to resume."
+                    : `Agent messages and questions arrive in Messenger. Last message from you ${relativeTime(link.last_inbound_at)}.`}
+                  {link.important_only && " Only questions and important messages (send /loud for everything)."}
+                </div>
+              </div>
+              <button type="button" className="btn small" onClick={() => setUnlinking(true)}>
+                Unlink
+              </button>
+            </div>
+            {status.page_url && (
+              <a href={status.page_url} className="setting link" target="_blank" rel="noreferrer">
+                <div>
+                  <div className="label">Open in Messenger</div>
+                  <div className="desc">Send /help there for the commands.</div>
+                </div>
+                <IconChevron className="chev" />
+              </a>
+            )}
+          </>
+        ) : code ? (
+          <div className="setting stack">
+            <div className="label">Send this to the Page in Messenger</div>
+            <Snippet code={`link ${code.code}`} />
+            <div className="desc">
+              The code works once and expires {relativeTime(code.expires_at)}. This page updates when the chat is linked.
+            </div>
+            <a href={code.page_url} className="btn primary" target="_blank" rel="noreferrer" style={{ alignSelf: "flex-start" }}>
+              Open in Messenger
+            </a>
+          </div>
+        ) : (
+          <div className="setting">
+            <div>
+              <div className="label">Facebook Messenger</div>
+              <div className="desc">Read and answer your agents from Messenger, for when it is the only app that works, like free in-flight messaging.</div>
+            </div>
+            <button type="button" className="btn small" onClick={getCode}>
+              Link
+            </button>
+          </div>
+        )}
+      </div>
+      {unlinking && (
+        <ConfirmSheet
+          title="Unlink Messenger?"
+          body="Agent messages stop arriving in Messenger, and what you write there is no longer read."
+          confirmLabel="Unlink"
+          danger
+          onConfirm={unlink}
+          onClose={() => setUnlinking(false)}
+        />
+      )}
     </>
   );
 }

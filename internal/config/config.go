@@ -53,6 +53,17 @@ type Config struct {
 	// BlobStore selects the attachment backend: "b2" (default when B2 keys
 	// are set), "memory", or "disabled".
 	BlobStore string
+	// MessengerPageID, MessengerPageToken, MessengerAppSecret and
+	// MessengerVerifyToken configure the Facebook Messenger connector: the
+	// Page it speaks as, that Page's access token, the Meta app secret that
+	// signs webhook deliveries, and the token Meta echoes when the webhook
+	// is registered. The connector is off unless all four are set.
+	MessengerPageID      string
+	MessengerPageToken   string
+	MessengerAppSecret   string
+	MessengerVerifyToken string
+	// MessengerGraphURL overrides the Graph API base (tests, staging).
+	MessengerGraphURL string
 	// SecureCookies controls the Secure attribute on session cookies.
 	SecureCookies bool
 	// TrustProxy controls whether X-Forwarded-* headers are honoured.
@@ -77,27 +88,32 @@ type Config struct {
 // Load reads configuration from the environment.
 func Load(version string) (Config, error) {
 	cfg := Config{
-		Addr:             getenv("FINALECHAT_ADDR", ":8080"),
-		DatabaseURL:      os.Getenv("DATABASE_URL"),
-		BaseURL:          strings.TrimRight(getenv("FINALECHAT_BASE_URL", "http://localhost:8080"), "/"),
-		CanonicalHost:    os.Getenv("FINALECHAT_CANONICAL_HOST"),
-		VAPIDPublicKey:   os.Getenv("FINALECHAT_VAPID_PUBLIC_KEY"),
-		VAPIDPrivateKey:  os.Getenv("FINALECHAT_VAPID_PRIVATE_KEY"),
-		VAPIDSubject:     getenv("FINALECHAT_VAPID_SUBJECT", "mailto:hello@finalechat.com"),
-		Signup:           strings.ToLower(strings.TrimSpace(os.Getenv("FINALECHAT_SIGNUP"))),
-		InviteCode:       os.Getenv("FINALECHAT_INVITE_CODE"),
-		B2KeyID:          os.Getenv("FINALECHAT_B2_KEY_ID"),
-		B2Key:            os.Getenv("FINALECHAT_B2_KEY"),
-		B2Bucket:         os.Getenv("FINALECHAT_B2_BUCKET"),
-		BlobStore:        strings.ToLower(os.Getenv("FINALECHAT_BLOB_STORE")),
-		SecureCookies:    getenvBool("FINALECHAT_SECURE_COOKIES", true),
-		TrustProxy:       getenvBool("FINALECHAT_TRUST_PROXY", true),
-		TrustedProxyHops: getenvInt("FINALECHAT_TRUSTED_PROXY_HOPS", 1),
-		SessionTTL:       getenvDuration("FINALECHAT_SESSION_TTL", 90*24*time.Hour),
-		ShutdownDelay:    getenvDuration("FINALECHAT_SHUTDOWN_DELAY", 3*time.Second),
-		LogJSON:          getenvBool("FINALECHAT_LOG_JSON", true),
-		LogLevel:         getenv("FINALECHAT_LOG_LEVEL", "info"),
-		Version:          version,
+		Addr:                 getenv("FINALECHAT_ADDR", ":8080"),
+		DatabaseURL:          os.Getenv("DATABASE_URL"),
+		BaseURL:              strings.TrimRight(getenv("FINALECHAT_BASE_URL", "http://localhost:8080"), "/"),
+		CanonicalHost:        os.Getenv("FINALECHAT_CANONICAL_HOST"),
+		VAPIDPublicKey:       os.Getenv("FINALECHAT_VAPID_PUBLIC_KEY"),
+		VAPIDPrivateKey:      os.Getenv("FINALECHAT_VAPID_PRIVATE_KEY"),
+		VAPIDSubject:         getenv("FINALECHAT_VAPID_SUBJECT", "mailto:hello@finalechat.com"),
+		Signup:               strings.ToLower(strings.TrimSpace(os.Getenv("FINALECHAT_SIGNUP"))),
+		InviteCode:           os.Getenv("FINALECHAT_INVITE_CODE"),
+		B2KeyID:              os.Getenv("FINALECHAT_B2_KEY_ID"),
+		B2Key:                os.Getenv("FINALECHAT_B2_KEY"),
+		B2Bucket:             os.Getenv("FINALECHAT_B2_BUCKET"),
+		BlobStore:            strings.ToLower(os.Getenv("FINALECHAT_BLOB_STORE")),
+		MessengerPageID:      os.Getenv("FINALECHAT_MESSENGER_PAGE_ID"),
+		MessengerPageToken:   os.Getenv("FINALECHAT_MESSENGER_PAGE_TOKEN"),
+		MessengerAppSecret:   os.Getenv("FINALECHAT_MESSENGER_APP_SECRET"),
+		MessengerVerifyToken: os.Getenv("FINALECHAT_MESSENGER_VERIFY_TOKEN"),
+		MessengerGraphURL:    os.Getenv("FINALECHAT_MESSENGER_GRAPH_URL"),
+		SecureCookies:        getenvBool("FINALECHAT_SECURE_COOKIES", true),
+		TrustProxy:           getenvBool("FINALECHAT_TRUST_PROXY", true),
+		TrustedProxyHops:     getenvInt("FINALECHAT_TRUSTED_PROXY_HOPS", 1),
+		SessionTTL:           getenvDuration("FINALECHAT_SESSION_TTL", 90*24*time.Hour),
+		ShutdownDelay:        getenvDuration("FINALECHAT_SHUTDOWN_DELAY", 3*time.Second),
+		LogJSON:              getenvBool("FINALECHAT_LOG_JSON", true),
+		LogLevel:             getenv("FINALECHAT_LOG_LEVEL", "info"),
+		Version:              version,
 	}
 	if hosts := os.Getenv("FINALECHAT_REDIRECT_HOSTS"); hosts != "" {
 		for _, h := range strings.Split(hosts, ",") {
@@ -149,10 +165,24 @@ func Load(version string) (Config, error) {
 	if cfg.BlobStore == "b2" && (cfg.B2KeyID == "" || cfg.B2Key == "" || cfg.B2Bucket == "") {
 		return cfg, errors.New("FINALECHAT_B2_KEY_ID, FINALECHAT_B2_KEY and FINALECHAT_B2_BUCKET must all be set for B2 attachments")
 	}
+	set := 0
+	for _, v := range []string{cfg.MessengerPageID, cfg.MessengerPageToken, cfg.MessengerAppSecret, cfg.MessengerVerifyToken} {
+		if v != "" {
+			set++
+		}
+	}
+	if set != 0 && set != 4 {
+		return cfg, errors.New("FINALECHAT_MESSENGER_PAGE_ID, FINALECHAT_MESSENGER_PAGE_TOKEN, FINALECHAT_MESSENGER_APP_SECRET and FINALECHAT_MESSENGER_VERIFY_TOKEN must be set together")
+	}
 	if len(cfg.RedirectHosts) > 0 && cfg.CanonicalHost == "" {
 		return cfg, errors.New("FINALECHAT_CANONICAL_HOST is required when FINALECHAT_REDIRECT_HOSTS is set")
 	}
 	return cfg, nil
+}
+
+// MessengerEnabled reports whether the Messenger connector is configured.
+func (c Config) MessengerEnabled() bool {
+	return c.MessengerPageID != "" && c.MessengerPageToken != "" && c.MessengerAppSecret != "" && c.MessengerVerifyToken != ""
 }
 
 // PushEnabled reports whether Web Push can be used.

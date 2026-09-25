@@ -5,6 +5,7 @@ import type {
   Counts,
   Me,
   Message,
+  MessengerStatus,
   PushSubscriptionInfo,
   Question,
   Settings,
@@ -159,4 +160,8 @@ export const api = {
   unsubscribePush: (endpoint: string) => request<{ ok: true }>("DELETE", `${base}/push/subscriptions`, { endpoint }),
   listPushSubscriptions: () => request<{ subscriptions: PushSubscriptionInfo[] }>("GET", `${base}/push/subscriptions`),
   testPush: () => request<{ ok: true; devices: number }>("POST", `${base}/push/test`, {}),
+
+  messenger: () => request<MessengerStatus>("GET", `${base}/messenger`),
+  messengerCode: () => request<{ code: string; expires_at: string; page_url: string }>("POST", `${base}/messenger/code`, {}),
+  messengerUnlink: () => request<{ ok: true }>("DELETE", `${base}/messenger`),
 };

@@ -103,6 +103,7 @@ func run() error {
 	}
 	srv := api.New(cfg, st, b, sender, blobs, log)
 	go srv.RunMaintenance(ctx)
+	go srv.RunMessengerRelay(ctx)
 
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,

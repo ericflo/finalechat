@@ -70,3 +70,18 @@ func TestAttachmentQuotaParsing(t *testing.T) {
 		}
 	}
 }
+
+func TestMessengerSettingsTogether(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("FINALECHAT_MESSENGER_PAGE_ID", "123")
+	if _, err := Load("test"); err == nil {
+		t.Fatal("a partial Messenger configuration was accepted")
+	}
+	t.Setenv("FINALECHAT_MESSENGER_PAGE_TOKEN", "EAA")
+	t.Setenv("FINALECHAT_MESSENGER_APP_SECRET", "s")
+	t.Setenv("FINALECHAT_MESSENGER_VERIFY_TOKEN", "v")
+	cfg, err := Load("test")
+	if err != nil || !cfg.MessengerEnabled() {
+		t.Fatalf("full Messenger configuration: %v %v", err, cfg.MessengerEnabled())
+	}
+}

@@ -25,6 +25,10 @@ Questions and important messages arrive as push notifications.
   machine and opens as a thread.
 - Real-time updates over server-sent events; Web Push with VAPID; installable
   PWA with app badge.
+- **Messenger**: link a Facebook Messenger chat and run your agents from
+  there when it is the only app that works (in-flight messaging passes):
+  messages, question buttons, replies, and `/new` sessions
+  ([setup](docs/messenger.md)).
 - Agent integrations: raw HTTPS (`/AGENTS.md`), a zero-dependency Python CLI
   (`curl -fsSL https://www.finalechat.com/install.sh | sh`), Claude Code hooks
   and an MCP server (`finalechat install claude-code`), and an Agent Skill.
@@ -90,6 +94,7 @@ own public instance.
 | `FINALECHAT_ATTACHMENT_QUOTA_BYTES` | `5GiB` | Attachment storage per account (`0` for no cap; accepts `500MiB`, `2G`, or a plain byte count) |
 | `FINALECHAT_B2_KEY_ID` / `FINALECHAT_B2_KEY` / `FINALECHAT_B2_BUCKET` | unset | Backblaze B2 bucket-scoped key for attachments; attachments are disabled without them |
 | `FINALECHAT_BLOB_STORE` | `b2` when keys are set, else `disabled` | `memory` keeps attachments in process memory for local development |
+| `FINALECHAT_MESSENGER_PAGE_ID` / `FINALECHAT_MESSENGER_PAGE_TOKEN` / `FINALECHAT_MESSENGER_APP_SECRET` / `FINALECHAT_MESSENGER_VERIFY_TOKEN` | unset | Facebook Messenger connector (all four or none); see [docs/messenger.md](docs/messenger.md) |
 | `FINALECHAT_SECURE_COOKIES` | `true` | Set `false` for plain-HTTP development |
 | `FINALECHAT_TRUST_PROXY` | `true` | Take the client address from `X-Forwarded-For` (set `false` when the server is reached directly) |
 | `FINALECHAT_TRUSTED_PROXY_HOPS` | `1` | How many trusted proxies append to `X-Forwarded-For`; the client is the Nth entry from the right, and `X-Real-Ip` is honoured only at `1` |

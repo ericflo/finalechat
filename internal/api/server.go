@@ -7,9 +7,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ericflo/finalechat/internal/blob"
 	"github.com/ericflo/finalechat/internal/bus"
 	"github.com/ericflo/finalechat/internal/config"
+	"github.com/ericflo/finalechat/internal/messenger"
 	"github.com/ericflo/finalechat/internal/push"
 	"github.com/ericflo/finalechat/internal/store"
 )
@@ -31,9 +34,18 @@ type Server struct {
 	uploadLimiter   *rateLimiter
 	activityLimiter *rateLimiter
 	artifactLimiter *rateLimiter
-	started         time.Time
-	shutdown        chan struct{}
-	draining        atomic.Bool
+	// messenger is the Messenger connector's page client; nil when the
+	// connector is not configured.
+	messenger *messenger.Client
+	// messengerSettle is how old a row must be before the relay sends it;
+	// messengerPoll paces the wait for a session a chat started.
+	messengerSettle      time.Duration
+	messengerPoll        time.Duration
+	messengerKick        chan uuid.UUID
+	messengerLinkLimiter *rateLimiter
+	started              time.Time
+	shutdown             chan struct{}
+	draining             atomic.Bool
 }
 
 // Features lists the optional capabilities agents can feature-detect on
@@ -46,28 +58,39 @@ func (s *Server) Features() []string {
 	if s.blobs != nil {
 		f = append(f, "attachments", "artifacts.v1")
 	}
+	if s.messenger != nil {
+		f = append(f, "messenger")
+	}
 	return f
 }
 
 // New wires a server. blobs may be nil, which disables attachments.
 func New(cfg config.Config, st *store.Store, b *bus.Bus, p *push.Sender, blobs blob.Store, log *slog.Logger) *Server {
-	return &Server{
-		cfg:             cfg,
-		store:           st,
-		bus:             b,
-		push:            p,
-		blobs:           blobs,
-		log:             log,
-		authLimiter:     newRateLimiter(20),
-		registerLimiter: newRateLimiter(5),
-		messageLimiter:  newRateLimiter(120),
-		questionLimiter: newRateLimiter(30),
-		uploadLimiter:   newRateLimiter(30),
-		activityLimiter: newRateLimiter(300),
-		artifactLimiter: newRateLimiter(600),
-		started:         time.Now().UTC().Truncate(time.Second),
-		shutdown:        make(chan struct{}),
+	s := &Server{
+		cfg:                  cfg,
+		store:                st,
+		bus:                  b,
+		push:                 p,
+		blobs:                blobs,
+		log:                  log,
+		authLimiter:          newRateLimiter(20),
+		registerLimiter:      newRateLimiter(5),
+		messageLimiter:       newRateLimiter(120),
+		questionLimiter:      newRateLimiter(30),
+		uploadLimiter:        newRateLimiter(30),
+		activityLimiter:      newRateLimiter(300),
+		artifactLimiter:      newRateLimiter(600),
+		started:              time.Now().UTC().Truncate(time.Second),
+		shutdown:             make(chan struct{}),
+		messengerSettle:      2 * time.Second,
+		messengerPoll:        1500 * time.Millisecond,
+		messengerKick:        make(chan uuid.UUID, 64),
+		messengerLinkLimiter: newRateLimiter(10),
 	}
+	if cfg.MessengerEnabled() {
+		s.messenger = messenger.NewClient(cfg.MessengerGraphURL, cfg.MessengerPageID, cfg.MessengerPageToken)
+	}
+	return s
 }
 
 // Shutdown tells long-lived connections to reconnect elsewhere and makes the
@@ -116,6 +139,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /agents.md", s.document("AGENTS.md", "text/markdown; charset=utf-8", false))
 	mux.HandleFunc("GET /llms.txt", s.document("AGENTS.md", "text/plain; charset=utf-8", false))
 	mux.HandleFunc("GET /docs/integrations.md", s.document("docs/integrations.md", "text/markdown; charset=utf-8", false))
+	mux.HandleFunc("GET /docs/messenger.md", s.document("docs/messenger.md", "text/markdown; charset=utf-8", false))
 	mux.HandleFunc("GET /terms.md", s.document("docs/TERMS.md", "text/markdown; charset=utf-8", false))
 	mux.HandleFunc("GET /privacy.md", s.document("docs/PRIVACY.md", "text/markdown; charset=utf-8", false))
 	mux.HandleFunc("GET /api", s.apiIndex)
@@ -134,6 +158,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/v1/push/vapid", s.handleVAPID)
+	// Meta's webhook authenticates by signature, not by session or token.
+	mux.HandleFunc("GET /api/messenger/webhook", s.handleMessengerVerify)
+	mux.HandleFunc("POST /api/messenger/webhook", s.handleMessengerWebhook)
 
 	// Authenticated API.
 	authed := http.NewServeMux()
@@ -186,6 +213,12 @@ func (s *Server) Handler() http.Handler {
 	authed.HandleFunc("POST /api/v1/push/subscriptions", s.sessionOnly(s.handleSubscribe))
 	authed.HandleFunc("DELETE /api/v1/push/subscriptions", s.sessionOnly(s.handleUnsubscribe))
 	authed.HandleFunc("POST /api/v1/push/test", s.sessionOnly(s.handlePushTest))
+
+	// Linking Messenger grants the app's authority to a chat, so only the
+	// app may do it.
+	authed.HandleFunc("GET /api/v1/messenger", s.sessionOnly(s.handleGetMessenger))
+	authed.HandleFunc("POST /api/v1/messenger/code", s.sessionOnly(s.handleMessengerCode))
+	authed.HandleFunc("DELETE /api/v1/messenger", s.sessionOnly(s.handleMessengerUnlink))
 
 	authed.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &apiError{Status: http.StatusNotFound, Code: "not_found", Message: "Unknown API route. See " + s.cfg.BaseURL + "/api/ for the reference."})

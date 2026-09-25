@@ -159,6 +159,21 @@ export interface PushSubscriptionInfo {
   failure_count: number;
 }
 
+/** The Messenger connector as GET /messenger reports it. */
+export interface MessengerStatus {
+  enabled: boolean;
+  page_url?: string;
+  link: {
+    linked_at: string;
+    last_inbound_at: string;
+    /** Set while Messenger's 24-hour reply window is closed. */
+    window_closed_at: string | null;
+    pinned_thread_id: string | null;
+    last_thread_id: string | null;
+    important_only: boolean;
+  } | null;
+}
+
 export type SignupMode = "first" | "open" | "invite" | "closed";
 
 export interface AuthStatus {
