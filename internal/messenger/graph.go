@@ -64,6 +64,9 @@ type Error struct {
 	Subcode int    `json:"error_subcode"`
 	Type    string `json:"type"`
 	Message string `json:"message"`
+	// UserMsg is Meta's explanation for people, e.g. "You are temporarily
+	// restricted from sending messages."
+	UserMsg string `json:"error_user_msg"`
 }
 
 func (e *Error) Error() string {
@@ -74,6 +77,18 @@ func (e *Error) Error() string {
 // their last message is more than 24 hours old.
 func (e *Error) WindowClosed() bool {
 	return e.Code == 10 && e.Subcode == 2018278 || e.Subcode == 2018109 || e.Code == 551
+}
+
+// Restricted reports that Meta has temporarily stopped the Page from
+// sending (its spam protection), which lifts on its own after a while.
+func (e *Error) Restricted() bool {
+	return e.Code == 10 && e.Subcode == 1893063 || strings.Contains(e.UserMsg, "temporarily restricted")
+}
+
+// IsRestricted reports whether err is a temporary sending restriction.
+func IsRestricted(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Restricted()
 }
 
 // RateLimited reports a throttling refusal worth retrying later.

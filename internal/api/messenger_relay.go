@@ -183,6 +183,9 @@ func (s *Server) messengerWindowOpen(l *store.MessengerLink) bool {
 	if l.PausedAt != nil {
 		return false
 	}
+	if until, ok := restrictedUntil(l); ok && time.Now().Before(until) {
+		return false
+	}
 	if l.WindowClosedAt != nil && !l.WindowClosedAt.Before(l.LastInboundAt) {
 		return false
 	}
@@ -257,23 +260,139 @@ func (s *Server) relayLink(ctx context.Context, link *store.MessengerLink) error
 	if wanted > messengerBacklog {
 		return s.relayDigest(ctx, link, items, threadOf)
 	}
-	for _, it := range items {
-		if s.relayWants(link, threadOf, it) {
+	// Consecutive messages from one thread go out as one Messenger message:
+	// fewer, fuller messages are kinder to the reader and to Meta's spam
+	// limits. Cursor moves wait for the send that covers them.
+	var batch []*store.Message
+	var batchThread *store.Thread
+	var covered []relayItem
+	flush := func() error {
+		if len(batch) > 0 {
 			var err error
-			if it.message != nil {
-				_, err = s.messengerSendPieces(ctx, link, threadOf(it.message.ThreadID), it.message, 0)
+			if len(batch) == 1 {
+				_, err = s.messengerSendPieces(ctx, link, batchThread, batch[0], 0)
 			} else {
-				err = s.messengerSendQuestion(ctx, link, threadOf(it.question.ThreadID), it.question)
+				err = s.messengerSendBundle(ctx, link, batchThread, batch)
 			}
 			if stop, err := s.relayFailed(ctx, link, err); stop {
+				return errStopRelay{err}
+			}
+			if err == nil {
+				s.messengerUnrestricted(ctx, link)
+			}
+		}
+		for _, it := range covered {
+			if err := s.advance(ctx, link, it); err != nil {
 				return err
 			}
+		}
+		batch, batchThread, covered = nil, nil, nil
+		return nil
+	}
+	for _, it := range items {
+		if !s.relayWants(link, threadOf, it) {
+			covered = append(covered, it)
+			continue
+		}
+		if it.message != nil {
+			t := threadOf(it.message.ThreadID)
+			if batchThread != nil && batchThread.ID != t.ID {
+				if err := flush(); err != nil {
+					return unwrapStop(err)
+				}
+			}
+			batchThread = t
+			batch = append(batch, it.message)
+			covered = append(covered, it)
+			continue
+		}
+		if err := flush(); err != nil {
+			return unwrapStop(err)
+		}
+		err := s.messengerSendQuestion(ctx, link, threadOf(it.question.ThreadID), it.question)
+		if stop, err := s.relayFailed(ctx, link, err); stop {
+			return err
+		}
+		if err == nil {
+			s.messengerUnrestricted(ctx, link)
 		}
 		if err := s.advance(ctx, link, it); err != nil {
 			return err
 		}
 	}
-	return nil
+	return unwrapStop(flush())
+}
+
+// errStopRelay carries a send failure that ends this relay pass.
+type errStopRelay struct{ err error }
+
+func (e errStopRelay) Error() string {
+	if e.err == nil {
+		return "relay held"
+	}
+	return e.err.Error()
+}
+
+func unwrapStop(err error) error {
+	var stop errStopRelay
+	if errors.As(err, &stop) {
+		return stop.err
+	}
+	return err
+}
+
+// messengerSendBundle sends several messages from one thread as one
+// Messenger message (up to three bubbles; the rest is in Finalechat), then
+// their files.
+func (s *Server) messengerSendBundle(ctx context.Context, link *store.MessengerLink, thread *store.Thread, msgs []*store.Message) error {
+	tag := s.messengerTag(ctx, link.UserID, thread)
+	var parts []string
+	important := false
+	for _, m := range msgs {
+		important = important || m.Importance == store.ImportanceImportant
+		if kind, _ := m.Meta["kind"].(string); m.Sender == store.SenderSystem && kind == "session_end" {
+			parts = append(parts, "⏹ "+messenger.Clip(strings.TrimSpace(m.Body), 300))
+			continue
+		}
+		body := strings.TrimSpace(m.Body)
+		if m.Format != "text" {
+			body = messenger.Markdown(body)
+		}
+		var b strings.Builder
+		if m.Importance == store.ImportanceImportant && len(msgs) > 1 {
+			b.WriteString("❗ ")
+		}
+		b.WriteString(body)
+		for _, a := range m.Attachments {
+			fmt.Fprintf(&b, "\n📎 %s (%s)", a.Filename, shortSize(a.Size))
+		}
+		parts = append(parts, strings.TrimSpace(b.String()))
+	}
+	head := tag
+	if important {
+		head = "❗ " + tag
+	}
+	pieces := messenger.Chunk(head+"\n"+strings.Join(parts, "\n\n"), messenger.MaxTextRunes-60)
+	end := min(messengerPiecesPerSend, len(pieces))
+	for i := 0; i < end; i++ {
+		text := pieces[i]
+		if i == end-1 && end < len(pieces) {
+			h, _ := s.store.MessengerHandle(ctx, link.UserID, thread.ID)
+			text += fmt.Sprintf("\n\n… the rest is in Finalechat (/read %d)", h)
+		}
+		mid, err := s.messenger.SendText(ctx, link.PSID, text, nil, "")
+		if err != nil {
+			return err
+		}
+		_ = s.store.RecordMessengerSent(ctx, link.UserID, mid, &thread.ID, nil)
+	}
+	for _, m := range msgs {
+		if err := s.messengerSendFiles(ctx, link, thread, m); err != nil {
+			return err
+		}
+	}
+	link.LastThreadID = &thread.ID
+	return s.store.SetMessengerLastThread(ctx, link.UserID, thread.ID)
 }
 
 // relayFailed decides what a send error means: stop and retry later
@@ -286,12 +405,63 @@ func (s *Server) relayFailed(ctx context.Context, link *store.MessengerLink, err
 	if messenger.IsWindowClosed(err) {
 		return true, s.store.CloseMessengerWindow(ctx, link.UserID)
 	}
+	if messenger.IsRestricted(err) {
+		return true, s.messengerRestricted(ctx, link)
+	}
 	var ge *messenger.Error
 	if errors.As(err, &ge) && ge.Status >= 400 && ge.Status < 500 && !ge.RateLimited() && ge.Status != http.StatusUnauthorized {
 		s.log.Warn("messenger: skipping an item Messenger refused", "err", err)
 		return false, nil
 	}
 	return true, err
+}
+
+// Meta's spam protection can stop a Page from sending for a while. The
+// relay then holds everything (nothing is skipped) and tries again after
+// a backoff that doubles from 15 minutes to an hour, since every refused
+// attempt can prolong the restriction. The first send that works lifts
+// the hold; a long backlog then arrives as a digest.
+const (
+	restrictedFirstBackoff = 15 * time.Minute
+	restrictedMaxBackoff   = time.Hour
+)
+
+func restrictedUntil(l *store.MessengerLink) (time.Time, bool) {
+	raw, _ := l.State["restricted_until"].(string)
+	t, err := time.Parse(time.RFC3339, raw)
+	return t, err == nil
+}
+
+func (s *Server) messengerRestricted(ctx context.Context, link *store.MessengerLink) error {
+	backoff := restrictedFirstBackoff
+	if prev, ok := link.State["restricted_backoff_s"].(float64); ok && prev > 0 {
+		backoff = min(2*time.Duration(prev)*time.Second, restrictedMaxBackoff)
+	}
+	state := store.JSON{}
+	for k, v := range link.State {
+		state[k] = v
+	}
+	state["restricted_until"] = time.Now().Add(backoff).UTC().Format(time.RFC3339)
+	state["restricted_backoff_s"] = backoff.Seconds()
+	link.State = state
+	s.log.Warn("messenger: Meta is restricting the Page's sending; holding the relay", "retry_in", backoff.String())
+	return s.store.SetMessengerState(ctx, link.UserID, state)
+}
+
+// messengerUnrestricted clears the hold after a send went through.
+func (s *Server) messengerUnrestricted(ctx context.Context, link *store.MessengerLink) {
+	if _, ok := link.State["restricted_until"]; !ok {
+		return
+	}
+	state := store.JSON{}
+	for k, v := range link.State {
+		if k != "restricted_until" && k != "restricted_backoff_s" {
+			state[k] = v
+		}
+	}
+	link.State = state
+	_ = s.store.SetMessengerState(ctx, link.UserID, state)
+	s.log.Info("messenger: the Page can send again")
 }
 
 func (s *Server) advance(ctx context.Context, link *store.MessengerLink, it relayItem) error {

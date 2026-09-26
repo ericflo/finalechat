@@ -674,3 +674,58 @@ func TestMessengerFiles(t *testing.T) {
 		t.Fatalf("sticker: %v", body)
 	}
 }
+
+func TestMessengerRestrictionAndBundles(t *testing.T) {
+	_, a := setup(t)
+	g := withMessenger(t)
+	psid := "psid-" + uuid.NewString()[:8]
+	linkMessenger(t, g, psid)
+	ext := "msgr-" + uuid.NewString()[:8]
+	post := func(body string) {
+		a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+ext+"/messages", map[string]any{"title": "bundle", "body": body})
+	}
+
+	// Several messages from one thread arrive as one Messenger message.
+	post("Check due: tests running.")
+	post("Check due: tests passed.")
+	post("**Done.** Deployed.")
+	from := g.mark()
+	relay(t)
+	got := g.texts(from)
+	if len(got) != 1 || !strings.Contains(got[0].Text, "tests running.\n\nCheck due: tests passed.\n\n*Done.* Deployed.") {
+		t.Fatalf("bundle: %+v", got)
+	}
+
+	// Meta's temporary restriction holds the relay without losing anything.
+	post("held while restricted")
+	g.mu.Lock()
+	g.refuse = `{"error":{"message":"Application does not have permission for this action","type":"OAuthException","code":10,"error_subcode":1893063,"error_user_msg":"You are temporarily restricted from sending messages."}}`
+	g.mu.Unlock()
+	relay(t)
+	from = g.mark()
+	relay(t) // still held: no attempt at all
+	if n := g.mark() - from; n != 0 {
+		t.Fatalf("relay retried %d times during the hold", n)
+	}
+	userID := uuid.MustParse(str(sub(a.must(http.StatusOK, "GET", "/api/v1/me", nil), "user"), "id"))
+	link, err := testAPI.store.GetMessengerLink(context.Background(), userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := restrictedUntil(link); !ok {
+		t.Fatalf("no hold recorded: %v", link.State)
+	}
+	// When the hold expires the held message goes out and the hold clears.
+	link.State["restricted_until"] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	if err := testAPI.store.SetMessengerState(context.Background(), userID, link.State); err != nil {
+		t.Fatal(err)
+	}
+	relay(t)
+	if txt := lastText(t, g, from); !strings.Contains(txt, "held while restricted") {
+		t.Fatalf("held message after the restriction: %q", txt)
+	}
+	link, _ = testAPI.store.GetMessengerLink(context.Background(), userID)
+	if _, ok := restrictedUntil(link); ok {
+		t.Fatalf("hold not cleared: %v", link.State)
+	}
+}
