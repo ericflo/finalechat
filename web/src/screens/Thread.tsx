@@ -790,8 +790,8 @@ function Composer({ threadId, ended, onSending }: { threadId: string; ended: boo
     const room = 8 - uploads.length;
     if (list.length > room) toast(`You can attach up to 8 files per message.`, "error");
     for (const file of list.slice(0, Math.max(0, room))) {
-      if (file.size > 10 * 1024 * 1024) {
-        toast(`${file.name} is larger than 10 MB.`, "error");
+      if (file.size > 25 * 1024 * 1024) {
+        toast(`${file.name} is larger than 25 MB.`, "error");
         continue;
       }
       const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;

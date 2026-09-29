@@ -61,7 +61,7 @@ func (s *Server) storeAttachment(ctx context.Context, userID, threadID uuid.UUID
 		return nil, errValidation("The uploaded file is empty.")
 	}
 	if len(data) > store.MaxAttachmentBytes {
-		return nil, &apiError{Status: http.StatusRequestEntityTooLarge, Code: "too_large", Message: "Attachments must be at most 10 MiB."}
+		return nil, &apiError{Status: http.StatusRequestEntityTooLarge, Code: "too_large", Message: "Attachments must be at most 25 MiB."}
 	}
 	// A full account is refused before any decoding or upload work; the
 	// insert repeats the check under a per-account lock so concurrent

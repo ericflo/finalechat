@@ -76,7 +76,7 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | 409 | `already_resolved` | Answering or cancelling a question that is no longer pending |
 | 409 | `email_taken` | Registration with an existing email |
 | 409 | `no_subscriptions` | Test push with no subscribed device |
-| 413 | `too_large` | JSON body over 1 MiB, an attachment over 10 MiB, or a multipart request over the combined limit |
+| 413 | `too_large` | JSON body over 1 MiB, an attachment over 25 MiB, or a multipart request over the combined limit |
 | 413 | `storage_quota` | The account's attachment (or artifact) storage is full; delete threads or messages that carry files to free space |
 | 422 | `validation_failed` | A field failed validation; `message` says which |
 | 429 | `rate_limited` (login attempts per address; token writes beyond about 120 messages, 30 questions, 30 uploads or 300 statuses a minute; honour `Retry-After`) | Too many login attempts (20 per minute per IP) or registrations (5 per minute per IP) |
@@ -101,7 +101,7 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | `wait` | 0 to 600 seconds (larger values are clamped to 600) |
 | `timeout_seconds` | 1 to 604800 (7 days) |
 | `limit` | threads 1 to 200 (default 50); messages and questions 1 to 500 (default 100) |
-| Attachment | 10 MiB per file, 8 per message or upload request; `filename` 200 characters |
+| Attachment | 25 MiB per file, 8 per message or upload request; `filename` 200 characters |
 | Attachment storage | 5 GiB per account by default (`FINALECHAT_ATTACHMENT_QUOTA_BYTES`); `GET /me` reports `storage` |
 | Activity `text` / `ttl_seconds` | 200 characters on one line / 1 to 600 seconds (default 45) |
 
@@ -786,7 +786,7 @@ is answered: `meta.kind` is `answer` and `meta.question_id` links it.
 
 ## Attachments
 
-Messages carry files: screenshots, logs, diffs, PDFs, anything up to 10 MiB,
+Messages carry files: screenshots, logs, diffs, PDFs, anything up to 25 MiB,
 at most 8 per message. Images get dimensions and a JPEG thumbnail; the app
 shows them inline, and the thread preview and push notification read
 `📷 Image` or `📎 Attachment`. Bytes live in a private Backblaze B2 bucket;
@@ -849,7 +849,7 @@ curl -sS https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e/atta
 Status `201`. Then pass the ids in a message's `attachments` field. Each
 upload attaches to exactly one message; a pending upload that is not
 attached within 24 hours is deleted. `413 storage_quota` when the account's
-attachment storage is full. `413 too_large` for a file over 10 MiB,
+attachment storage is full. `413 too_large` for a file over 25 MiB,
 `422 validation_failed` for an empty file or an undecodable image, and
 `502 storage_unavailable` when the object store fails.
 

@@ -4,6 +4,7 @@ package imaging
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"image"
 	"image/gif"
 	"image/jpeg"
@@ -30,10 +31,28 @@ var ImageTypes = map[string]bool{
 	"image/webp": true,
 }
 
-// MaxPixels bounds decode work so a tiny file cannot declare a huge canvas:
-// a 16 MP image is already ~64 MB decoded, and a phone screenshot or a 4K
-// render is well under it.
-const MaxPixels = 16_000_000
+// MaxPixels bounds decode work so a tiny file cannot declare a huge canvas.
+// 300 MP admits everything realistic (50 MP phone sensors, 8K stills at
+// ~33 MP, large scans and panoramas) while still rejecting absurd
+// gigapixel headers that would exhaust memory. Concurrent decodes are
+// additionally capped (see the decoding semaphore in internal/api).
+const MaxPixels = 300_000_000
+
+// checkDimensions rejects non-positive sizes and pixel counts above
+// MaxPixels. The width×height product uses int64 so extreme header values
+// (e.g. 1<<30 × 1<<30) cannot overflow into a small positive int and slip
+// past the limit.
+func checkDimensions(width, height int) error {
+	if width <= 0 || height <= 0 {
+		return fmt.Errorf("image dimensions are out of range: image is %dx%d; limit is %d MP", width, height, MaxPixels/1_000_000)
+	}
+	pixels := int64(width) * int64(height)
+	if pixels > int64(MaxPixels) {
+		mp := float64(pixels) / 1_000_000
+		return fmt.Errorf("image dimensions are out of range: image is %dx%d (%.1f MP); limit is %d MP", width, height, mp, MaxPixels/1_000_000)
+	}
+	return nil
+}
 
 // Decode reads the image using the declared content type.
 func Decode(contentType string, data []byte) (image.Image, Info, error) {
@@ -41,8 +60,8 @@ func Decode(contentType string, data []byte) (image.Image, Info, error) {
 	if err != nil {
 		return nil, Info{}, err
 	}
-	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width*cfg.Height > MaxPixels {
-		return nil, Info{}, errors.New("image dimensions are out of range")
+	if err := checkDimensions(cfg.Width, cfg.Height); err != nil {
+		return nil, Info{}, err
 	}
 	img, err := decode(contentType, bytes.NewReader(data))
 	if err != nil {

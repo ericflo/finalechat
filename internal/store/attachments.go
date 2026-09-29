@@ -16,7 +16,7 @@ const (
 )
 
 // MaxAttachmentBytes bounds one upload.
-const MaxAttachmentBytes = 10 << 20
+const MaxAttachmentBytes = 25 << 20
 
 // MaxAttachmentsPerMessage bounds how many files one message carries.
 const MaxAttachmentsPerMessage = 8

@@ -72,7 +72,7 @@ POLL_CHUNK = 600
 HOOK_WAIT_CHUNK = 30
 
 # Attachment limits mirror the server's.
-MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 MAX_ATTACHMENTS = 8
 # Images larger than this are handed to MCP clients as thumbnails.
 MCP_IMAGE_INLINE_LIMIT = 4 * 1024 * 1024
@@ -708,7 +708,7 @@ def read_local_files(paths: list) -> list:
             raise CLIError(f"No such file: {path}")
         size = os.path.getsize(path)
         if size > MAX_ATTACHMENT_BYTES:
-            raise CLIError(f"{path} is {human_size(size)} ({size} bytes); attachments must be at most 10 MB ({MAX_ATTACHMENT_BYTES} bytes).")
+            raise CLIError(f"{path} is {human_size(size)} ({size} bytes); attachments must be at most 25 MB ({MAX_ATTACHMENT_BYTES} bytes).")
         if size == 0:
             raise CLIError(f"{path} is empty.")
         content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
@@ -2417,7 +2417,7 @@ def mcp_tools() -> list[dict]:
                                   "default": False},
                     "attachments": {
                         "type": "array",
-                        "description": "Absolute paths of local files to attach (screenshots, logs); up to 8, 10 MiB each.",
+                        "description": "Absolute paths of local files to attach (screenshots, logs); up to 8, 25 MiB each.",
                         "items": {"type": "string"},
                         "maxItems": MAX_ATTACHMENTS,
                     },
@@ -4882,7 +4882,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("message", nargs="*", metavar="MESSAGE", help="message text (joined with spaces)")
     add_thread_args(p)
     p.add_argument("-f", "--file", action="append", metavar="PATH",
-                   help="attach a file (repeatable, up to 8, 10 MB each); the message text becomes optional")
+                   help="attach a file (repeatable, up to 8, 25 MB each); the message text becomes optional")
     p.add_argument("--important", action="store_true", help="mark important and push a notification")
     notify = p.add_mutually_exclusive_group()
     notify.add_argument("--notify", dest="notify", action="store_true", default=None,

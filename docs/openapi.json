@@ -3603,7 +3603,7 @@
             }
           },
           "413": {
-            "description": "A file is over 10 MiB or the request is too large",
+            "description": "A file is over 25 MiB or the request is too large",
             "content": {
               "application/json": {
                 "schema": {
@@ -8216,7 +8216,7 @@
               "format": "binary"
             },
             "maxItems": 8,
-            "description": "File parts (any field name works). At most 10 MiB each, 8 per message including pending ids."
+            "description": "File parts (any field name works). At most 25 MiB each, 8 per message including pending ids."
           },
           "activity": {
             "type": "string",
