@@ -1133,7 +1133,7 @@ The container format is `finalechat.website/v1`. Each manifest lists a standalon
 HTML entrypoint, optional settings entrypoint, producer, capture time, native
 dataset identity and files with full SHA-256 hashes and ordered 1 MiB chunks.
 Files retain native bytes. Limits: 4,096 files, 16,384 chunk references, 512 MiB
-per file, 2 GiB per revision, 10 GiB of unique bytes per account, 8 MiB per HTML
+per file, 2 GiB per revision, 1 TiB of unique bytes per account, 8 MiB per HTML
 entrypoint, 1 MiB manifest/request. Paths must be portable and traversal-free.
 Upload missing chunks before committing. Preserve the parent revision and
 idempotency key in a durable publisher journal before sending a commit.
