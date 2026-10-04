@@ -20,9 +20,9 @@ const (
 	MaxFileBytes     int64 = 512 << 20
 	MaxRevisionBytes int64 = 2 << 30
 	// MaxAccountBytes caps an account's unique artifact bytes. This server is
-	// single-user, so the cap is effectively unlimited (1 TiB); the check
+	// single-user, so the cap is effectively unlimited (2 TiB); the check
 	// itself stays to block absurd/garbage growth.
-	MaxAccountBytes int64 = 1 << 40
+	MaxAccountBytes int64 = 2 << 40
 	MaxFiles              = 4096
 	MaxChunks             = 16384
 	MaxPreviewBytes       = 8 << 20
