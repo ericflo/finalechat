@@ -115,5 +115,6 @@ Built in Finalechat (relay threads only, phone first, light and dark):
 - **7. Tell me when it's done**: done as a bell beside the badge and an item in the controls, both sending `/notify-done`. They show as armed while `meta.relay.notify_done` is true.
 - **8. Recent relays**: done, kept on the device: the last five agent and folder pairs started from this device, per connector.
 - **Copy attach command**: done, from `meta.relay.attach`.
+- **Where it works**: the folder sits right under the agent chips on New session (`~/Development/snowdown ⌄`), not only in the header. Its sheet finds folders as you type ("snow") and takes `~/…` paths.
 
 Not built: 4 (Claude's suggested reply) and "→ Codex can see this" on images.

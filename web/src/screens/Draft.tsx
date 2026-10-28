@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, Sheet } from "../components/Common";
-import { IconClock, IconFolder, IconSend, IconSettings } from "../components/Icons";
+import { IconChevron, IconClock, IconFolder, IconSend, IconSettings } from "../components/Icons";
 import { directoryChoices, relayName, relayProfiles, startSession, useSessionStarters } from "../components/NewSession";
 import { RunningRelays, agentName, runningRelays } from "../components/Relay";
 import { ResourceSettingsSheet } from "../components/ThreadSettings";
@@ -220,6 +220,16 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
               })}
             </div>
           )}
+          {profiles.length > 0 && (
+            // Where it works, right under who does the work.
+            <div className="folder-row">
+              <button type="button" className="folder-chip" title={`${relay ? `${who} works` : "Starts"} in ${home(dir)}. Tap to change.`} aria-label={`Folder: ${home(dir)}. Change`} disabled={busy} onClick={() => setPicking(true)}>
+                <IconFolder aria-hidden="true" />
+                <span>{home(dir)}</span>
+                <IconChevron aria-hidden="true" className="folder-chip-more" />
+              </button>
+            </div>
+          )}
           {recent.length > 0 && (
             <div className="recent-picker" role="group" aria-label="Recent">
               <IconClock className="recent-icon" aria-hidden="true" />
@@ -277,52 +287,66 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
           </form>
         </div>
       )}
-      {picking && choices && <DirectorySheet choices={choices} current={dir} onChoose={choose} onClose={() => setPicking(false)} />}
+      {picking && choices && <DirectorySheet choices={choices} current={dir} who={relay ? who : null} onChoose={choose} onClose={() => setPicking(false)} />}
       {settingsOpen && <ResourceSettingsSheet resourceId={resourceId} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
 
-function DirectorySheet({ choices, current, onChoose, onClose }: { choices: ReturnType<typeof directoryChoices>; current: string; onChoose: (p: string) => void; onClose: () => void }) {
+function DirectorySheet({ choices, current, who, onChoose, onClose }: { choices: ReturnType<typeof directoryChoices>; current: string; who: string | null; onChoose: (p: string) => void; onClose: () => void }) {
   const [custom, setCustom] = useState("");
   // An absolute path, or ~/… (eagent reads ~ as the machine's home).
   const typed = fromHome(custom.trim(), choices.root).replace(/(.)\/+$/, "$1");
-  const usable = /^(\/|~(\/|$))/.test(typed);
+  const isPath = /^(\/|~(\/|$))/.test(typed);
+  // Anything else typed narrows the lists: "snow" finds ~/Development/snowdown.
+  const q = custom.trim().toLowerCase();
+  const matches = (p: string) => !q || (isPath ? p.startsWith(typed) : home(p).toLowerCase().includes(q));
   const groups: { title: string; paths: string[] }[] = [
     { title: "Project", paths: [choices.root] },
     { title: "Recent", paths: choices.recent.filter((p) => p !== choices.root) },
     { title: "Inside the project", paths: choices.children },
     { title: "Next to the project", paths: choices.siblings },
-  ];
+  ].map((g) => ({ ...g, paths: g.paths.filter(matches) }));
+  const found = [...new Set(groups.flatMap((g) => g.paths))];
+  const pick = isPath ? typed : q && found.length === 1 ? found[0] : null;
+  // The Sheet focuses its first field, which on a phone raises the keyboard
+  // over the folders. Start on the folders; typing is a tap away.
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    list.current?.querySelector<HTMLElement>(".item.active, .item")?.focus({ preventScroll: true });
+  }, []);
   return (
     <Sheet onClose={onClose} label="Start in">
       <div style={{ padding: "4px 6px" }}>
-        <h2 style={{ fontSize: 18, marginBottom: 6 }}>Start in</h2>
-        <p style={{ marginBottom: 10 }}>The session&rsquo;s first commands run here; its settings and logs stay with the project.</p>
-        {groups
-          .filter((g) => g.paths.length > 0)
-          .map((g) => (
-            <div key={g.title}>
-              <div className="section-title">{g.title}</div>
-              {g.paths.map((p) => (
-                <button key={p} type="button" className={`item${p === current ? " active" : ""}`} onClick={() => onChoose(p)}>
-                  <IconFolder /> <span style={{ fontFamily: "var(--mono)", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis" }}>{home(p)}</span>
-                </button>
-              ))}
-            </div>
-          ))}
+        <h2 style={{ fontSize: 18, marginBottom: 6 }}>{who ? `Where ${who} works` : "Start in"}</h2>
+        <p style={{ marginBottom: 10 }}>{who ? `eagent starts ${who} in this folder; the session\u2019s settings and logs stay with the project.` : "The session\u2019s first commands run here; its settings and logs stay with the project."}</p>
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (usable) onChoose(typed);
+            if (pick) onChoose(pick);
           }}
-          style={{ display: "flex", gap: 8, marginTop: 10 }}
+          style={{ display: "flex", gap: 8, marginBottom: 6 }}
         >
-          <input value={custom} placeholder="~/Development/project" autoCapitalize="none" autoCorrect="off" spellCheck={false} onChange={(e) => setCustom(e.target.value)} style={{ flex: 1, fontFamily: "var(--mono)" }} />
-          <button type="submit" className="btn" disabled={!usable}>
+          <input value={custom} placeholder="Find a folder, or ~/path" aria-label="Find a folder or type a path" enterKeyHint="go" autoCapitalize="none" autoCorrect="off" spellCheck={false} onChange={(e) => setCustom(e.target.value)} style={{ flex: 1, fontFamily: "var(--mono)" }} />
+          <button type="submit" className="btn" disabled={!pick}>
             Use
           </button>
         </form>
+        <div ref={list}>
+          {groups
+            .filter((g) => g.paths.length > 0)
+            .map((g) => (
+              <div key={g.title}>
+                <div className="section-title">{g.title}</div>
+                {g.paths.map((p) => (
+                  <button key={p} type="button" className={`item${p === current ? " active" : ""}`} onClick={() => onChoose(p)}>
+                    <IconFolder /> <span style={{ fontFamily: "var(--mono)", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis" }}>{home(p)}</span>
+                  </button>
+                ))}
+              </div>
+            ))}
+        </div>
+        {q && !isPath && found.length === 0 && <p style={{ marginTop: 10 }}>No folder here matches. Type a full path, like ~/Development/project.</p>}
       </div>
     </Sheet>
   );
