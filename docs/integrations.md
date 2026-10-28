@@ -208,6 +208,26 @@ machine (`{name, target, session, thread, dir, agent, state, created}`,
 `state` `running` or `exited`); the New session draft lists them under
 "Running now", and each opens its `thread`.
 
+`meta.relay` also carries `target` (the terminal it runs in), `attach` (the
+command that watches it at the desk, which the controls sheet copies) and
+`notify_done` (a one-time buzz is armed for the end of the current turn).
+eagent keeps thread meta `relay_receipts` for the user's recent messages,
+mapping a message id to `sent` (typed into the agent), `delivered` (its
+transcript shows the message), `held` (waits for the end of its turn),
+`eagent` (kept for eagent) or `failed`; the app shows each as a small line
+under the message, with Retry on `failed`. Two more agent message kinds:
+`relay_report` is the relayed agent's own final message for a turn,
+verbatim, with `duration_ms`, `tools`, `interrupted` and `images` in its
+meta, which the app folds to "Codex's report" with a Reply that quotes it;
+`relay_screen` is a snapshot of its terminal as a fenced block, shown
+unwrapped. Two more commands: `/screen` posts such a snapshot, and
+`/notify-done` arms the buzz (the bell beside the badge sends it). In relay
+threads the app offers quick replies above the composer, and Messenger the
+same as buttons under the agent's messages: "Keep going.", "Commit and
+push.", "Deploy it.", "Take screenshots of where things stand and show me."
+(the app only for the last two) and "Stop." sent with `eagent.route`
+`agent` and `eagent.delivery` `interrupt`.
+
 Replies to a finished session revive it. A running eagent keeps its own
 poll on its thread, but nothing reads a thread once its session has ended,
 so `eagent serve` and `eagent connector run` follow the account's event

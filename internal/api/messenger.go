@@ -524,12 +524,21 @@ func inboundFilename(f inboundFile, contentType string) string {
 
 // post writes the user's message into the thread, as the app would.
 func (c *mchat) post(thread *store.Thread, text string) error {
+	return c.postMeta(thread, text, nil)
+}
+
+// postMeta is post with extra message meta, such as eagent.route.
+func (c *mchat) postMeta(thread *store.Thread, text string, extra store.JSON) error {
 	if len(text) > store.MaxBodyBytes {
 		text = text[:store.MaxBodyBytes]
 	}
+	meta := c.s.messengerCapsule()
+	for k, v := range extra {
+		meta[k] = v
+	}
 	msg, _, created, err := c.s.store.CreateMessage(c.ctx, c.user.ID, thread.ID, store.MessageInput{
 		Sender: store.SenderUser, Body: text, Format: "text", Importance: store.ImportanceNormal,
-		Meta: c.s.messengerCapsule(), Origin: store.OriginSession, MarkRead: true, ClientKey: "messenger:" + c.in.mid,
+		Meta: meta, Origin: store.OriginSession, MarkRead: true, ClientKey: "messenger:" + c.in.mid,
 	})
 	if errors.Is(err, store.ErrNotFound) {
 		c.say("That thread no longer exists. /ls lists the current ones.", nil)
@@ -671,10 +680,42 @@ func (c *mchat) payload(p string) error {
 		return c.goTo(n)
 	case "np", "nd":
 		return c.newChoice(kind, rest)
+	case "rq":
+		return c.relayQuickReply(rest)
 	}
 	// Unknown payloads (an old button) read as the text they showed.
 	if c.in.text != "" {
 		return c.reply(c.in.text)
+	}
+	return nil
+}
+
+// relayQuickReply sends the one-tap reply tapped under an agent's message
+// to its relay thread, exactly as the app's quick reply does: never as the
+// answer to a question waiting there.
+func (c *mchat) relayQuickReply(rest string) error {
+	id, key, _ := strings.Cut(rest, ":")
+	threadID, err := uuid.Parse(id)
+	if err != nil {
+		return nil
+	}
+	for _, q := range relayQuickTexts {
+		if q.key != key {
+			continue
+		}
+		thread, err := c.s.store.GetThread(c.ctx, c.user.ID, threadID)
+		if errors.Is(err, store.ErrNotFound) {
+			c.say("That thread no longer exists. /ls lists the current ones.", nil)
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var extra store.JSON
+		if q.interrupt {
+			extra = store.JSON{"eagent.route": "agent", "eagent.delivery": "interrupt"}
+		}
+		return c.postMeta(thread, q.text, extra)
 	}
 	return nil
 }

@@ -32,6 +32,9 @@ Once linked, open the chat with the Page in Messenger.
   - **Swipe-reply** to a message to reply to its thread, whoever spoke
     last. This is the reliable way when several sessions are talking.
   - **`/go 3`** sends every reply to #3 until you send `/go` on its own.
+  - Under a message from a Codex or Claude that eagent runs, **Keep going**,
+    **Commit & push** and **Stop** send that reply to its thread; Stop
+    interrupts the agent first.
 
 | Command | Does |
 | --- | --- |

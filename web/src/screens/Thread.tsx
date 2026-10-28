@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../components/Attachments";
 import { Avatar, ConfirmSheet, CopyButton, Sheet, sheetsOpen } from "../components/Common";
-import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBolt, IconBranch, IconChevron, IconClock, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconSend, IconServer, IconSettings, IconTerminal, IconTrash } from "../components/Icons";
-import { RelayBadge, RelaySheet, relayAgent, threadRelay } from "../components/Relay";
+import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBolt, IconBranch, IconChevron, IconClock, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconReply, IconSend, IconServer, IconSettings, IconTerminal, IconTrash } from "../components/Icons";
+import { NotifyBell, RelayBadge, RelaySheet, agentName, relayAgent, relayReceipts, threadRelay } from "../components/Relay";
 import { api } from "../lib/api";
 import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
 import { QuestionCard } from "../components/QuestionCard";
@@ -12,7 +12,7 @@ import { navigate } from "../lib/router";
 import { AlreadyPostedError, deleteThread, loadOlderMessages, loadThread, markRead, onMessageRemoved, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
 import type { MessageRouting } from "../lib/clientCaps";
-import type { Activity, Attachment, EagentDelivery, EagentRoute, Message, Question, Thread, ThreadRelay } from "../lib/types";
+import type { Activity, Attachment, EagentDelivery, EagentRoute, Message, Question, RelayReceipt, Thread, ThreadRelay } from "../lib/types";
 import { ThreadSettingsPanel } from "../components/ThreadSettings";
 import { ThreadArtifacts } from "./Artifacts";
 import { InspectMessage } from "../components/InspectMessage";
@@ -24,7 +24,7 @@ const itemKey = (it: Item) => (it.kind === "message" ? it.m.id : it.q.id);
 function groupedWith(a: Item | undefined, b: Item | undefined): boolean {
   if (!a || !b || a.kind !== "message" || b.kind !== "message") return false;
   if (a.m.sender !== b.m.sender || (a.m.origin || "") !== (b.m.origin || "")) return false;
-  if (isRelaySend(a.m) !== isRelaySend(b.m)) return false;
+  if (relayKind(a.m) !== relayKind(b.m)) return false;
   if (!sameDay(a.at, b.at)) return false;
   return Math.abs(new Date(b.at).getTime() - new Date(a.at).getTime()) < 3 * 60 * 1000;
 }
@@ -65,6 +65,10 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   const initialised = useRef<string | null>(null);
   const activity = useLiveActivity(thread?.activity);
   const relay = threadRelay(thread);
+  const receipts = relayReceipts(thread);
+  const relayName = relay ? relayAgent(relay) : "";
+  // Lets a report's Reply quote it into the composer.
+  const composer = useRef<ComposerHandle | null>(null);
 
   useEffect(() => {
     let alive = true; setFocusedMessage(null);
@@ -225,19 +229,25 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
     }
   }, [scrollToBottom]);
 
-  // A relay control is an ordinary message: it shows in the conversation,
-  // takes the same retry path, and eagent reads it like anything typed.
-  const sendCommand = useCallback((command: string) => {
+  // A relay control, quick reply or retry is an ordinary message: it shows
+  // in the conversation (with its receipt), takes the same retry path, and
+  // eagent reads it like anything typed.
+  const sendRelay = useCallback((text: string, routing?: MessageRouting): Promise<void> => {
     const key = newKey();
-    const attempt = () => {
+    const attempt = (): Promise<void> => {
       handleSending(true);
-      sendMessage(id, command, [], key).catch((e) => {
+      return sendMessage(id, text, [], key, routing).catch((e) => {
         handleSending(false);
-        toast(e instanceof Error ? e.message : "Could not send", "error", { label: "Retry", onClick: attempt });
+        toast(e instanceof Error ? e.message : "Could not send", "error", { label: "Retry", onClick: () => void attempt() });
       });
     };
-    attempt();
+    return attempt();
   }, [id, handleSending]);
+  const sendCommand = useCallback((command: string) => void sendRelay(command), [sendRelay]);
+  // A message that did not reach the agent goes again, as a new message for it.
+  const retryReceipt = useCallback((m: Message) => void sendRelay(m.body, { route: "agent" }), [sendRelay]);
+  const quoteReply = useCallback((line: string) => composer.current?.quote(line), []);
+  const openViewer = useCallback((items: Attachment[], index: number) => setViewing({ items, index }), []);
 
   const loadOlder = async () => {
     const el = document.scrollingElement;
@@ -310,7 +320,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
             <IconMore />
           </button></>
         }
-        below={thread ? (<><ThreadDescription thread={thread} onRename={() => setRenaming(true)} /><MetaStrip thread={thread} lead={relay ? <RelayBadge relay={relay} onOpen={() => setRelayMenu(true)} /> : null} /></>) : null}
+        below={thread ? (<><ThreadDescription thread={thread} onRename={() => setRenaming(true)} /><MetaStrip thread={thread} lead={relay ? <><RelayBadge relay={relay} onOpen={() => setRelayMenu(true)} /><NotifyBell relay={relay} onSend={sendCommand} /></> : null} /></>) : null}
       />
       <div ref={listRef} className="messages" onClick={onListClick}>
         {focusedMessage && !items.some(it => it.kind === "message" && it.m.id === focusedMessage.id) && <section aria-label="Selected archived message"><p>Selected message · {fullDateTime(focusedMessage.created_at)}</p><MessageBubble m={focusedMessage} grouped={false} showMeta={true} inspectThread={hasArtifacts ? thread : undefined} onOpen={(items, index) => setViewing({ items, index })} /><button className="btn small" onClick={() => navigate(`/t/${id}`)}>Return to recent conversation</button></section>}
@@ -358,7 +368,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
                   New
                 </div>
               )}
-              {it.kind === "message" ? <MessageBubble m={it.m} grouped={grouped} showMeta={showMeta} inspectThread={hasArtifacts ? thread : undefined} onOpen={(items, index) => setViewing({ items, index })} /> : <QuestionCard q={it.q} highlight={highlightQuestion === it.q.id} />}
+              {it.kind === "message" ? <MessageBubble m={it.m} grouped={grouped} showMeta={showMeta} inspectThread={hasArtifacts ? thread : undefined} onOpen={openViewer} receipt={receipts[it.m.id]} relayName={relayName} onRetry={retryReceipt} onReply={quoteReply} /> : <QuestionCard q={it.q} highlight={highlightQuestion === it.q.id} />}
             </div>
           );
         })}
@@ -383,6 +393,8 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
         ended={sessionEnded(messages, questions, thread)}
         relay={relay}
         onSending={handleSending}
+        onQuick={sendRelay}
+        handle={composer}
       />
       {relayMenu && relay && <RelaySheet relay={relay} onClose={() => setRelayMenu(false)} onSend={sendCommand} />}
       {viewing && <ImageViewer items={viewing.items} index={viewing.index} onClose={() => setViewing(null)} />}
@@ -662,11 +674,40 @@ function RenameSheet({ initialTitle, initialDescription, onClose, onSave }: { in
 /** Bodies taller than this collapse behind "Show all" so one log dump does not bury the thread. */
 const collapseAt = 520;
 
-type BubbleProps = { m: Message; grouped: boolean; showMeta: boolean; inspectThread?: Thread; onOpen: (images: Attachment[], index: number) => void };
+type BubbleProps = {
+  m: Message;
+  grouped: boolean;
+  showMeta: boolean;
+  inspectThread?: Thread;
+  onOpen: (images: Attachment[], index: number) => void;
+  /** In a relay thread: what eagent knows about this message of the user's. */
+  receipt?: RelayReceipt;
+  /** The relayed agent's name ("Codex"), for receipts. */
+  relayName?: string;
+  onRetry?: (m: Message) => void;
+  onReply?: (quote: string) => void;
+};
 
 const MessageBubble = memo(function MessageBubble(props: BubbleProps) {
-  return isRelaySend(props.m) ? <RelaySendBubble {...props} /> : <TranscriptBubble {...props} />;
+  switch (relayKind(props.m)) {
+    case "send":
+      return <RelaySendBubble {...props} />;
+    case "report":
+      return <RelayReportBubble {...props} />;
+    case "screen":
+      return <RelayScreenBubble {...props} />;
+  }
+  return <TranscriptBubble {...props} />;
 });
+
+/** Which of eagent's relay message kinds this is, if any. */
+function relayKind(m: Message): "send" | "report" | "screen" | "" {
+  if (m.sender !== "agent") return "";
+  if (isRelaySend(m)) return "send";
+  if (m.meta.kind === "relay_report") return "report";
+  if (m.meta.kind === "relay_screen" && (m.attachments ?? []).length === 0) return "screen";
+  return "";
+}
 
 /** What eagent itself typed to a relayed agent (Codex, Claude Code). */
 function isRelaySend(m: Message): boolean {
@@ -717,7 +758,162 @@ function RelaySendBubble({ m, grouped, showMeta, inspectThread }: BubbleProps) {
   );
 }
 
-function TranscriptBubble({ m, grouped, showMeta, inspectThread, onOpen }: BubbleProps) {
+const metaText = (v: unknown) => (typeof v === "string" ? v : "");
+
+/** The first line worth reading, without markdown markers: "Shipped lava; sky next". */
+function leadLine(body: string): string {
+  for (const raw of body.split("\n")) {
+    const line = raw
+      .replace(/^\s*(?:#{1,6}\s+|[-*+]\s+|>\s*|\d+[.)]\s+)/, "")
+      .replace(/[*_`]+/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (line && !/^(`{3,}|~{3,})/.test(raw.trim())) return line;
+  }
+  return "";
+}
+
+/** "45s", "4m", "1h 5m". */
+function shortDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m`;
+  return m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 60)}h`;
+}
+
+/** "4m · 23 tool calls · interrupted". */
+function reportStats(meta: Record<string, unknown>): string {
+  const parts: string[] = [];
+  if (typeof meta.duration_ms === "number" && meta.duration_ms > 0) parts.push(shortDuration(meta.duration_ms));
+  if (typeof meta.tools === "number" && meta.tools > 0) parts.push(`${meta.tools} tool call${meta.tools === 1 ? "" : "s"}`);
+  if (meta.interrupted === true) parts.push("interrupted");
+  return parts.join(" · ");
+}
+
+/** The relayed agent's own final message for one turn, verbatim: folded to
+ * a line until tapped, and quotable into the composer with Reply. */
+function RelayReportBubble({ m, grouped, showMeta, inspectThread, onReply }: BubbleProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const html = useMemo(() => (open ? renderMarkdown(m.body) : ""), [open, m.body]);
+  const who = agentName(metaText(m.meta.agent) || metaText(m.meta.relay));
+  const stats = reportStats(m.meta);
+  const line = leadLine(m.body);
+  const collapse = () => {
+    setOpen(false);
+    requestAnimationFrame(() => ref.current?.scrollIntoView({ block: "nearest" }));
+  };
+  return (
+    <div ref={ref} id={`message-${m.id}`} className={`msg agent relay-report ${grouped ? "grouped" : ""}`}>
+      <div className={`report-card ${open ? "open" : ""}`}>
+        <button type="button" className="report-toggle" aria-expanded={open} onClick={() => (open ? collapse() : setOpen(true))}>
+          <span className="report-head">
+            <span className="report-title">{who}&rsquo;s report</span>
+            {stats && <span className={`report-stats${m.meta.interrupted === true ? " interrupted" : ""}`}>{stats}</span>}
+            <IconChevron className="relay-chevron" aria-hidden="true" />
+          </span>
+          {!open && line && <span className="report-line">{line}</span>}
+        </button>
+        {open && <div className="md body report-body" dangerouslySetInnerHTML={{ __html: html }} />}
+        {open && (
+          <button type="button" className="show-less" onClick={collapse}>
+            Show less
+          </button>
+        )}
+      </div>
+      <div className="message-footer">
+        {showMeta && (
+          <div className="msg-meta" title={fullDateTime(m.created_at)}>
+            <span>{shortTime(m.created_at)}</span>
+          </div>
+        )}
+        <div className="message-actions">
+          {onReply && line && (
+            <button type="button" className="message-action labeled" aria-label={`Reply to ${who}'s report`} title="Reply" onClick={() => onReply(line.length > 120 ? `${line.slice(0, 119).trimEnd()}…` : line)}>
+              <IconReply aria-hidden="true" /> Reply
+            </button>
+          )}
+          <CopyButton text={m.body} className="message-action" label="Copy report" />
+          {inspectThread && <InspectMessage message={m} thread={inspectThread} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The text of a screen snapshot: the fenced block eagent posts, without its fences. */
+function screenText(body: string): string {
+  const fenced = /^\s*(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n?\1\s*$/.exec(body);
+  const text = fenced ? (fenced[2] as string) : body;
+  return text.replace(/[ \t]+$/gm, "").replace(/\s+$/, "");
+}
+
+/** A snapshot of the relayed agent's terminal, as it looked: no wrapping. */
+function RelayScreenBubble({ m, grouped, showMeta, inspectThread }: BubbleProps) {
+  const text = useMemo(() => screenText(m.body), [m.body]);
+  const who = agentName(metaText(m.meta.agent) || metaText(m.meta.relay));
+  return (
+    <div id={`message-${m.id}`} className={`msg agent relay-screen ${grouped ? "grouped" : ""}`}>
+      <div className="screen-card">
+        <div className="screen-head">
+          <IconTerminal aria-hidden="true" />
+          <span className="screen-label">Screen</span>
+          <span className="screen-who">{who}</span>
+          <CopyButton text={text} className="message-action" label="Copy screen" />
+        </div>
+        <pre className="screen-text" tabIndex={0} aria-label={`${who}'s screen`}>
+          {text}
+        </pre>
+      </div>
+      <div className="message-footer">
+        {showMeta && (
+          <div className="msg-meta" title={fullDateTime(m.created_at)}>
+            <span>{shortTime(m.created_at)}</span>
+          </div>
+        )}
+        {inspectThread && (
+          <div className="message-actions">
+            <InspectMessage message={m} thread={inspectThread} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Under the user's own message in a relay thread: where it got to. */
+function Receipt({ m, status, agent, onRetry }: { m: Message; status: RelayReceipt; agent: string; onRetry?: (m: Message) => void }) {
+  const [retried, setRetried] = useState(false);
+  const who = agent || "The agent";
+  const text = { sent: `→ ${who}`, delivered: `✓ ${who} has it`, held: "Held for the end of its turn", eagent: "Kept for eagent", failed: "Not delivered" }[status];
+  const canRetry = status === "failed" && !!onRetry && m.body.trim() !== "";
+  return (
+    <span className={`receipt ${status}`}>
+      {text}
+      {canRetry &&
+        (retried ? (
+          " · Sent again"
+        ) : (
+          <>
+            {" · "}
+            <button
+              type="button"
+              className="receipt-retry"
+              onClick={() => {
+                setRetried(true);
+                onRetry(m);
+              }}
+            >
+              Retry
+            </button>
+          </>
+        ))}
+    </span>
+  );
+}
+
+function TranscriptBubble({ m, grouped, showMeta, inspectThread, onOpen, receipt, relayName, onRetry }: BubbleProps) {
   const html = useMemo(() => (m.format === "markdown" ? renderMarkdown(m.body) : renderText(m.body)), [m.format, m.body]);
   const kind = typeof m.meta.kind === "string" ? m.meta.kind : "";
   const via = typeof m.meta.via === "string" ? m.meta.via : "";
@@ -756,6 +952,7 @@ function TranscriptBubble({ m, grouped, showMeta, inspectThread, onOpen }: Bubbl
         )}
       </div>
       <div className="message-footer">
+      {m.sender === "user" && receipt && <Receipt m={m} status={receipt} agent={relayName ?? ""} onRetry={onRetry} />}
       {showMeta && (
         <div className="msg-meta" title={fullDateTime(m.created_at)}>
           {kind === "notification" && <span>needs attention</span>}
@@ -802,7 +999,19 @@ function ActivityBubble({ a }: { a: Activity }) {
   );
 }
 
-function Composer({ threadId, ended, relay, onSending }: { threadId: string; ended: boolean; relay: ThreadRelay | null; onSending: (sending: boolean) => void }) {
+/** What the thread can ask of its composer. */
+type ComposerHandle = { quote: (line: string) => void };
+
+/** One-tap replies for a working relay: the user's most repeated messages to agents. */
+const quickReplies: { label: string; text: string; routing?: MessageRouting }[] = [
+  { label: "Keep going", text: "Keep going." },
+  { label: "Commit & push", text: "Commit and push." },
+  { label: "Deploy", text: "Deploy it." },
+  { label: "Screenshots", text: "Take screenshots of where things stand and show me." },
+  { label: "Stop", text: "Stop.", routing: { route: "agent", delivery: "interrupt" } },
+];
+
+function Composer({ threadId, ended, relay, onSending, onQuick, handle }: { threadId: string; ended: boolean; relay: ThreadRelay | null; onSending: (sending: boolean) => void; onQuick: (text: string, routing?: MessageRouting) => Promise<void>; handle: React.MutableRefObject<ComposerHandle | null> }) {
   const attachmentsEnabled = useStore((s) => s.attachmentsEnabled);
   const connection = useStore((s) => s.connection);
   const draft = useStore((s) => s.drafts[threadId] ?? "");
@@ -828,6 +1037,9 @@ function Composer({ threadId, ended, relay, onSending }: { threadId: string; end
   const [route, setRoute] = useState<EagentRoute | null>(null);
   const toAgent = live && route !== "eagent";
   const [sendMenu, setSendMenu] = useState(false);
+  // Quick replies show while the agent can act on them.
+  const quick = live && relay?.state !== "exited";
+  const [quickBusy, setQuickBusy] = useState(false);
   const pressTimer = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false);
   useEffect(() => {
@@ -887,6 +1099,38 @@ function Composer({ threadId, ended, relay, onSending }: { threadId: string; end
     resize();
     window.clearTimeout(draftTimer.current);
     draftTimer.current = window.setTimeout(() => setDraft(threadId, value), 300);
+  };
+
+  // Reply to a report: its line goes in as a quote, ahead of anything typed.
+  const textNow = useRef(text);
+  textNow.current = text;
+  useEffect(() => {
+    handle.current = {
+      quote: (line) => {
+        const next = `> ${line}\n\n${textNow.current.replace(/^\s+/, "")}`;
+        update(next);
+        requestAnimationFrame(() => {
+          const el = ref.current;
+          if (!el) return;
+          el.focus();
+          el.setSelectionRange(next.length, next.length);
+          resize();
+        });
+      },
+    };
+    return () => {
+      handle.current = null;
+    };
+  });
+
+  const sendQuick = async (q: (typeof quickReplies)[number]) => {
+    if (quickBusy) return;
+    setQuickBusy(true);
+    try {
+      await onQuick(q.text, q.routing);
+    } finally {
+      setQuickBusy(false);
+    }
   };
 
   const addFiles = (files: FileList | File[]) => {
@@ -998,6 +1242,15 @@ function Composer({ threadId, ended, relay, onSending }: { threadId: string; end
     >
       <UploadTray items={uploads} onRemove={removeUpload} />
       {ended && <div className="composer-note">This session has ended. Your reply is kept here for the next one.</div>}
+      {quick && (
+        <div className="quick-row" role="group" aria-label={`Quick replies to ${agent}`}>
+          {quickReplies.map((q) => (
+            <button key={q.label} type="button" className={`quick-chip${q.routing?.delivery === "interrupt" ? " stop" : ""}`} title={q.routing?.delivery === "interrupt" ? `Interrupts ${agent}: "${q.text}"` : `Sends "${q.text}"`} disabled={quickBusy} onClick={() => void sendQuick(q)}>
+              {q.label}
+            </button>
+          ))}
+        </div>
+      )}
       {live && (
         <div className="route-row">
           <span className="route-label" id={`route-${threadId}`}>

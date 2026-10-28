@@ -35,7 +35,9 @@ export interface Thread {
   title: string;
   agent: string;
   /** Free-form. eagent sets `relay` (a {@link ThreadRelay}) on its session
-   * threads while it relays to Codex or Claude Code, and `null` after. */
+   * threads while it relays to Codex or Claude Code, and `null` after, and
+   * `relay_receipts` ({@link RelayReceipt} by message id) for the user's
+   * recent messages there. */
   meta: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -69,7 +71,17 @@ export interface ThreadRelay {
   autopilot_until: string;
   /** The progress cadence set with /updates ("off", "15m", ...); "" is eagent's default. */
   updates: string;
+  /** The terminal it runs in, e.g. "eagent-relay-1793…-codex". */
+  target: string;
+  /** The command that watches it at the desk. */
+  attach: string;
+  /** A one-time buzz is armed for the end of the current turn. */
+  notify_done: boolean;
 }
+
+/** What eagent knows about one of the user's messages in a relay thread
+ * (thread meta `relay_receipts`, keyed by message id). */
+export type RelayReceipt = "sent" | "delivered" | "held" | "eagent" | "failed";
 
 /** Who a message in a relay thread is for: the relayed agent, or eagent. */
 export type EagentRoute = "agent" | "eagent";

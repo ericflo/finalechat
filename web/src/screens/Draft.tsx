@@ -1,13 +1,37 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, Sheet } from "../components/Common";
-import { IconFolder, IconSend, IconSettings } from "../components/Icons";
+import { IconClock, IconFolder, IconSend, IconSettings } from "../components/Icons";
 import { directoryChoices, relayName, relayProfiles, startSession, useSessionStarters } from "../components/NewSession";
-import { RunningRelays, runningRelays } from "../components/Relay";
+import { RunningRelays, agentName, runningRelays } from "../components/Relay";
 import { ResourceSettingsSheet } from "../components/ThreadSettings";
 import { TopBar } from "../components/TopBar";
 import { navigate } from "../lib/router";
 
 const home = (p: string) => p.replace(/^\/(?:home|Users)\/[^/]+/, "~");
+const base = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
+
+/** An agent and folder a relay session started with from this device. */
+type RecentRelay = { relay: string; dir: string };
+
+function readRecent(key: string): RecentRelay[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(key) ?? "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.filter((r): r is RecentRelay => !!r && typeof r.relay === "string" && r.relay !== "" && typeof r.dir === "string" && r.dir !== "");
+  } catch {
+    return [];
+  }
+}
+
+/** Keeps the last five distinct agent and folder pairs, newest first. */
+function rememberRecent(key: string, r: RecentRelay) {
+  try {
+    const next = [r, ...readRecent(key).filter((x) => x.relay !== r.relay || x.dir !== r.dir)].slice(0, 5);
+    localStorage.setItem(key, JSON.stringify(next));
+  } catch {
+    // ignore
+  }
+}
 
 /** A new session before it exists: it looks like a thread, the folder chip
  * picks where the session will start, the agent chips pick who does the work
@@ -61,9 +85,25 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
     }
   };
   const agents = [{ name: "", short: "eagent", title: "eagent does the work" }, ...profiles.map((p) => ({ name: p.name, short: relayName(p), title: `eagent starts ${p.label} and passes your messages on` }))];
+  // Agent and folder pairs this device started relays with, still offered.
+  const recentKey = starter ? `fc.draft.${starter.connector.id}.recent` : "";
+  const recent = useMemo(
+    () =>
+      (recentKey ? readRecent(recentKey) : []).flatMap((r) => {
+        const p = profiles.find((x) => x.name === r.relay);
+        return p ? [{ ...r, label: `${agentName(p.agent, relayName(p))} · ${base(r.dir)}`, title: `${p.label} in ${home(r.dir)}` }] : [];
+      }),
+    [recentKey, profiles],
+  );
   // A relayed agent may start with nothing to do yet; eagent needs a task.
   const ready = !!text.trim() || !!relay;
-  useEffect(() => () => { cancelled.current = true; }, []);
+  // Set again on mount: StrictMode's dev remount would otherwise leave it true.
+  useEffect(() => {
+    cancelled.current = false;
+    return () => {
+      cancelled.current = true;
+    };
+  }, []);
   useEffect(() => {
     ref.current?.focus();
   }, [loaded]);
@@ -85,6 +125,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
     setError(null);
     try {
       const threadId = await startSession(starter, text, dir || null, relay, setStatus, () => cancelled.current);
+      if (relay && dir) rememberRecent(recentKey, { relay: relay.name, dir });
       navigate(`/t/${threadId}`, { replace: true });
     } catch (err) {
       if (!cancelled.current) {
@@ -169,6 +210,30 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
                 return (
                   <button key={o.name || "eagent"} type="button" className={`agent-chip${active ? " active" : ""}`} aria-pressed={active} title={o.title} disabled={busy} onClick={() => pickAgent(o.name)}>
                     {o.short}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {recent.length > 0 && (
+            <div className="recent-picker" role="group" aria-label="Recent">
+              <IconClock className="recent-icon" aria-hidden="true" />
+              {recent.map((r) => {
+                const active = relay?.name === r.relay && dir === r.dir;
+                return (
+                  <button
+                    key={`${r.relay}:${r.dir}`}
+                    type="button"
+                    className={`recent-chip${active ? " active" : ""}`}
+                    aria-pressed={active}
+                    title={r.title}
+                    disabled={busy}
+                    onClick={() => {
+                      pickAgent(r.relay);
+                      choose(r.dir);
+                    }}
+                  >
+                    {r.label}
                   </button>
                 );
               })}

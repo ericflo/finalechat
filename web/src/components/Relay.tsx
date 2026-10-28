@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import type { SettingsResource } from "../lib/artifacts";
 import { navigate } from "../lib/router";
 import { toast } from "../lib/store";
 import { sameDay, shortTime, useNow } from "../lib/time";
-import type { Thread, ThreadRelay } from "../lib/types";
+import type { RelayReceipt, Thread, ThreadRelay } from "../lib/types";
 import { Avatar, ConfirmSheet, Sheet } from "./Common";
-import { IconBell, IconChevron, IconClock, IconExpand, IconInfo, IconPause, IconRefresh, IconRepeat, IconStop, IconSwap, IconUpgrade } from "./Icons";
+import { IconBell, IconChevron, IconClock, IconCopy, IconExpand, IconInfo, IconPause, IconRefresh, IconRepeat, IconStop, IconSwap, IconTerminal, IconUpgrade } from "./Icons";
 
 // eagent can start Codex or Claude Code in a terminal it owns and pass the
 // user's messages on (a relay). While one runs, eagent keeps thread meta
@@ -22,7 +22,32 @@ export function threadRelay(t: Thread | undefined): ThreadRelay | null {
   const name = text(r.name);
   const agent = text(r.agent);
   if (!name && !agent) return null;
-  return { name: name || agent, agent, label: text(r.label), state: (text(r.state) || "starting") as ThreadRelay["state"], autopilot: r.autopilot === true, autopilot_until: text(r.autopilot_until), updates: text(r.updates) };
+  return {
+    name: name || agent,
+    agent,
+    label: text(r.label),
+    state: (text(r.state) || "starting") as ThreadRelay["state"],
+    autopilot: r.autopilot === true,
+    autopilot_until: text(r.autopilot_until),
+    updates: text(r.updates),
+    target: text(r.target),
+    attach: text(r.attach),
+    notify_done: r.notify_done === true,
+  };
+}
+
+const receiptStates: readonly string[] = ["sent", "delivered", "held", "eagent", "failed"];
+
+/** eagent's receipts for the user's recent messages, by message id; empty
+ * outside a relay thread. */
+export function relayReceipts(t: Thread | undefined): Record<string, RelayReceipt> {
+  const raw = t?.meta.relay_receipts;
+  if (!threadRelay(t) || !raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, RelayReceipt> = {};
+  for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === "string" && receiptStates.includes(v)) out[id] = v as RelayReceipt;
+  }
+  return out;
 }
 
 /** "Codex" or "Claude" for the agents eagent relays to, else the name as given. */
@@ -80,9 +105,36 @@ export function RelayBadge({ relay, onOpen }: { relay: ThreadRelay; onOpen: () =
   );
 }
 
-function Item({ icon: Icon, label, hint, danger, onClick }: { icon: (p: React.SVGProps<SVGSVGElement>) => React.ReactElement; label: string; hint?: string; danger?: boolean; onClick: () => void }) {
+/** The bell beside the badge while the agent works: one buzz when this turn
+ * ends. Filled once armed; eagent confirms with meta.relay.notify_done. */
+export function NotifyBell({ relay, onSend }: { relay: ThreadRelay; onSend: (command: string) => void }) {
+  const [asked, setAsked] = useState(false);
+  // A new turn (or eagent's word) settles what was asked.
+  useEffect(() => setAsked(false), [relay.state, relay.notify_done]);
+  if (relay.state !== "working") return null;
+  const armed = relay.notify_done || asked;
+  const label = armed ? "You'll get a buzz when this turn ends" : "Tell me when it's done";
   return (
-    <button type="button" className={`item${danger ? " danger" : ""}`} onClick={onClick}>
+    <button
+      type="button"
+      className={`relay-bell${armed ? " armed" : ""}`}
+      aria-label={label}
+      aria-pressed={armed}
+      title={label}
+      disabled={armed}
+      onClick={() => {
+        setAsked(true);
+        onSend("/notify-done");
+      }}
+    >
+      <IconBell aria-hidden="true" fill={armed ? "currentColor" : "none"} />
+    </button>
+  );
+}
+
+function Item({ icon: Icon, label, hint, danger, disabled, onClick }: { icon: (p: React.SVGProps<SVGSVGElement>) => React.ReactElement; label: string; hint?: string; danger?: boolean; disabled?: boolean; onClick: () => void }) {
+  return (
+    <button type="button" className={`item${danger ? " danger" : ""}`} disabled={disabled} onClick={onClick}>
       <Icon aria-hidden="true" />
       <span className="item-text">
         <span>{label}</span>
@@ -110,12 +162,21 @@ export function RelaySheet({ relay, onClose, onSend }: { relay: ThreadRelay; onC
     onClose();
     onSend(command);
   };
+  const copyAttach = async () => {
+    onClose();
+    try {
+      await navigator.clipboard.writeText(relay.attach);
+      toast("Attach command copied");
+    } catch {
+      toast(relay.attach);
+    }
+  };
   if (view === "stop") {
     return <ConfirmSheet title={`Stop ${name}?`} body={`${name} ends for good, not just this step. To stop only what it is doing now, use Interrupt.`} confirmLabel={`Stop ${name}`} danger onClose={onClose} onConfirm={() => onSend("/stop-relay")} />;
   }
   if (view === "autopilot") return <AutopilotSheet relay={relay} onClose={onClose} onSend={send} />;
   return (
-    <Sheet onClose={onClose} label={`${name} controls`}>
+    <Sheet onClose={onClose} label={`${name} controls`} className="relay-sheet">
       <div className="sheet-title">
         <Avatar name={name} small />
         <span className="item-text">
@@ -124,7 +185,9 @@ export function RelaySheet({ relay, onClose, onSend }: { relay: ThreadRelay; onC
         </span>
       </div>
       {!ended(relay) && <Item icon={IconPause} label="Interrupt" hint="Stop its current step" onClick={() => send("/interrupt")} />}
-      {!stopped && <Item icon={IconRefresh} label="Restart" hint="It picks up its own session" onClick={() => send("/restart")} />}
+      {relay.state === "working" && <Item icon={IconBell} label="Tell me when it's done" hint={relay.notify_done ? "You'll get a buzz" : "One buzz when this turn ends"} disabled={relay.notify_done} onClick={() => send("/notify-done")} />}
+      {!stopped && <Item icon={IconTerminal} label="Screen" onClick={() => send("/screen")} />}
+      {!stopped && <Item icon={IconRefresh} label="Restart" onClick={() => send("/restart")} />}
       {!stopped && <Item icon={IconUpgrade} label="Upgrade" hint={`Update ${name}, then restart`} onClick={() => send("/upgrade")} />}
       {!stopped && other && <Item icon={IconSwap} label={`Switch to ${other.name}`} hint="Hands the work over with a brief" onClick={() => send(`/switch ${other.profile}`)} />}
       {!ended(relay) && <Item icon={IconRepeat} label="Autopilot…" hint={relay.autopilot ? `On: ${relayStatus(relay)}` : "Keep it working on its own"} onClick={() => setView("autopilot")} />}
@@ -143,7 +206,8 @@ export function RelaySheet({ relay, onClose, onSend }: { relay: ThreadRelay; onC
         </div>
       )}
       <Item icon={IconInfo} label="Status" onClick={() => send("/relay")} />
-      {!stopped && <Item icon={IconStop} label={`Stop ${name}`} hint="End it for good" danger onClick={() => setView("stop")} />}
+      {relay.attach && <Item icon={IconCopy} label="Copy attach command" onClick={() => void copyAttach()} />}
+      {!stopped && <Item icon={IconStop} label={`Stop ${name}`} danger onClick={() => setView("stop")} />}
     </Sheet>
   );
 }

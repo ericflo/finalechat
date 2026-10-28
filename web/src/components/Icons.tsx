@@ -129,3 +129,6 @@ export const IconRepeat = (p: P) => (
 export const IconInfo = (p: P) => (
   <svg {...base} {...p}><circle cx="12" cy="12" r="9" /><path d="M12 16v-5" /><path d="M12 8h.01" /></svg>
 );
+export const IconReply = (p: P) => (
+  <svg {...base} {...p}><path d="M9 14L4 9l5-5" /><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" /></svg>
+);

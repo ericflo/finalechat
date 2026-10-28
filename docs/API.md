@@ -215,7 +215,7 @@ push notifications.
 under the thread title: `host` (or `hostname`), `cwd` (whose hover text names `project`, the directory the session started in, when they differ), `branch`, `model`,
 `cost_usd` (number) and `tokens` (number). `relay`, which eagent sets while
 it relays to Codex or Claude Code, shows as a badge with that agent's
-controls (see [the integration guide](https://www.finalechat.com/docs/integrations.md)). Everything else is stored,
+controls, and `relay_receipts` as a delivery line under the user's messages (see [the integration guide](https://www.finalechat.com/docs/integrations.md)). Everything else is stored,
 merged on later writes, returned, and otherwise ignored.
 
 `activity` is the agent's live status line, or `null` when there is none or
@@ -257,7 +257,9 @@ thread and otherwise shows as a mirrored reply; `notification` labels a
 message as needing attention; `session_start` and `session_end` on `system`
 rows tell the app whether the agent's session is still running;
 `relay_send` marks what an agent typed to another agent it relays to, which
-the app folds to one line) and `via`
+the app folds to one line; `relay_report` is that agent's own report of a
+turn, folded to one line until tapped; `relay_screen` is a snapshot of its
+terminal, shown unwrapped) and `via`
 (a short source label shown under the bubble). In a thread with a `relay`,
 the app's user messages carry `eagent.route` (`agent` or `eagent`) and
 `eagent.delivery` (`interrupt` or `after_turn`) only when the user chose
