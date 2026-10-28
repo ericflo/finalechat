@@ -91,6 +91,18 @@ func (c *mchat) command() (bool, error) {
 	return true, nil
 }
 
+// relayCommands are eagent's controls for an agent it relays to (Codex,
+// Claude Code): /interrupt, /autopilot until 10:00, and so on. Messenger
+// owns none of them, so they reach the thread verbatim as the user's
+// message: never as the answer to a question waiting there, and never as
+// the folder a /new is asking for.
+var relayCommands = map[string]bool{"/interrupt": true, "/restart": true, "/upgrade": true, "/switch": true, "/autopilot": true, "/updates": true, "/stop-relay": true, "/relay": true}
+
+func isRelayCommand(text string) bool {
+	word, _, _ := strings.Cut(strings.TrimSpace(text), " ")
+	return relayCommands[strings.ToLower(word)]
+}
+
 func (c *mchat) goTo(n int) error {
 	id, err := c.s.store.MessengerThreadByHandle(c.ctx, c.link.UserID, n)
 	if errors.Is(err, store.ErrNotFound) {
@@ -625,7 +637,7 @@ func (c *mchat) newTyped(text string) (bool, error) {
 		c.say("Pick one of the numbers above, or /cancel.", nil)
 		return true, nil
 	}
-	if st.Step == "dir" && (strings.HasPrefix(text, "/") || strings.HasPrefix(text, "~")) {
+	if st.Step == "dir" && !isRelayCommand(text) && (strings.HasPrefix(text, "/") || strings.HasPrefix(text, "~")) {
 		dir := strings.TrimSpace(text)
 		if strings.HasPrefix(dir, "~") && len(st.Dirs) > 0 {
 			if home := homePrefixRe.FindString(st.Dirs[0]); home != "" {

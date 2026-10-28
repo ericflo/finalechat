@@ -186,6 +186,28 @@ local journal is missing is reported as `unknown` rather than started
 again. A stale `expected_version` is not a reason to refuse it, since
 starting a session reads the configuration without changing it.
 
+While a relay runs, eagent keeps thread meta `relay` current (`{name,
+agent, label, state, autopilot, autopilot_until}`; `state` is `starting`,
+`working`, `idle`, `blocked`, `exited` or `stopped`, `autopilot_until` is
+RFC 3339 or empty) and sets it to `null` when none is left. The app shows it
+as a header badge ("Codex · working", "Codex · autopilot until 10:00 AM")
+whose menu sends eagent's slash commands as ordinary user messages, so they
+appear in the conversation: `/interrupt` (stop the current step),
+`/restart`, `/upgrade` (update the CLI, then restart), `/switch claude` or
+`/switch codex` (hand the work over with a brief), `/autopilot`,
+`/autopilot until 10:00` (optionally followed by an instruction),
+`/autopilot off`, `/updates off|5m|15m|1h` (progress lines while it works;
+turn reports always come), `/stop-relay` (end the agent for good) and
+`/relay` (a status report). Messenger passes them to the thread unchanged.
+In a relay thread the composer can also say who a message is for and when:
+`meta["eagent.route"]` is `agent` or `eagent`, and `meta["eagent.delivery"]`
+is `queue`, `interrupt` or `after_turn` (a long press on send offers the
+last two). Each is sent only when the user chose it; without them eagent
+decides. The snapshot's `details.relays` lists the relays running on that
+machine (`{name, target, session, thread, dir, agent, state, created}`,
+`state` `running` or `exited`); the New session draft lists them under
+"Running now", and each opens its `thread`.
+
 Replies to a finished session revive it. A running eagent keeps its own
 poll on its thread, but nothing reads a thread once its session has ended,
 so `eagent serve` and `eagent connector run` follow the account's event

@@ -135,7 +135,7 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .icon-btn svg { width: 22px; height: 22px; }
 
 /* A thread's meta chips (where it runs, on what) under the title. */
-.meta-strip { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 0 12px 8px; max-width: 760px; margin: 0 auto; }
+.meta-strip { display: flex; align-items: center; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 0 12px 8px; max-width: 760px; margin: 0 auto; }
 .meta-strip::-webkit-scrollbar { display: none; }
 .meta-chip { display: inline-flex; align-items: center; gap: 5px; flex: none; padding: 2px 8px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); font-size: 12px; font-family: var(--mono); color: var(--text-2); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta-chip svg { width: 13px; height: 13px; color: var(--text-3); flex: none; }
@@ -339,6 +339,15 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .send-btn:active { transform: scale(0.92); }
 .send-btn svg { width: 20px; height: 20px; }
 .send-btn.label { width: auto; padding: 0 18px; border-radius: 22px; font-size: 15px; font-weight: 600; }
+/* A long press on send offers timed sends in a relay thread; no callout. */
+.send-btn { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+/* Relay thread: who the next message is for. */
+.route-row { display: flex; align-items: center; gap: 8px; max-width: 760px; margin: 0 auto 8px; min-width: 0; }
+.route-label { flex: none; font-size: 13px; font-weight: 600; color: var(--text-3); }
+.route-row .segmented { flex: none; }
+.route-row .segmented button { min-height: 32px; padding: 4px 12px; max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.route-row .segmented button.active { color: var(--accent); }
+.route-hint { margin-left: auto; min-width: 0; font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* A new session's agent picker: eagent, or an agent eagent starts and relays to. */
 .agent-picker { display: flex; flex-wrap: wrap; gap: 6px; max-width: 760px; margin: 0 auto 8px; }
 .agent-chip { min-height: 34px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2); font-size: 14px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -479,6 +488,8 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .sheet .item:hover { background: var(--surface-2); }
 .sheet .item svg { width: 20px; height: 20px; color: var(--text-2); }
 .sheet .item.danger, .sheet .item.danger svg { color: var(--red); }
+.sheet .item-text, .sheet-title .item-text { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; text-align: left; }
+.item-text small { font-size: 13px; font-weight: 400; color: var(--text-3); line-height: 1.35; }
 .sheet-title { display: flex; align-items: center; gap: 10px; padding: 4px 12px 10px; font-weight: 600; font-size: 15px; color: var(--text-2); border-bottom: 1px solid var(--border); margin-bottom: 6px; }
 .confirm { padding: 6px 8px 2px; }
 .confirm h2 { font-size: 18px; margin-bottom: 8px; }
@@ -635,3 +646,38 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .bulk-actions .btn svg { width: 16px; height: 16px; }
 .bulk-bar [aria-disabled="true"] { opacity: 0.45; }
 .btn:disabled { opacity: 0.45; }
+
+/* Relay: eagent passing the user's messages to Codex or Claude Code. ------ */
+.relay-badge { display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 28px; padding: 3px 8px 3px 10px; border-radius: 999px; border: 1px solid transparent; background: var(--accent-soft); color: var(--accent); font-size: 12.5px; font-weight: 650; white-space: nowrap; max-width: 280px; }
+.relay-badge-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.relay-badge svg { width: 13px; height: 13px; flex: none; opacity: 0.8; }
+.relay-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--text-3); }
+.relay-badge.working .relay-dot { background: var(--green); animation: pulse 1.6s infinite; }
+.relay-badge.starting .relay-dot { background: var(--accent); animation: pulse 1.6s infinite; }
+.relay-badge.blocked { background: var(--amber-soft); color: var(--amber-text); }
+.relay-badge.blocked .relay-dot { background: var(--amber); }
+.relay-badge.exited { background: var(--red-soft); color: var(--red); }
+.relay-badge.exited .relay-dot { background: var(--red); }
+.relay-badge.idle, .relay-badge.stopped { background: var(--surface); border-color: var(--border); color: var(--text-2); }
+.relay-updates { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 12px; }
+.relay-updates-label { display: inline-flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 500; }
+.relay-updates-label svg { width: 20px; height: 20px; color: var(--text-2); }
+.relay-updates .segmented button { min-width: 44px; min-height: 36px; }
+.autopilot-until { display: flex; align-items: center; gap: 10px; padding: 6px 12px; }
+.autopilot-until label { display: inline-flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 500; flex: none; }
+.autopilot-until label svg { width: 20px; height: 20px; color: var(--text-2); }
+.autopilot-until input { flex: 1; min-width: 0; min-height: 40px; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--surface); outline: 0; }
+.autopilot-until input:focus { border-color: var(--accent); }
+.autopilot .field { margin: 12px 4px 4px; }
+.running { width: 100%; max-width: 520px; margin: 0 auto; }
+.running .section-title { margin-top: 4px; }
+.running-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 10px 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); text-align: left; }
+.running-row + .running-row { margin-top: 8px; }
+.running-row:hover { border-color: var(--border-strong); }
+.running-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.running-agent { font-size: 15px; font-weight: 600; }
+.running-dir { font-family: var(--mono); font-size: 12.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.running-age { flex: none; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.running-age.exited { color: var(--red); }
+.running-row > svg { width: 18px; height: 18px; flex: none; color: var(--text-3); }
+@media (prefers-reduced-motion: reduce) { .relay-badge .relay-dot { animation: none; } }

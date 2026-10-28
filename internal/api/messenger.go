@@ -313,6 +313,7 @@ const messengerHelp = `Commands:
 /quiet, /loud — only questions and important messages, or everything
 /pause, /resume — stop or restart the relay (keeps the link)
 /remote on|off — Claude Code waits for your replies
+/interrupt, /autopilot, /relay … — control the Codex or Claude eagent runs
 /unlink — disconnect this chat
 Swipe-reply to a message to answer its thread. Anything else starting with / goes to the agent.`
 
@@ -365,6 +366,9 @@ func (c *mchat) reply(text string) error {
 	thread, question, err := c.target()
 	if thread == nil || err != nil {
 		return err
+	}
+	if isRelayCommand(text) {
+		return c.post(thread, text)
 	}
 	// An open question in the thread takes the reply as its answer, the way
 	// an agent waiting on it expects.

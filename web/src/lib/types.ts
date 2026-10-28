@@ -34,6 +34,8 @@ export interface Thread {
   external_id: string | null;
   title: string;
   agent: string;
+  /** Free-form. eagent sets `relay` (a {@link ThreadRelay}) on its session
+   * threads while it relays to Codex or Claude Code, and `null` after. */
   meta: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -51,6 +53,28 @@ export interface Thread {
   pending_questions: number;
   activity: Activity | null;
 }
+
+/** What eagent publishes as thread meta `relay` while an agent it started
+ * (Codex, Claude Code) does the session's work. */
+export interface ThreadRelay {
+  /** The relay profile, e.g. "codex". */
+  name: string;
+  /** "codex" or "claude". */
+  agent: string;
+  /** e.g. "Codex · GPT-6 Astra xhigh". */
+  label: string;
+  state: "starting" | "working" | "idle" | "blocked" | "exited" | "stopped" | (string & {});
+  autopilot: boolean;
+  /** RFC 3339, or empty when autopilot runs until told to stop. */
+  autopilot_until: string;
+  /** The progress cadence set with /updates ("off", "15m", ...); "" is eagent's default. */
+  updates: string;
+}
+
+/** Who a message in a relay thread is for: the relayed agent, or eagent. */
+export type EagentRoute = "agent" | "eagent";
+/** When the relayed agent gets it: eagent's default, now (interrupting), or after its turn. */
+export type EagentDelivery = "queue" | "interrupt" | "after_turn";
 
 export type Sender = "agent" | "user" | "system";
 
@@ -83,7 +107,10 @@ export interface Message {
    *
    * The web client declares its eagent capability handshake (v1) here on
    * every user message and answer as `meta["eagent.client"]`, a
-   * {@link EagentClientCapsule}. See `web/src/lib/clientCaps.ts`.
+   * {@link EagentClientCapsule}. See `web/src/lib/clientCaps.ts`. In a relay
+   * thread it adds `meta["eagent.route"]` ({@link EagentRoute}) and
+   * `meta["eagent.delivery"]` ({@link EagentDelivery}) only when the user
+   * chose them.
    */
   meta: Record<string, unknown>;
   /** "session" when posted from the app, "token" when an agent posted it. */

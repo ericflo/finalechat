@@ -251,7 +251,9 @@ minutes". Clear it early with `DELETE /threads/{ref}/activity` or by posting
 stray status must not litter the inbox), or the call is a `404`. The app
 also shows a few reserved `meta` keys on the thread as chips: `host`, `cwd` (its hover text names `project`, the directory the session was started in, when the two differ),
 `branch`, `model`, `cost_usd` and `tokens`; set them with
-`PATCH /threads/{ref}` (`meta` merges) whenever you have them.
+`PATCH /threads/{ref}` (`meta` merges) whenever you have them. `relay` is
+reserved for eagent, which shows the Codex or Claude Code it runs there as a
+badge with controls ([docs/integrations.md](docs/integrations.md)).
 
 Two details for busy agents. If you keep working after you speak, put the
 next status on the message itself so the line never blinks:

@@ -12,7 +12,7 @@ import type {
   Thread,
   User,
 } from "./types";
-import { clientCapsMeta } from "./clientCaps";
+import { clientCapsMeta, routingMeta, type MessageRouting } from "./clientCaps";
 
 export class APIError extends Error {
   status: number;
@@ -102,17 +102,20 @@ export const api = {
     qs.set("limit", String(params.limit ?? 100));
     return request<{ messages: Message[]; has_more: boolean }>("GET", `${base}/threads/${threadId}/messages?${qs}`);
   },
-  sendMessage: (threadId: string, body: string, attachments: string[] = [], clientKey?: string) => {
-    // Declares the eagent capability handshake (v1); omitted entirely when
-    // the browser yields nothing, so the send is unchanged.
+  sendMessage: (threadId: string, body: string, attachments: string[] = [], clientKey?: string, routing?: MessageRouting) => {
+    // Declares the eagent capability handshake (v1), and in a relay thread
+    // who the message is for and when, if the user chose; omitted entirely
+    // when there is nothing to say, so the send is unchanged.
     const caps = clientCapsMeta();
+    const routed = routingMeta(routing);
+    const meta = caps || routed ? { ...caps, ...routed } : undefined;
     return request<{ message: Message; thread: Thread; created?: boolean }>("POST", `${base}/threads/${threadId}/messages`, {
       body,
       format: "markdown",
       sender: "user",
       attachments,
       client_key: clientKey,
-      ...(caps ? { meta: caps } : {}),
+      ...(meta ? { meta } : {}),
     });
   },
   /** Uploads one file as a pending attachment; progress is reported in 0..1. */

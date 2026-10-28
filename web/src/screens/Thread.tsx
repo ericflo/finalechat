@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../components/Attachments";
 import { Avatar, ConfirmSheet, CopyButton, Sheet, sheetsOpen } from "../components/Common";
-import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBranch, IconChevron, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconSend, IconServer, IconSettings, IconTrash } from "../components/Icons";
+import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBolt, IconBranch, IconChevron, IconClock, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconSend, IconServer, IconSettings, IconTerminal, IconTrash } from "../components/Icons";
+import { RelayBadge, RelaySheet, relayAgent, threadRelay } from "../components/Relay";
 import { api } from "../lib/api";
 import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
 import { QuestionCard } from "../components/QuestionCard";
@@ -10,7 +11,8 @@ import { renderMarkdown, renderText } from "../lib/markdown";
 import { navigate } from "../lib/router";
 import { AlreadyPostedError, deleteThread, loadOlderMessages, loadThread, markRead, onMessageRemoved, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
-import type { Activity, Attachment, Message, Question, Thread } from "../lib/types";
+import type { MessageRouting } from "../lib/clientCaps";
+import type { Activity, Attachment, EagentDelivery, EagentRoute, Message, Question, Thread, ThreadRelay } from "../lib/types";
 import { ThreadSettingsPanel } from "../components/ThreadSettings";
 import { ThreadArtifacts } from "./Artifacts";
 import { InspectMessage } from "../components/InspectMessage";
@@ -37,6 +39,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   const unreadMarker = useStore((s) => s.unreadMarker[id]);
   const [load, setLoad] = useState<ThreadLoad | null>(null);
   const [menu, setMenu] = useState(false);
+  const [relayMenu, setRelayMenu] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [viewing, setViewing] = useState<{ items: Attachment[]; index: number } | null>(null);
@@ -61,6 +64,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   const justSent = useRef(false);
   const initialised = useRef<string | null>(null);
   const activity = useLiveActivity(thread?.activity);
+  const relay = threadRelay(thread);
 
   useEffect(() => {
     let alive = true; setFocusedMessage(null);
@@ -221,6 +225,20 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
     }
   }, [scrollToBottom]);
 
+  // A relay control is an ordinary message: it shows in the conversation,
+  // takes the same retry path, and eagent reads it like anything typed.
+  const sendCommand = useCallback((command: string) => {
+    const key = newKey();
+    const attempt = () => {
+      handleSending(true);
+      sendMessage(id, command, [], key).catch((e) => {
+        handleSending(false);
+        toast(e instanceof Error ? e.message : "Could not send", "error", { label: "Retry", onClick: attempt });
+      });
+    };
+    attempt();
+  }, [id, handleSending]);
+
   const loadOlder = async () => {
     const el = document.scrollingElement;
     if (!el || loadingOlder) return;
@@ -292,7 +310,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
             <IconMore />
           </button></>
         }
-        below={thread ? (<><ThreadDescription thread={thread} onRename={() => setRenaming(true)} /><MetaStrip thread={thread} /></>) : null}
+        below={thread ? (<><ThreadDescription thread={thread} onRename={() => setRenaming(true)} /><MetaStrip thread={thread} lead={relay ? <RelayBadge relay={relay} onOpen={() => setRelayMenu(true)} /> : null} /></>) : null}
       />
       <div ref={listRef} className="messages" onClick={onListClick}>
         {focusedMessage && !items.some(it => it.kind === "message" && it.m.id === focusedMessage.id) && <section aria-label="Selected archived message"><p>Selected message · {fullDateTime(focusedMessage.created_at)}</p><MessageBubble m={focusedMessage} grouped={false} showMeta={true} inspectThread={hasArtifacts ? thread : undefined} onOpen={(items, index) => setViewing({ items, index })} /><button className="btn small" onClick={() => navigate(`/t/${id}`)}>Return to recent conversation</button></section>}
@@ -363,12 +381,19 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
       <Composer
         threadId={id}
         ended={sessionEnded(messages, questions, thread)}
+        relay={relay}
         onSending={handleSending}
       />
+      {relayMenu && relay && <RelaySheet relay={relay} onClose={() => setRelayMenu(false)} onSend={sendCommand} />}
       {viewing && <ImageViewer items={viewing.items} index={viewing.index} onClose={() => setViewing(null)} />}
 
       {menu && thread && (
         <Sheet onClose={() => setMenu(false)} label="Thread options">
+          {relay && (
+            <button type="button" className="item" onClick={() => { setMenu(false); setRelayMenu(true); }}>
+              <IconTerminal /> {relayAgent(relay)} controls
+            </button>
+          )}
           <button type="button" className="item" onClick={() => { setMenu(false); setRenaming(true); }}>
             <IconEdit /> Rename
           </button>
@@ -482,7 +507,8 @@ const metaChips: { key: string; alt?: string; icon: (p: React.SVGProps<SVGSVGEle
   { key: "tokens", icon: IconCpu, format: (v) => (typeof v === "number" ? `${v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1000 ? (v / 1000).toFixed(0) + "k" : v} tok` : String(v)) },
 ];
 
-function MetaStrip({ thread }: { thread: Thread }) {
+/** The reserved meta chips, after `lead` (the relay badge) when there is one. */
+function MetaStrip({ thread, lead }: { thread: Thread; lead?: React.ReactNode }) {
   const chips = metaChips
     .map((c) => {
       const raw = thread.meta[c.key] ?? (c.alt ? thread.meta[c.alt] : undefined);
@@ -496,9 +522,10 @@ function MetaStrip({ thread }: { thread: Thread }) {
       return { key: c.key, icon: c.icon, text, hint };
     })
     .filter((c): c is NonNullable<typeof c> => !!c);
-  if (chips.length === 0) return null;
+  if (chips.length === 0 && !lead) return null;
   return (
     <div className="meta-strip">
+      {lead}
       {chips.map((c) => {
         const Icon = c.icon;
         return (
@@ -775,7 +802,7 @@ function ActivityBubble({ a }: { a: Activity }) {
   );
 }
 
-function Composer({ threadId, ended, onSending }: { threadId: string; ended: boolean; onSending: (sending: boolean) => void }) {
+function Composer({ threadId, ended, relay, onSending }: { threadId: string; ended: boolean; relay: ThreadRelay | null; onSending: (sending: boolean) => void }) {
   const attachmentsEnabled = useStore((s) => s.attachmentsEnabled);
   const connection = useStore((s) => s.connection);
   const draft = useStore((s) => s.drafts[threadId] ?? "");
@@ -791,8 +818,34 @@ function Composer({ threadId, ended, onSending }: { threadId: string; ended: boo
   // double-post, and an edited reply gets a fresh key so it is not mistaken
   // for a replay of the old text.
   const keyed = useRef<{ payload: string; key: string } | null>(null);
-  const sendRef = useRef<() => void>(() => {});
+  const sendRef = useRef<(delivery?: EagentDelivery) => void>(() => {});
   const touch = useMemo(() => isTouch(), []);
+  // In a relay thread: who the next message is for (null leaves it to
+  // eagent, which passes it to the agent unless it is meant for eagent),
+  // and a long press on send for when the agent gets it.
+  const live = !!relay && relay.state !== "stopped";
+  const agent = relay ? relayAgent(relay) : "";
+  const [route, setRoute] = useState<EagentRoute | null>(null);
+  const toAgent = live && route !== "eagent";
+  const [sendMenu, setSendMenu] = useState(false);
+  const pressTimer = useRef<number | undefined>(undefined);
+  const suppressClick = useRef(false);
+  useEffect(() => {
+    setRoute(null);
+    setSendMenu(false);
+  }, [threadId]);
+  // The click a long press's lift produces is swallowed once; any later
+  // press resets that.
+  useEffect(() => {
+    const reset = () => {
+      suppressClick.current = false;
+    };
+    window.addEventListener("pointerdown", reset, true);
+    return () => {
+      window.removeEventListener("pointerdown", reset, true);
+      window.clearTimeout(pressTimer.current);
+    };
+  }, []);
 
   // Toasts and the jump pill sit above the composer, whatever its height.
   useEffect(() => {
@@ -877,17 +930,20 @@ function Composer({ threadId, ended, onSending }: { threadId: string; ended: boo
   const offline = connection === "offline";
   const canSend = !busy && !uploading && (text.trim().length > 0 || ready.length > 0);
 
-  const send = async () => {
+  const send = async (delivery?: EagentDelivery) => {
     const body = text.trim();
     if (!canSend) return;
     const ids = ready.map((u) => (u.attachment as Attachment).id);
-    const payload = JSON.stringify([body, ids]);
+    // Only what the user chose goes along; a timed send is for the agent.
+    const routing: MessageRouting | undefined = live ? { route: delivery ? "agent" : route, delivery: delivery ?? null } : undefined;
+    const payload = JSON.stringify([body, ids, routing?.route ?? null, routing?.delivery ?? null]);
     if (!keyed.current || keyed.current.payload !== payload) keyed.current = { payload, key: newKey() };
     setBusy(true);
     onSending(true);
     try {
-      await sendMessage(threadId, body, ids, keyed.current.key);
+      await sendMessage(threadId, body, ids, keyed.current.key, routing);
       keyed.current = null;
+      setRoute(null);
       setText("");
       window.clearTimeout(draftTimer.current);
       setDraft(threadId, "");
@@ -902,16 +958,28 @@ function Composer({ threadId, ended, onSending }: { threadId: string; ended: boo
         toast(e.message, "error");
       } else {
         onSending(false);
-        toast(e instanceof Error ? e.message : "Could not send", "error", { label: "Retry", onClick: () => sendRef.current() });
+        toast(e instanceof Error ? e.message : "Could not send", "error", { label: "Retry", onClick: () => sendRef.current(delivery) });
       }
     } finally {
       setBusy(false);
       ref.current?.focus();
     }
   };
-  sendRef.current = () => void send();
+  sendRef.current = (delivery) => void send(delivery);
+
+  const startPress = () => {
+    window.clearTimeout(pressTimer.current);
+    if (!toAgent || !canSend) return;
+    pressTimer.current = window.setTimeout(() => {
+      suppressClick.current = true;
+      if (navigator.vibrate) navigator.vibrate(8);
+      setSendMenu(true);
+    }, 450);
+  };
+  const endPress = () => window.clearTimeout(pressTimer.current);
 
   return (
+    <>
     <div
       ref={wrapRef}
       className={`composer-wrap ${dragging ? "dragging" : ""}`}
@@ -930,6 +998,22 @@ function Composer({ threadId, ended, onSending }: { threadId: string; ended: boo
     >
       <UploadTray items={uploads} onRemove={removeUpload} />
       {ended && <div className="composer-note">This session has ended. Your reply is kept here for the next one.</div>}
+      {live && (
+        <div className="route-row">
+          <span className="route-label" id={`route-${threadId}`}>
+            To
+          </span>
+          <div className="segmented" role="radiogroup" aria-labelledby={`route-${threadId}`}>
+            <button type="button" role="radio" aria-checked={toAgent} className={toAgent ? "active" : ""} onClick={() => setRoute("agent")}>
+              {agent}
+            </button>
+            <button type="button" role="radio" aria-checked={!toAgent} className={!toAgent ? "active" : ""} onClick={() => setRoute("eagent")}>
+              eagent
+            </button>
+          </div>
+          {toAgent && <span className="route-hint">Hold send to interrupt</span>}
+        </div>
+      )}
       <form
         className="composer"
         onSubmit={(e) => {
@@ -958,7 +1042,7 @@ function Composer({ threadId, ended, onSending }: { threadId: string; ended: boo
         <textarea
           ref={ref}
           rows={1}
-          placeholder={offline ? "Offline. Your reply is kept until you're back." : "Reply to the agent…"}
+          placeholder={offline ? "Offline. Your reply is kept until you're back." : live ? `Message ${toAgent ? agent : "eagent"}…` : "Reply to the agent…"}
           value={text}
           enterKeyHint={touch ? "enter" : "send"}
           onChange={(e) => update(e.target.value)}
@@ -976,11 +1060,56 @@ function Composer({ threadId, ended, onSending }: { threadId: string; ended: boo
             }
           }}
         />
-        <button type="submit" className="send-btn" aria-label="Send" disabled={!canSend}>
+        <button
+          type="submit"
+          className="send-btn"
+          aria-label={toAgent ? `Send to ${agent}` : live ? "Send to eagent" : "Send"}
+          aria-description={toAgent ? "Hold or right-click to interrupt it or wait for its turn" : undefined}
+          disabled={!canSend}
+          onPointerDown={startPress}
+          onPointerUp={endPress}
+          onPointerLeave={endPress}
+          onPointerCancel={endPress}
+          onContextMenu={(e) => {
+            if (!toAgent) return;
+            e.preventDefault();
+            if (canSend) setSendMenu(true);
+          }}
+          onClickCapture={(e) => {
+            if (suppressClick.current) {
+              e.preventDefault();
+              e.stopPropagation();
+              suppressClick.current = false;
+            }
+          }}
+        >
           {uploading ? <span className="spinner" style={{ borderTopColor: "#fff", borderColor: "rgba(255,255,255,0.35)" }} /> : <IconSend />}
         </button>
       </form>
     </div>
+    {sendMenu && (
+      <Sheet onClose={() => setSendMenu(false)} label={`Send to ${agent}`}>
+        <div className="sheet-title">
+          <Avatar name={agent} small />
+          <span>Send to {agent}</span>
+        </div>
+        <button type="button" className="item" onClick={() => { setSendMenu(false); void send("interrupt"); }}>
+          <IconBolt aria-hidden="true" />
+          <span className="item-text">
+            <span>Send now, interrupting</span>
+            <small>Stops its current step first</small>
+          </span>
+        </button>
+        <button type="button" className="item" onClick={() => { setSendMenu(false); void send("after_turn"); }}>
+          <IconClock aria-hidden="true" />
+          <span className="item-text">
+            <span>Send after its turn</span>
+            <small>Waits until it finishes what it is doing</small>
+          </span>
+        </button>
+      </Sheet>
+    )}
+    </>
   );
 }
 

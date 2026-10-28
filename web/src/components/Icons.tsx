@@ -111,3 +111,21 @@ export const IconCoins = (p: P) => (
 export const IconExpand = (p: P) => (
   <svg {...base} {...p}><path d="M6 9l6 6 6-6" /></svg>
 );
+export const IconPause = (p: P) => (
+  <svg {...base} {...p}><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
+);
+export const IconStop = (p: P) => (
+  <svg {...base} {...p}><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+);
+export const IconSwap = (p: P) => (
+  <svg {...base} {...p}><path d="M7 4L3 8l4 4" /><path d="M3 8h14" /><path d="M17 20l4-4-4-4" /><path d="M21 16H7" /></svg>
+);
+export const IconUpgrade = (p: P) => (
+  <svg {...base} {...p}><circle cx="12" cy="12" r="9" /><path d="M8 12l4-4 4 4" /><path d="M12 16V8" /></svg>
+);
+export const IconRepeat = (p: P) => (
+  <svg {...base} {...p}><path d="M17 2l4 4-4 4" /><path d="M3 11V9a3 3 0 0 1 3-3h15" /><path d="M7 22l-4-4 4-4" /><path d="M21 13v2a3 3 0 0 1-3 3H3" /></svg>
+);
+export const IconInfo = (p: P) => (
+  <svg {...base} {...p}><circle cx="12" cy="12" r="9" /><path d="M12 16v-5" /><path d="M12 8h.01" /></svg>
+);

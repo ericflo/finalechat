@@ -40,6 +40,7 @@ Once linked, open the chat with the Page in Messenger.
 | `/where` | The current thread, what it is doing, and its open question |
 | `/read 3` | The last few messages of #3 (or of the current thread) |
 | `/new` | Start an eagent session: pick the project and folder, then send the first message. `/new fix the flaky test` starts one right away in the project root. `/new codex fix the flaky test` (or `claude`, or any relay profile the project offers) has eagent start that agent to do the work |
+| `/interrupt`, `/autopilot until 10:00`, `/relay` … | eagent's controls for a Codex or Claude it runs; they go to the thread as typed, never as an answer |
 | `/skip` | Decline the current thread's open question |
 | `/more` | The rest of a long message |
 | `/quiet`, `/loud` | Only questions and important messages, or everything |

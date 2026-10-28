@@ -651,6 +651,127 @@ func TestMessengerNewRelaySession(t *testing.T) {
 	b.must(200, "DELETE", "/api/v1/connectors/"+id, nil)
 }
 
+// eagent's relay controls are slash commands Messenger does not own: they
+// reach the pinned relay thread exactly as typed, even while a question
+// waits there or a /new is asking for a folder, and Messenger's own
+// commands stay its own.
+func TestMessengerRelayCommands(t *testing.T) {
+	b, a := setup(t)
+	g := withMessenger(t)
+	psid := "psid-" + uuid.NewString()[:8]
+	linkMessenger(t, g, psid)
+
+	ext := "eagent:relay-" + uuid.NewString()[:8]
+	a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+ext+"/messages", map[string]any{"title": "relay", "agent": "eagent", "body": "Codex is on it."})
+	thread := sub(a.must(http.StatusOK, "PATCH", "/api/v1/threads/ext:"+ext, map[string]any{"meta": map[string]any{"relay": map[string]any{
+		"name": "codex", "agent": "codex", "label": "Codex · GPT-6 Astra xhigh", "state": "working", "autopilot": false, "autopilot_until": "",
+	}}}), "thread")
+	userID := uuid.MustParse(str(sub(a.must(http.StatusOK, "GET", "/api/v1/me", nil), "user"), "id"))
+	h, err := testAPI.store.MessengerHandle(context.Background(), userID, uuid.MustParse(str(thread, "id")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	say(t, psid, "/go "+strconv.Itoa(h))
+	lastUser := func() map[string]any {
+		t.Helper()
+		msgs := a.must(http.StatusOK, "GET", "/api/v1/threads/ext:"+ext+"/messages?sender=user", nil)["messages"].([]any)
+		if len(msgs) == 0 {
+			t.Fatal("no user messages in the relay thread")
+		}
+		return msgs[len(msgs)-1].(map[string]any)
+	}
+
+	// eagent waits on a question that takes free text; a control is still
+	// a control, not its answer.
+	q := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+ext+"/questions", map[string]any{"prompt": "Which branch?", "options": []map[string]any{{"label": "main"}}}), "question"), "id")
+	for _, cmd := range []string{
+		"/interrupt", "/autopilot until 10:00", "/autopilot until 10:00 finish the migration, then open a PR", "/autopilot off",
+		"/switch claude", "/updates 15m", "/restart", "/upgrade", "/relay", "/stop-relay",
+	} {
+		say(t, psid, cmd)
+		m := lastUser()
+		if m["body"] != cmd || m["origin"] != "session" {
+			t.Fatalf("%s reached the thread as %v", cmd, m)
+		}
+		if kind := m["meta"].(map[string]any)["kind"]; kind != nil {
+			t.Fatalf("%s was taken as %v", cmd, kind)
+		}
+	}
+	if st := str(sub(a.must(http.StatusOK, "GET", "/api/v1/questions/"+q, nil), "question"), "status"); st != "pending" {
+		t.Fatalf("a control resolved the question: %s", st)
+	}
+	// Plain words still answer it.
+	say(t, psid, "dev")
+	if ans := sub(a.must(http.StatusOK, "GET", "/api/v1/questions/"+q, nil), "question")["answer"].(map[string]any); ans["text"] != "dev" {
+		t.Fatalf("free text did not answer: %v", ans)
+	}
+
+	// Messenger's own commands are unchanged.
+	from := g.mark()
+	say(t, psid, "/quiet")
+	if txt := lastText(t, g, from); !strings.HasPrefix(txt, "Quiet:") {
+		t.Fatalf("/quiet: %q", txt)
+	}
+	if st := b.must(http.StatusOK, "GET", "/api/v1/messenger", nil); sub(st, "link")["important_only"] != true {
+		t.Fatalf("/quiet not saved: %v", st)
+	}
+	say(t, psid, "/loud")
+	if st := b.must(http.StatusOK, "GET", "/api/v1/messenger", nil); sub(st, "link")["important_only"] != false {
+		t.Fatalf("/loud not saved: %v", st)
+	}
+	from = g.mark()
+	say(t, psid, "/help")
+	if txt := lastText(t, g, from); !strings.Contains(txt, "/interrupt, /autopilot, /relay") {
+		t.Fatalf("/help: %q", txt)
+	}
+
+	// /new is Messenger's too, and while it asks for a folder a control
+	// still goes to the thread instead of being taken for a path.
+	grant := control.Grant{Key: "project-" + uuid.NewString()[:8], Label: "Relay commands", Scope: "project", Operations: []string{"session.start"}, Classes: []string{"cost"}}
+	out := a.must(201, "POST", "/api/v1/connectors", map[string]any{"name": "eagent · relay commands", "provider": "eagent", "requested_grants": []control.Grant{grant}})
+	id := str(sub(out, "connector"), "id")
+	conn := &client{t: t, http: &http.Client{}, token: str(out, "secret")}
+	b.must(200, "POST", "/api/v1/connectors/"+id+"/approve", map[string]any{"grants": []control.Grant{grant}})
+	instance := uuid.NewString()
+	conn.must(200, "POST", "/api/v1/connectors/"+id+"/heartbeat", map[string]any{"instance": instance})
+	descriptor := control.Descriptor{Format: control.Format, SchemaVersion: "eagent/1", AdapterVersion: "1", Fields: []control.Field{}, Actions: []control.Action{{
+		Operation: "session.start", Label: "Start a session", Class: "cost",
+		Parameters: control.Shape{Type: "object", Properties: map[string]control.Shape{"prompt": {Type: "string", MaxLength: 32768}, "cwd": {Type: "string", MaxLength: 4096}}, Required: []string{"prompt"}},
+	}}}
+	snapshot := control.Snapshot{Version: "v1", Context: "/home/eric/relay", Saved: map[string]any{}, Effective: map[string]any{}, Details: map[string]any{
+		"directories": map[string]any{"root": "/home/eric/relay", "recent": []string{"/home/eric/relay/api"}},
+	}}
+	published := conn.must(200, "PUT", "/api/v1/connectors/"+id+"/resources/"+grant.Key, map[string]any{"instance": instance, "descriptor": descriptor, "snapshot": snapshot})
+	resource := str(sub(published, "resource"), "id")
+	from = g.mark()
+	say(t, psid, "/new")
+	if got := g.texts(from); len(got) > 0 && strings.HasPrefix(got[len(got)-1].Text, "Which project?") {
+		tap(t, psid, "Relay commands", "np:"+resource)
+	}
+	if txt := lastText(t, g, from); !strings.HasPrefix(txt, "Where should it start?") {
+		t.Fatalf("/new: %q", txt)
+	}
+	if body := lastUser()["body"]; body != "dev" {
+		t.Fatalf("/new reached the thread: %v", body)
+	}
+	say(t, psid, "/interrupt")
+	if body := lastUser()["body"]; body != "/interrupt" {
+		t.Fatalf("/interrupt during /new: %v", body)
+	}
+	from = g.mark()
+	say(t, psid, "/home/eric/relay/api")
+	if txt := lastText(t, g, from); !strings.Contains(txt, "~/relay/api") || !strings.Contains(txt, "What should the session do?") {
+		t.Fatalf("the folder step did not survive the control: %q", txt)
+	}
+	from = g.mark()
+	say(t, psid, "/cancel")
+	if txt := lastText(t, g, from); txt != "Cancelled." {
+		t.Fatalf("/cancel: %q", txt)
+	}
+	say(t, psid, "/go")
+	b.must(200, "DELETE", "/api/v1/connectors/"+id, nil)
+}
+
 func TestMessengerPauseResume(t *testing.T) {
 	b, a := setup(t)
 	g := withMessenger(t)

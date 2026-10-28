@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, Sheet } from "../components/Common";
 import { IconFolder, IconSend, IconSettings } from "../components/Icons";
 import { directoryChoices, relayName, relayProfiles, startSession, useSessionStarters } from "../components/NewSession";
+import { RunningRelays, runningRelays } from "../components/Relay";
 import { ResourceSettingsSheet } from "../components/ThreadSettings";
 import { TopBar } from "../components/TopBar";
 import { navigate } from "../lib/router";
@@ -37,6 +38,9 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
   // Who does the work: "" is eagent, otherwise a relay profile's name. The
   // last choice is remembered per connector.
   const profiles = useMemo(() => (starter ? relayProfiles(starter.resource) : []), [starter]);
+  // Agents already running on that machine, so the user can go to one
+  // instead of starting another.
+  const running = useMemo(() => (starter ? runningRelays(starter.resource) : []), [starter]);
   const agentKey = starter ? `fc.draft.${starter.connector.id}.agent` : "";
   const remembered = useMemo(() => {
     try {
@@ -143,6 +147,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
             {!starter.online && <p>This project&rsquo;s eagent is offline right now. Start it there, then send.</p>}
           </div>
         )}
+        {starter && !status && running.length > 0 && <RunningRelays relays={running} />}
         {status && (
           <div className="empty">
             <span className="spinner" />

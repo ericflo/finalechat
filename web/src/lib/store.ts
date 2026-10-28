@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { api, APIError } from "./api";
+import type { MessageRouting } from "./clientCaps";
 import { forgetPushSubscription, resyncPushSubscription, setBadge } from "./push";
 import { serverNow, syncServerTime } from "./time";
 import type { Activity, Counts, Message, Question, Settings, SignupMode, Thread, User } from "./types";
@@ -649,9 +650,9 @@ export class AlreadyPostedError extends Error {
   }
 }
 
-export async function sendMessage(threadId: string, body: string, attachments: string[] = [], clientKey?: string): Promise<void> {
+export async function sendMessage(threadId: string, body: string, attachments: string[] = [], clientKey?: string, routing?: MessageRouting): Promise<void> {
   const source = rest();
-  const res = await api.sendMessage(threadId, body, attachments, clientKey);
+  const res = await api.sendMessage(threadId, body, attachments, clientKey, routing);
   appendMessage(res.message);
   upsertThreads([res.thread], source);
   // A replay of an earlier post: if what was typed differs, the server holds

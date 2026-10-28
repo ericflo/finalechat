@@ -1,4 +1,4 @@
-import type { EagentClientCapsule } from "./types";
+import type { EagentClientCapsule, EagentDelivery, EagentRoute } from "./types";
 
 /**
  * Gathers the eagent client-capability capsule (v1) once per page load.
@@ -117,6 +117,21 @@ export function clientCapsMeta(): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** How the user chose to send a message in a relay thread. */
+export interface MessageRouting {
+  route?: EagentRoute | null;
+  delivery?: EagentDelivery | null;
+}
+
+/** `{"eagent.route": …, "eagent.delivery": …}` with only the keys the user
+ * chose, or undefined when they chose nothing, so eagent decides. */
+export function routingMeta(routing?: MessageRouting): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {};
+  if (routing?.route) out["eagent.route"] = routing.route;
+  if (routing?.delivery) out["eagent.delivery"] = routing.delivery;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 /** Test-only reset for the once-per-load cache. */
