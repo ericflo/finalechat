@@ -61,15 +61,50 @@ export function directoryChoices(resource: SettingsResource): DirectoryChoices {
   return { root: typeof raw?.root === "string" ? raw.root : resource.snapshot.context, recent: list(raw?.recent), children: list(raw?.children), siblings: list(raw?.siblings) };
 }
 
+/** An agent eagent can start to do a session's work instead of doing it
+ * itself (Codex, Claude Code), as the integration published it. */
+export interface RelayProfile {
+  name: string;
+  agent: string;
+  label: string;
+  model: string;
+  effort: string;
+}
+
+export function relayProfiles(resource: SettingsResource): RelayProfile[] {
+  const raw = resource.snapshot.details?.relay_profiles;
+  if (!Array.isArray(raw)) return [];
+  const text = (v: unknown) => (typeof v === "string" ? v : "");
+  return raw
+    .filter((p): p is Record<string, unknown> => !!p && typeof p === "object" && text((p as Record<string, unknown>).name) !== "")
+    .map((p) => ({ name: text(p.name), agent: text(p.agent), label: text(p.label) || text(p.name), model: text(p.model), effort: text(p.effort) }));
+}
+
+/** "Codex" from "Codex · GPT-6 Astra xhigh". */
+export function relayName(p: RelayProfile): string {
+  return p.label.split(" · ")[0]?.trim() || p.name;
+}
+
+/** "GPT-6 Astra xhigh" from "Codex · GPT-6 Astra xhigh", else model and effort. */
+export function relayDetail(p: RelayProfile): string {
+  const rest = p.label.split(" · ").slice(1).join(" · ").trim();
+  return rest || [p.model, p.effort].filter(Boolean).join(" ");
+}
+
 /** Starts a session through the trusted command channel and resolves to the
- * id of its thread once the integration's mirror has created it. */
-export async function startSession(starter: SessionStarter, prompt: string, cwd: string | null, onStatus: (s: string) => void, cancelled: () => boolean): Promise<string> {
-  onStatus("Asking eagent to start the session…");
+ * id of its thread once the integration's mirror has created it. With a
+ * relay profile, eagent starts that agent to do the work. */
+export async function startSession(starter: SessionStarter, prompt: string, cwd: string | null, relay: RelayProfile | null, onStatus: (s: string) => void, cancelled: () => boolean): Promise<string> {
+  onStatus(relay ? `Asking eagent to start ${relayName(relay)}…` : "Asking eagent to start the session…");
   // The connector republishes its settings whenever they change; take the
   // version it holds now, not the one the page loaded a while ago.
   const r = (await controlAPI.resource(starter.resource.id)).resource;
   const parameters: Record<string, unknown> = { prompt: prompt.trim() };
   if (cwd && cwd !== directoryChoices(r).root) parameters.cwd = cwd;
+  if (relay) {
+    if (!relayProfiles(r).some((p) => p.name === relay.name)) throw new Error(`This project no longer offers ${relayName(relay)}.`);
+    parameters.relay = relay.name;
+  }
   const { command } = await controlAPI.createCommand(r.id, {
     client_key: crypto.randomUUID(),
     proposal: { operation: "session.start", schema_version: r.descriptor.schema_version, expected_version: r.snapshot.version, generation: r.generation, parameters },
@@ -87,7 +122,8 @@ export async function startSession(starter: SessionStarter, prompt: string, cwd:
   }
   const ref = typeof current.result?.thread === "string" ? current.result.thread : null;
   if (!ref) throw new Error("The session started but its thread was not reported.");
-  onStatus(current.result?.interactive === false ? "Session started as a batch run. Waiting for its thread…" : "Session started. Waiting for its thread…");
+  const started = relay ? `${relayName(relay)} started` : "Session started";
+  onStatus(current.result?.interactive === false ? `${started} as a batch run. Waiting for its thread…` : `${started}. Waiting for its thread…`);
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
     if (cancelled()) throw new Error("cancelled");

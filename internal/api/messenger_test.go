@@ -552,6 +552,105 @@ func TestMessengerNewSession(t *testing.T) {
 	b.must(200, "DELETE", "/api/v1/connectors/"+id, nil)
 }
 
+func TestMessengerNewRelaySession(t *testing.T) {
+	b, a := setup(t)
+	g := withMessenger(t)
+	psid := "psid-" + uuid.NewString()[:8]
+	linkMessenger(t, g, psid)
+
+	// An eagent that can start Codex or Claude Code to do the work.
+	grant := control.Grant{Key: "project-" + uuid.NewString()[:8], Label: "Relay", Scope: "project", Operations: []string{"session.start"}, Classes: []string{"cost"}}
+	out := a.must(201, "POST", "/api/v1/connectors", map[string]any{"name": "eagent · relay", "provider": "eagent", "requested_grants": []control.Grant{grant}})
+	id := str(sub(out, "connector"), "id")
+	conn := &client{t: t, http: &http.Client{}, token: str(out, "secret")}
+	b.must(200, "POST", "/api/v1/connectors/"+id+"/approve", map[string]any{"grants": []control.Grant{grant}})
+	instance := uuid.NewString()
+	conn.must(200, "POST", "/api/v1/connectors/"+id+"/heartbeat", map[string]any{"instance": instance})
+	descriptor := control.Descriptor{Format: control.Format, SchemaVersion: "eagent/1", AdapterVersion: "1", Fields: []control.Field{}, Actions: []control.Action{{
+		Operation: "session.start", Label: "Start a session", Class: "cost",
+		Parameters: control.Shape{Type: "object", Properties: map[string]control.Shape{"prompt": {Type: "string", MaxLength: 32768}, "cwd": {Type: "string", MaxLength: 4096}, "relay": {Type: "string", Enum: []any{"", "codex", "claude"}}}, Required: []string{"prompt"}},
+	}}}
+	snapshot := control.Snapshot{Version: "v1", Context: "/home/eric/relay", Saved: map[string]any{}, Effective: map[string]any{}, Details: map[string]any{
+		"directories": map[string]any{"root": "/home/eric/relay", "recent": []string{"/home/eric/relay/api"}},
+		"relay_profiles": []map[string]any{
+			{"name": "codex", "agent": "codex", "label": "Codex · GPT-6 Astra xhigh", "model": "gpt-6-astra", "effort": "xhigh"},
+			{"name": "claude", "agent": "claude", "label": "Claude Code · Opus 5.5 xhigh", "model": "opus-5.5", "effort": "xhigh"},
+		},
+	}}
+	published := conn.must(200, "PUT", "/api/v1/connectors/"+id+"/resources/"+grant.Key, map[string]any{"instance": instance, "descriptor": descriptor, "snapshot": snapshot})
+	resource := str(sub(published, "resource"), "id")
+
+	// Other test connectors may be around, so the chat may ask for the
+	// project first.
+	sayNew := func(text string) int {
+		t.Helper()
+		from := g.mark()
+		say(t, psid, text)
+		if got := g.texts(from); len(got) > 0 && strings.HasPrefix(got[len(got)-1].Text, "Which project?") {
+			tap(t, psid, "Relay", "np:"+resource)
+		}
+		return from
+	}
+	said := func(sent []sentMsg, want string) bool {
+		for _, m := range sent {
+			if strings.Contains(m.Text, want) {
+				return true
+			}
+		}
+		return false
+	}
+	// claim takes the queued session.start and refuses it, then waits for
+	// the chat to hear so, so nothing is still sending when the test ends.
+	claim := func(from int) map[string]any {
+		t.Helper()
+		cmd := sub(conn.must(200, "POST", "/api/v1/connectors/"+id+"/commands/claim", map[string]any{"instance": instance}), "command")
+		if cmd == nil {
+			t.Fatalf("no command queued; chat: %v", g.texts(from))
+		}
+		conn.must(200, "POST", "/api/v1/commands/"+str(cmd, "id")+"/result", map[string]any{"claim_token": str(cmd, "claim_token"), "instance": instance, "status": "rejected", "result": map[string]any{"message": "not in tests"}})
+		for deadline := time.Now().Add(5 * time.Second); !said(g.texts(from), "not in tests"); time.Sleep(20 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("refusal never reached the chat: %v", g.texts(from))
+			}
+		}
+		return sub(cmd, "proposal")["parameters"].(map[string]any)
+	}
+	// start runs a /new and returns what eagent was sent.
+	start := func(text string) (map[string]any, []sentMsg) {
+		t.Helper()
+		from := sayNew(text)
+		return claim(from), g.texts(from)
+	}
+
+	params, sent := start("/new codex Fix the flaky test")
+	if params["relay"] != "codex" || params["prompt"] != "Fix the flaky test" || params["cwd"] != nil {
+		t.Fatalf("relay start parameters: %v", params)
+	}
+	if !said(sent, "Starting Codex · GPT-6 Astra xhigh in ~/relay…") {
+		t.Fatalf("no relay confirmation: %v", sent)
+	}
+
+	// A first word that is not a profile stays in the brief.
+	params, _ = start("/new codexes are flaky, fix them")
+	if _, ok := params["relay"]; ok || params["prompt"] != "codexes are flaky, fix them" {
+		t.Fatalf("plain start parameters: %v", params)
+	}
+
+	// The profile alone walks through the folder, then asks that agent.
+	sayNew("/new Claude")
+	from := g.mark()
+	tap(t, psid, "2 api", "nd:1")
+	if txt := lastText(t, g, from); !strings.Contains(txt, "~/relay/api") || !strings.Contains(txt, "What should Claude Code · Opus 5.5 xhigh do?") {
+		t.Fatalf("relay dir step: %q", txt)
+	}
+	say(t, psid, "Review the open PR")
+	params = claim(from)
+	if params["relay"] != "claude" || params["prompt"] != "Review the open PR" || params["cwd"] != "/home/eric/relay/api" {
+		t.Fatalf("relay dir start parameters: %v", params)
+	}
+	b.must(200, "DELETE", "/api/v1/connectors/"+id, nil)
+}
+
 func TestMessengerPauseResume(t *testing.T) {
 	b, a := setup(t)
 	g := withMessenger(t)

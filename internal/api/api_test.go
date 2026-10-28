@@ -1387,10 +1387,15 @@ func TestRoutesMatchDocs(t *testing.T) {
 		}
 		src = append(src, raw...)
 	}
-	routeRe := regexp.MustCompile(`HandleFunc\("(GET|POST|PUT|PATCH|DELETE|HEAD) (/api/v1/[^"]+)"`)
+	routeRe := regexp.MustCompile(`HandleFunc\("(GET|POST|PUT|PATCH|DELETE|HEAD) (/[^"]*)"`)
 	normalize := func(p string) string { return regexp.MustCompile(`\{[^}]+\}`).ReplaceAllString(p, "{}") }
 	routes := map[string]bool{}
+	rootRoutes := map[string]bool{}
 	for _, m := range routeRe.FindAllStringSubmatch(string(src), -1) {
+		if !strings.HasPrefix(m[2], "/api/v1/") {
+			rootRoutes[m[1]+" "+m[2]] = true
+			continue
+		}
 		if m[1] == "HEAD" || (m[1] == "PUT" && m[2] == "/api/v1/threads/{thread}/activity") {
 			continue // aliases of documented methods
 		}
@@ -1408,8 +1413,16 @@ func TestRoutesMatchDocs(t *testing.T) {
 	}
 	documented := map[string]bool{}
 	for path, ops := range doc.Paths {
+		// A path with servers of its own lives at the site root (GET /version).
+		_, atRoot := ops["servers"]
 		for method := range ops {
-			if strings.ToUpper(method) == "HEAD" {
+			if method == "servers" || strings.ToUpper(method) == "HEAD" {
+				continue
+			}
+			if atRoot {
+				if !rootRoutes[strings.ToUpper(method)+" "+path] {
+					t.Errorf("docs/openapi.json documents %s %s at the site root but the router does not register it", strings.ToUpper(method), path)
+				}
 				continue
 			}
 			documented[strings.ToUpper(method)+" "+normalize(path)] = true
@@ -1438,13 +1451,17 @@ func TestRoutesMatchDocs(t *testing.T) {
 	// Enumerations the app and agents branch on stay in step with the code:
 	// every error code the handlers emit, and every question status.
 	var full struct {
-		Paths map[string]map[string]struct {
-			Parameters []struct {
-				Name   string `json:"name"`
-				Schema struct {
-					Enum []string `json:"enum"`
-				} `json:"schema"`
-			} `json:"parameters"`
+		Paths struct {
+			Questions struct {
+				Get struct {
+					Parameters []struct {
+						Name   string `json:"name"`
+						Schema struct {
+							Enum []string `json:"enum"`
+						} `json:"schema"`
+					} `json:"parameters"`
+				} `json:"get"`
+			} `json:"/questions"`
 		} `json:"paths"`
 		Components struct {
 			Schemas struct {
@@ -1489,7 +1506,7 @@ func TestRoutesMatchDocs(t *testing.T) {
 		}
 	}
 	want := map[string]bool{store.QuestionPending: true, store.QuestionAnswered: true, store.QuestionCancelled: true, store.QuestionExpired: true, store.QuestionDismissed: true}
-	for _, prm := range full.Paths["/questions"]["get"].Parameters {
+	for _, prm := range full.Paths.Questions.Get.Parameters {
 		if prm.Name != "status" {
 			continue
 		}

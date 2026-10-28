@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Avatar, Sheet } from "../components/Common";
 import { IconFolder, IconSend, IconSettings } from "../components/Icons";
-import { directoryChoices, startSession, useSessionStarters } from "../components/NewSession";
+import { directoryChoices, relayName, relayProfiles, startSession, useSessionStarters } from "../components/NewSession";
 import { ResourceSettingsSheet } from "../components/ThreadSettings";
 import { TopBar } from "../components/TopBar";
 import { navigate } from "../lib/router";
@@ -9,9 +9,11 @@ import { navigate } from "../lib/router";
 const home = (p: string) => p.replace(/^\/(?:home|Users)\/[^/]+/, "~");
 
 /** A new session before it exists: it looks like a thread, the folder chip
- * picks where the session will start, Settings edits the project's
- * defaults, and the first message is what actually starts the session, so it
- * is born with everything already chosen. Nothing is created until then. */
+ * picks where the session will start, the agent chips pick who does the work
+ * (eagent itself, or an agent eagent starts and relays to), Settings edits
+ * the project's defaults, and the first message is what actually starts the
+ * session, so it is born with everything already chosen. Nothing is created
+ * until then. */
 export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
   const { starters, loaded } = useSessionStarters();
   const starter = starters.find((s) => s.resource.id === resourceId);
@@ -32,6 +34,31 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
   const [error, setError] = useState<string | null>(null);
   const cancelled = useRef(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+  // Who does the work: "" is eagent, otherwise a relay profile's name. The
+  // last choice is remembered per connector.
+  const profiles = useMemo(() => (starter ? relayProfiles(starter.resource) : []), [starter]);
+  const agentKey = starter ? `fc.draft.${starter.connector.id}.agent` : "";
+  const remembered = useMemo(() => {
+    try {
+      return agentKey ? (localStorage.getItem(agentKey) ?? "") : "";
+    } catch {
+      return "";
+    }
+  }, [agentKey]);
+  const [picked, setPicked] = useState<string | null>(null);
+  const relay = profiles.find((p) => p.name === (picked ?? remembered)) ?? null;
+  const who = relay ? relayName(relay) : "eagent";
+  const pickAgent = (name: string) => {
+    setPicked(name);
+    try {
+      if (agentKey) localStorage.setItem(agentKey, name);
+    } catch {
+      // ignore
+    }
+  };
+  const agents = [{ name: "", short: "eagent", title: "eagent does the work" }, ...profiles.map((p) => ({ name: p.name, short: relayName(p), title: `eagent starts ${p.label} and passes your messages on` }))];
+  // A relayed agent may start with nothing to do yet; eagent needs a task.
+  const ready = !!text.trim() || !!relay;
   useEffect(() => () => { cancelled.current = true; }, []);
   useEffect(() => {
     ref.current?.focus();
@@ -49,11 +76,11 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
   };
 
   const send = async () => {
-    if (!starter || busy || !text.trim()) return;
+    if (!starter || busy || !ready) return;
     setBusy(true);
     setError(null);
     try {
-      const threadId = await startSession(starter, text, dir || null, setStatus, () => cancelled.current);
+      const threadId = await startSession(starter, text, dir || null, relay, setStatus, () => cancelled.current);
       navigate(`/t/${threadId}`, { replace: true });
     } catch (err) {
       if (!cancelled.current) {
@@ -70,11 +97,11 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
       <TopBar
         title={
           <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, maxWidth: "100%" }}>
-            <Avatar name="eagent" small />
+            <Avatar name={who} small />
             <span style={{ minWidth: 0, flex: "0 1 auto", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
           </span>
         }
-        subtitle={starter ? `new session · ${starter.connector.name}${starter.online ? "" : " · offline"}` : loaded ? "not connected" : "loading…"}
+        subtitle={starter ? `new ${relay ? `${who} ` : ""}session · ${starter.connector.name}${starter.online ? "" : " · offline"}` : loaded ? "not connected" : "loading…"}
         backTo="/"
         right={
           starter ? (
@@ -97,17 +124,23 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
         {!loaded && <div className="skeleton" style={{ height: 90, width: "80%" }} />}
         {loaded && !starter && (
           <div className="empty">
-            <h2>No eagent here</h2>
+            <h2>Not connected</h2>
             <p>Start eagent in the project (serve, a session, or connector run) and come back.</p>
           </div>
         )}
         {starter && !status && (
           <div className="empty">
             <h2>New session</h2>
-            <p>
-              It will start in <code>{home(dir)}</code> with this project&rsquo;s settings. Change either above, then say what to do.
-            </p>
-            {!starter.online && <p>This project&rsquo;s eagent is offline right now; the message will wait for it.</p>}
+            {relay ? (
+              <p>
+                {relay.label} will work in <code>{home(dir)}</code>. eagent starts it and passes your messages on. Say what to do, or just start it.
+              </p>
+            ) : (
+              <p>
+                It will start in <code>{home(dir)}</code> with this project&rsquo;s settings. Change either above, then say what to do.
+              </p>
+            )}
+            {!starter.online && <p>This project&rsquo;s eagent is offline right now. Start it there, then send.</p>}
           </div>
         )}
         {status && (
@@ -124,6 +157,18 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
       </div>
       {starter && (
         <div className="composer-wrap">
+          {profiles.length > 0 && (
+            <div className="agent-picker" role="group" aria-label="Who does the work">
+              {agents.map((o) => {
+                const active = (relay?.name ?? "") === o.name;
+                return (
+                  <button key={o.name || "eagent"} type="button" className={`agent-chip${active ? " active" : ""}`} aria-pressed={active} title={o.title} disabled={busy} onClick={() => pickAgent(o.name)}>
+                    {o.short}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <form
             className="composer"
             onSubmit={(e) => {
@@ -134,7 +179,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
             <textarea
               ref={ref}
               rows={1}
-              placeholder="What should it do?"
+              placeholder={relay ? `What should ${who} do? (optional)` : "What should it do?"}
               value={text}
               disabled={busy}
               maxLength={32768}
@@ -151,8 +196,8 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
                 }
               }}
             />
-            <button type="submit" className="send-btn" aria-label="Start the session" disabled={busy || !text.trim()}>
-              {busy ? <span className="spinner" style={{ borderTopColor: "#fff", borderColor: "rgba(255,255,255,0.35)" }} /> : <IconSend />}
+            <button type="submit" className={`send-btn${!busy && !text.trim() && relay ? " label" : ""}`} aria-label="Start the session" disabled={busy || !ready}>
+              {busy ? <span className="spinner" style={{ borderTopColor: "#fff", borderColor: "rgba(255,255,255,0.35)" }} /> : text.trim() || !relay ? <IconSend /> : "Start"}
             </button>
           </form>
         </div>

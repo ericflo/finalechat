@@ -253,7 +253,9 @@ marks the transcript copy of an answered question, which the app folds into
 the card only when `question_id` names an answered question in the same
 thread and otherwise shows as a mirrored reply; `notification` labels a
 message as needing attention; `session_start` and `session_end` on `system`
-rows tell the app whether the agent's session is still running) and `via`
+rows tell the app whether the agent's session is still running;
+`relay_send` marks what an agent typed to another agent it relays to, which
+the app folds to one line) and `via`
 (a short source label shown under the bubble). A deleted message becomes a
 tombstone: it keeps its `id` and position, `body` is empty, `deleted` is
 `true` and `deleted_at` says when; tombstones appear only on catch-up pages
@@ -1117,8 +1119,11 @@ Unlinks the chat. Returns `{"ok": true}`.
 ## Health
 
 `GET /healthz` returns `ok` while the process is up; `GET /readyz` returns
-`ready` once the database answers. Neither requires authentication and
-neither lives under `/api/v1`.
+`ready` once the database answers. `GET /version` returns
+`{"version": "main-20261028101500-1a2b3c4d5e6f"}`, the image tag the
+running build was stamped with (`dev` for an unstamped build), with
+`Cache-Control: no-store`, so a deploy check can tell which build answers.
+None of them requires authentication or lives under `/api/v1`.
 
 <!-- artifact-control-contract -->
 

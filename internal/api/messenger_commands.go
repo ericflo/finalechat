@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -369,12 +370,16 @@ func (c *mchat) remote(arg string) error {
 
 // Starting a session is a short conversation: which project (when more than
 // one eagent is connected), which directory, then the prompt. "/new <prompt>"
-// skips the directory and starts in the project root.
+// skips the directory and starts in the project root. A first word naming
+// one of the project's relay profiles ("/new codex fix the flaky test") has
+// eagent start that agent to do the work.
 
 type messengerNew struct {
 	Step     string    `json:"step"` // project, dir, prompt
 	Resource uuid.UUID `json:"resource"`
 	Cwd      string    `json:"cwd,omitempty"`
+	Relay    string    `json:"relay,omitempty"`
+	RelayAs  string    `json:"relay_label,omitempty"`
 	Dirs     []string  `json:"dirs,omitempty"`
 	Prompt   string    `json:"prompt,omitempty"`
 	Starters []string  `json:"starters,omitempty"`
@@ -461,6 +466,31 @@ func directories(r *store.SettingsResource) (string, []string) {
 	return root, dirs
 }
 
+// relayProfile is an agent the integration can start to do a session's
+// work instead of eagent itself (snapshot.details.relay_profiles).
+type relayProfile struct{ name, label string }
+
+// splitRelay takes a leading relay profile name off a /new brief.
+func splitRelay(r *store.SettingsResource, brief string) (relayProfile, string) {
+	word, rest := brief, ""
+	if i := strings.IndexFunc(brief, unicode.IsSpace); i >= 0 {
+		word, rest = brief[:i], brief[i:]
+	}
+	list, _ := r.Snapshot.Details["relay_profiles"].([]any)
+	for _, v := range list {
+		p, _ := v.(map[string]any)
+		name, _ := p["name"].(string)
+		if name != "" && strings.EqualFold(word, name) {
+			label, _ := p["label"].(string)
+			if label == "" {
+				label = name
+			}
+			return relayProfile{name: name, label: label}, strings.TrimSpace(rest)
+		}
+	}
+	return relayProfile{}, brief
+}
+
 var homePrefixRe = regexp.MustCompile(`^/(?:home|Users)/[^/]+`)
 
 func shortDir(p string) string { return homePrefixRe.ReplaceAllString(p, "~") }
@@ -504,12 +534,13 @@ func (c *mchat) chooseProject(st messengerStarter, prompt string) error {
 		c.setNew(nil)
 		return nil
 	}
+	relay, prompt := splitRelay(st.resource, prompt)
 	if prompt != "" {
-		return c.startSession(st.resource.ID, root, prompt)
+		return c.startSession(st.resource.ID, root, relay, prompt)
 	}
 	if len(dirs) <= 1 {
-		c.setNew(&messengerNew{Step: "prompt", Resource: st.resource.ID, Cwd: root})
-		c.say("📁 "+shortDir(root)+"\nWhat should the session do? (/cancel to stop)", nil)
+		c.setNew(&messengerNew{Step: "prompt", Resource: st.resource.ID, Cwd: root, Relay: relay.name, RelayAs: relay.label})
+		c.say("📁 "+shortDir(root)+"\n"+whatShouldDo(relay)+" (/cancel to stop)", nil)
 		return nil
 	}
 	var b strings.Builder
@@ -519,9 +550,17 @@ func (c *mchat) chooseProject(st messengerStarter, prompt string) error {
 		fmt.Fprintf(&b, "\n%d. %s", i+1, shortDir(d))
 		quick = append(quick, messenger.QuickReply{Title: strconv.Itoa(i+1) + " " + path.Base(d), Payload: "nd:" + strconv.Itoa(i)})
 	}
-	c.setNew(&messengerNew{Step: "dir", Resource: st.resource.ID, Dirs: dirs})
+	c.setNew(&messengerNew{Step: "dir", Resource: st.resource.ID, Dirs: dirs, Relay: relay.name, RelayAs: relay.label})
 	c.say(b.String(), quick)
 	return nil
+}
+
+// whatShouldDo asks for the brief, naming the relayed agent when there is one.
+func whatShouldDo(relay relayProfile) string {
+	if relay.name == "" {
+		return "What should the session do?"
+	}
+	return "What should " + relay.label + " do?"
 }
 
 // newChoice handles a tapped project ("np") or directory ("nd").
@@ -561,10 +600,12 @@ func (c *mchat) pickProject(st *messengerNew, id uuid.UUID) error {
 }
 
 func (c *mchat) pickDir(st *messengerNew, dir string) error {
-	c.setNew(&messengerNew{Step: "prompt", Resource: st.Resource, Cwd: dir})
-	c.say("📁 "+shortDir(dir)+"\nWhat should the session do? (/cancel to stop)", nil)
+	c.setNew(&messengerNew{Step: "prompt", Resource: st.Resource, Cwd: dir, Relay: st.Relay, RelayAs: st.RelayAs})
+	c.say("📁 "+shortDir(dir)+"\n"+whatShouldDo(st.relay())+" (/cancel to stop)", nil)
 	return nil
 }
+
+func (st *messengerNew) relay() relayProfile { return relayProfile{name: st.Relay, label: st.RelayAs} }
 
 // newTyped handles typed answers while a /new conversation waits for a
 // project or directory choice. It reports false when the text is not one.
@@ -596,7 +637,7 @@ func (c *mchat) newTyped(text string) (bool, error) {
 	return false, nil
 }
 
-func (c *mchat) startSession(resourceID uuid.UUID, cwd, prompt string) error {
+func (c *mchat) startSession(resourceID uuid.UUID, cwd string, relay relayProfile, prompt string) error {
 	var cmd *store.SettingsCommand
 	var created bool
 	var r *store.SettingsResource
@@ -615,6 +656,9 @@ func (c *mchat) startSession(resourceID uuid.UUID, cwd, prompt string) error {
 		params := map[string]any{"prompt": prompt}
 		if cwd != "" && cwd != root {
 			params["cwd"] = cwd
+		}
+		if relay.name != "" {
+			params["relay"] = relay.name
 		}
 		proposal := control.Proposal{Operation: "session.start", SchemaVersion: r.Descriptor.SchemaVersion, ExpectedVersion: r.Snapshot.Version, Generation: r.Generation, Parameters: params}
 		// The key includes the attempt: a retry after a version race is a
@@ -645,7 +689,11 @@ func (c *mchat) startSession(resourceID uuid.UUID, cwd, prompt string) error {
 	if dir == "" {
 		dir, _ = directories(r)
 	}
-	c.say("Starting a session in "+shortDir(dir)+"…", nil)
+	if relay.name != "" {
+		c.say("Starting "+relay.label+" in "+shortDir(dir)+"…", nil)
+	} else {
+		c.say("Starting a session in "+shortDir(dir)+"…", nil)
+	}
 	go c.s.messengerFollowStart(c.link.UserID, c.link.PSID, cmd.ID, dir)
 	return nil
 }

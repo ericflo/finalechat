@@ -307,6 +307,7 @@ const messengerHelp = `Commands:
 /where — current thread, status, open question
 /read 3 — recent messages in #3
 /new — start an eagent session
+/new codex … — the same, with Codex doing the work (if set up)
 /skip — decline the open question
 /more — rest of a long message
 /quiet, /loud — only questions and important messages, or everything
@@ -352,7 +353,7 @@ func (c *mchat) handle() error {
 		defer c.say("(The relay is paused: agent replies won't arrive here. /resume turns it back on.)", nil)
 	}
 	if st := c.newState(); st != nil && st.Step == "prompt" && in.replyTo == "" && !strings.HasPrefix(in.text, "/") {
-		return c.startSession(st.Resource, st.Cwd, in.text)
+		return c.startSession(st.Resource, st.Cwd, st.relay(), in.text)
 	}
 	return c.reply(in.text)
 }

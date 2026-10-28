@@ -22,7 +22,8 @@ Questions and important messages arrive as push notifications.
 - **New session from your phone**: when an eagent is running in a project
   (`eagent serve`, a session, or `eagent connector run`), the inbox offers
   **New session**; type the first message and the session starts on that
-  machine and opens as a thread.
+  machine and opens as a thread. eagent can also start Codex or Claude Code
+  to do the work and pass your messages on.
 - Real-time updates over server-sent events; Web Push with VAPID; installable
   PWA with app badge.
 - **Messenger**: link a Facebook Messenger chat and run your agents from

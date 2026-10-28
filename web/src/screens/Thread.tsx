@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../components/Attachments";
 import { Avatar, ConfirmSheet, CopyButton, Sheet, sheetsOpen } from "../components/Common";
-import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBranch, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconSend, IconServer, IconSettings, IconTrash } from "../components/Icons";
+import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBranch, IconChevron, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconSend, IconServer, IconSettings, IconTrash } from "../components/Icons";
 import { api } from "../lib/api";
 import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
 import { QuestionCard } from "../components/QuestionCard";
@@ -22,6 +22,7 @@ const itemKey = (it: Item) => (it.kind === "message" ? it.m.id : it.q.id);
 function groupedWith(a: Item | undefined, b: Item | undefined): boolean {
   if (!a || !b || a.kind !== "message" || b.kind !== "message") return false;
   if (a.m.sender !== b.m.sender || (a.m.origin || "") !== (b.m.origin || "")) return false;
+  if (isRelaySend(a.m) !== isRelaySend(b.m)) return false;
   if (!sameDay(a.at, b.at)) return false;
   return Math.abs(new Date(b.at).getTime() - new Date(a.at).getTime()) < 3 * 60 * 1000;
 }
@@ -634,7 +635,62 @@ function RenameSheet({ initialTitle, initialDescription, onClose, onSave }: { in
 /** Bodies taller than this collapse behind "Show all" so one log dump does not bury the thread. */
 const collapseAt = 520;
 
-const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, inspectThread, onOpen }: { m: Message; grouped: boolean; showMeta: boolean; inspectThread?: Thread; onOpen: (images: Attachment[], index: number) => void }) {
+type BubbleProps = { m: Message; grouped: boolean; showMeta: boolean; inspectThread?: Thread; onOpen: (images: Attachment[], index: number) => void };
+
+const MessageBubble = memo(function MessageBubble(props: BubbleProps) {
+  return isRelaySend(props.m) ? <RelaySendBubble {...props} /> : <TranscriptBubble {...props} />;
+});
+
+/** What eagent itself typed to a relayed agent (Codex, Claude Code). */
+function isRelaySend(m: Message): boolean {
+  return m.sender === "agent" && m.meta.kind === "relay_send" && (m.attachments ?? []).length === 0;
+}
+
+/** Splits eagent's "→ Codex:\n…" into who it went to and what was sent. */
+function relaySendParts(m: Message): { to: string; text: string } {
+  const head = /^→ ([^\n]+?):\n/.exec(m.body);
+  if (head) return { to: head[1] as string, text: m.body.slice(head[0].length) };
+  const via = typeof m.meta.via === "string" ? m.meta.via.split("→").pop()?.trim() : "";
+  const relay = typeof m.meta.relay === "string" ? m.meta.relay : "";
+  return { to: via || relay || "the agent", text: m.body };
+}
+
+/** A relay send folds to one line, since it repeats what the user asked for
+ * in the agent's own terms; a tap shows exactly what was sent. */
+function RelaySendBubble({ m, grouped, showMeta, inspectThread }: BubbleProps) {
+  const [open, setOpen] = useState(false);
+  const { to, text } = relaySendParts(m);
+  const html = useMemo(() => (open ? renderText(text) : ""), [open, text]);
+  const via = typeof m.meta.via === "string" ? m.meta.via : "";
+  const firstLine = text.split("\n").find((l) => l.trim()) ?? "";
+  return (
+    <div id={`message-${m.id}`} className={`msg agent relay-send ${grouped ? "grouped" : ""}`}>
+      <div className={`relay-bubble ${open ? "open" : ""}`}>
+        <button type="button" className="relay-toggle" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+          <IconSend aria-hidden="true" />
+          <span className="relay-to">Sent to {to}</span>
+          {!open && <span className="relay-line">{firstLine}</span>}
+          <IconChevron className="relay-chevron" aria-hidden="true" />
+        </button>
+        {open && <div className="relay-text" dangerouslySetInnerHTML={{ __html: html }} />}
+      </div>
+      <div className="message-footer">
+        {showMeta && (
+          <div className="msg-meta" title={fullDateTime(m.created_at)}>
+            {via && <span>via {via}</span>}
+            <span>{shortTime(m.created_at)}</span>
+          </div>
+        )}
+        <div className="message-actions">
+          <CopyButton text={text} className="message-action" label="Copy message" />
+          {inspectThread && <InspectMessage message={m} thread={inspectThread} />}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TranscriptBubble({ m, grouped, showMeta, inspectThread, onOpen }: BubbleProps) {
   const html = useMemo(() => (m.format === "markdown" ? renderMarkdown(m.body) : renderText(m.body)), [m.format, m.body]);
   const kind = typeof m.meta.kind === "string" ? m.meta.kind : "";
   const via = typeof m.meta.via === "string" ? m.meta.via : "";
@@ -688,7 +744,7 @@ const MessageBubble = memo(function MessageBubble({ m, grouped, showMeta, inspec
       </div>
     </div>
   );
-});
+}
 
 /** The agent's live status: "running tests…" with a timer once it has taken a while. */
 function ActivityBubble({ a }: { a: Activity }) {

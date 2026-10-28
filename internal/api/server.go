@@ -133,6 +133,7 @@ func (s *Server) Handler() http.Handler {
 		}
 		_, _ = w.Write([]byte("ready\n"))
 	})
+	mux.HandleFunc("GET /version", s.handleVersion)
 
 	// Agent-facing documents and tooling.
 	mux.HandleFunc("GET /AGENTS.md", s.document("AGENTS.md", "text/markdown; charset=utf-8", false))
@@ -240,6 +241,16 @@ func (s *Server) Handler() http.Handler {
 	h = s.canonicalRedirect(h)
 	h = s.logging(h)
 	return h
+}
+
+// handleVersion reports which build is serving: the image tag the binary was
+// stamped with (the web bundle reports the same one), or "dev".
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	v := s.cfg.Version
+	if v == "" {
+		v = "dev"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"version": v})
 }
 
 // RunMaintenance runs the housekeeping loops until ctx ends. Each job has

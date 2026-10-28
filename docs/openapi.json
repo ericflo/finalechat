@@ -63,6 +63,10 @@
     {
       "name": "Messenger",
       "description": "Link a Facebook Messenger chat to the account (app only)."
+    },
+    {
+      "name": "Health",
+      "description": "Build information outside /api/v1."
     }
   ],
   "security": [
@@ -6878,6 +6882,55 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/version": {
+      "servers": [
+        {
+          "url": "https://www.finalechat.com"
+        },
+        {
+          "url": "https://api.finalechat.com"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Health"
+        ],
+        "summary": "Version of the running build",
+        "description": "The image tag the server was stamped with at build time (the web app reports the same one), or `dev` for an unstamped build. Served at the site root, not under /api/v1; needs no authentication and is never cached.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Version.",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "version"
+                  ]
+                },
+                "example": {
+                  "version": "main-20261028101500-1a2b3c4d5e6f"
                 }
               }
             }

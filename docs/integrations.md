@@ -160,7 +160,11 @@ thread but exists only in the app: its folder chip chooses where the session
 will start (from the directories the integration publishes in its snapshot
 under `details.directories`: `root`, `recent`, `children`, `siblings`, or an
 absolute path typed in), its Settings button edits the project's own
-settings, and nothing is created until the first message is sent. That
+settings, and nothing is created until the first message is sent. When the
+snapshot also lists `details.relay_profiles` (each `{name, agent, label,
+model, effort}`, such as `codex` labelled "Codex · GPT-6 Astra xhigh"), the
+draft offers one chip per profile beside the default, eagent; the app
+remembers the last choice per connector. That
 message is submitted as a trusted command exactly like a settings action:
 the browser session creates the command, the connector claims it, starts the
 session already configured, and the result reports it (`session_id`,
@@ -170,8 +174,13 @@ integration's mirror creates it.
 
 `session.start` is a cost-class action because a session spends model
 credit and runs commands on the machine. Its parameters are `prompt` (at
-most 32,768 characters) and an optional `cwd`, an absolute directory the
-session starts in; the integration checks it exists. The connector executes each command at most
+most 32,768 characters), an optional `cwd`, an absolute directory the
+session starts in, which the integration checks exists, and an optional
+`relay`, `""` or a relay profile name: eagent then starts that agent (Codex,
+Claude Code) in a terminal it owns and passes the user's messages on, and
+`prompt` may be empty, so the agent starts and waits. What eagent types to
+the agent itself appears in the thread as agent messages with
+`meta.kind` `relay_send`, which the app folds to one line. The connector executes each command at most
 once: a redelivered command returns the original result, and a claim whose
 local journal is missing is reported as `unknown` rather than started
 again. A stale `expected_version` is not a reason to refuse it, since

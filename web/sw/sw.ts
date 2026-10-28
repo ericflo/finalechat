@@ -87,7 +87,7 @@ sw.addEventListener("fetch", (event) => {
   }
   // Everything else under the API, and the agent-facing documents, is live.
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/cli/") || url.pathname.startsWith("/skill/")) return;
-  if (["/AGENTS.md", "/agents.md", "/llms.txt", "/install.sh", "/openapi.json", "/healthz", "/readyz"].includes(url.pathname)) return;
+  if (["/AGENTS.md", "/agents.md", "/llms.txt", "/install.sh", "/openapi.json", "/healthz", "/readyz", "/version"].includes(url.pathname)) return;
 
   // Hashed assets: cache first, forever; retry once so a rolling deploy's
   // brief mismatch does not white-screen the app.
