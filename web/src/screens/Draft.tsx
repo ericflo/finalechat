@@ -8,6 +8,11 @@ import { TopBar } from "../components/TopBar";
 import { navigate } from "../lib/router";
 
 const home = (p: string) => p.replace(/^\/(?:home|Users)\/[^/]+/, "~");
+/** "~/x" typed on the phone, read on the machine whose project is root. */
+const fromHome = (p: string, root: string) => {
+  const h = root.match(/^\/(?:home|Users)\/[^/]+/)?.[0];
+  return h && /^~(\/|$)/.test(p) ? h + p.slice(1) : p;
+};
 const base = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
 
 /** An agent and folder a relay session started with from this device. */
@@ -280,6 +285,9 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
 
 function DirectorySheet({ choices, current, onChoose, onClose }: { choices: ReturnType<typeof directoryChoices>; current: string; onChoose: (p: string) => void; onClose: () => void }) {
   const [custom, setCustom] = useState("");
+  // An absolute path, or ~/… (eagent reads ~ as the machine's home).
+  const typed = fromHome(custom.trim(), choices.root).replace(/(.)\/+$/, "$1");
+  const usable = /^(\/|~(\/|$))/.test(typed);
   const groups: { title: string; paths: string[] }[] = [
     { title: "Project", paths: [choices.root] },
     { title: "Recent", paths: choices.recent.filter((p) => p !== choices.root) },
@@ -306,12 +314,12 @@ function DirectorySheet({ choices, current, onChoose, onClose }: { choices: Retu
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (custom.trim().startsWith("/")) onChoose(custom.trim());
+            if (usable) onChoose(typed);
           }}
           style={{ display: "flex", gap: 8, marginTop: 10 }}
         >
-          <input value={custom} placeholder="/absolute/path" onChange={(e) => setCustom(e.target.value)} style={{ flex: 1 }} />
-          <button type="submit" className="btn" disabled={!custom.trim().startsWith("/")}>
+          <input value={custom} placeholder="~/Development/project" autoCapitalize="none" autoCorrect="off" spellCheck={false} onChange={(e) => setCustom(e.target.value)} style={{ flex: 1, fontFamily: "var(--mono)" }} />
+          <button type="submit" className="btn" disabled={!usable}>
             Use
           </button>
         </form>
