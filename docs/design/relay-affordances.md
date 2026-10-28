@@ -109,7 +109,7 @@ Built in Finalechat (relay threads only, phone first, light and dark):
 
 - **1. Receipts**: done, from thread meta `relay_receipts` (message id to `sent`, `delivered`, `held`, `eagent` or `failed`) rather than a field on each message. They update live and offer Retry when a message failed. The "why" for `kept for eagent` is not shown yet.
 - **2. Codex's report**: done for `meta.kind: relay_report`. It is folded to a line with its duration, tool count and "interrupted", and expands to the full text. It is not yet threaded to the narrator's summary.
-- **3. Quick replies**: done, and Stop interrupts the agent. Messenger also gets Keep going, Commit & push and Stop as buttons under the agent's messages.
+- **3. Quick replies**: built, then removed (2026-10-28). A bar above every message for things you can type yourself cost more than it saved; Messenger's buttons went with it. The To toggle went the same way: who gets the message is now a small avatar inside the field, and tapping it pops out the choice.
 - **5. Screen peek**: done. "Screen" in the controls sends `/screen`, and `relay_screen` messages render as an unwrapped terminal card with Copy.
 - **6. Reply to a report**: done as a Reply button on the report, not a long press. It quotes the report's first line into the composer. No `meta.reply_to` is sent.
 - **7. Tell me when it's done**: done as a bell beside the badge and an item in the controls, both sending `/notify-done`. They show as armed while `meta.relay.notify_done` is true.

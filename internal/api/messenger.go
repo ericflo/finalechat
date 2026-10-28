@@ -680,42 +680,10 @@ func (c *mchat) payload(p string) error {
 		return c.goTo(n)
 	case "np", "nd":
 		return c.newChoice(kind, rest)
-	case "rq":
-		return c.relayQuickReply(rest)
 	}
 	// Unknown payloads (an old button) read as the text they showed.
 	if c.in.text != "" {
 		return c.reply(c.in.text)
-	}
-	return nil
-}
-
-// relayQuickReply sends the one-tap reply tapped under an agent's message
-// to its relay thread, exactly as the app's quick reply does: never as the
-// answer to a question waiting there.
-func (c *mchat) relayQuickReply(rest string) error {
-	id, key, _ := strings.Cut(rest, ":")
-	threadID, err := uuid.Parse(id)
-	if err != nil {
-		return nil
-	}
-	for _, q := range relayQuickTexts {
-		if q.key != key {
-			continue
-		}
-		thread, err := c.s.store.GetThread(c.ctx, c.user.ID, threadID)
-		if errors.Is(err, store.ErrNotFound) {
-			c.say("That thread no longer exists. /ls lists the current ones.", nil)
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		var extra store.JSON
-		if q.interrupt {
-			extra = store.JSON{"eagent.route": "agent", "eagent.delivery": "interrupt"}
-		}
-		return c.postMeta(thread, q.text, extra)
 	}
 	return nil
 }

@@ -380,11 +380,7 @@ func (s *Server) messengerSendBundle(ctx context.Context, link *store.MessengerL
 			h, _ := s.store.MessengerHandle(ctx, link.UserID, thread.ID)
 			text += fmt.Sprintf("\n\n… the rest is in Finalechat (/read %d)", h)
 		}
-		var quick []messenger.QuickReply
-		if i == end-1 {
-			quick = relayQuick(thread, msgs...)
-		}
-		mid, err := s.messenger.SendText(ctx, link.PSID, text, quick, "")
+		mid, err := s.messenger.SendText(ctx, link.PSID, text, nil, "")
 		if err != nil {
 			return err
 		}
@@ -547,11 +543,7 @@ func (s *Server) messengerSendPieces(ctx context.Context, link *store.MessengerL
 		if i == end-1 && end < len(pieces) {
 			text += fmt.Sprintf("\n\n… /more (%d more)", len(pieces)-end)
 		}
-		var quick []messenger.QuickReply
-		if i == end-1 {
-			quick = relayQuick(thread, m)
-		}
-		mid, err := s.messenger.SendText(ctx, link.PSID, text, quick, "")
+		mid, err := s.messenger.SendText(ctx, link.PSID, text, nil, "")
 		if err != nil {
 			return sent, err
 		}
@@ -578,45 +570,6 @@ func (s *Server) messengerSendPieces(ctx context.Context, link *store.MessengerL
 	}
 	link.LastThreadID = &thread.ID
 	return sent, s.store.SetMessengerLastThread(ctx, link.UserID, thread.ID)
-}
-
-// relayQuickTexts are the one-tap replies offered under an agent's message
-// from a relay thread, the same as the app's quick replies: what each sends,
-// and whether it interrupts the agent first.
-var relayQuickTexts = []struct {
-	key, title, text string
-	interrupt        bool
-}{
-	{"keep", "Keep going", "Keep going.", false},
-	{"commit", "Commit & push", "Commit and push.", false},
-	{"stop", "Stop", "Stop.", true},
-}
-
-// relayQuick returns the quick replies for an agent's message in a relay
-// thread (meta.relay set, the agent neither stopped nor exited), or nil.
-func relayQuick(thread *store.Thread, msgs ...*store.Message) []messenger.QuickReply {
-	if thread == nil {
-		return nil
-	}
-	relay, ok := thread.Meta["relay"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	if state, _ := relay["state"].(string); state == "stopped" || state == "exited" {
-		return nil
-	}
-	fromAgent := false
-	for _, m := range msgs {
-		fromAgent = fromAgent || m.Sender == store.SenderAgent
-	}
-	if !fromAgent {
-		return nil
-	}
-	quick := make([]messenger.QuickReply, 0, len(relayQuickTexts))
-	for _, q := range relayQuickTexts {
-		quick = append(quick, messenger.QuickReply{Title: q.title, Payload: "rq:" + thread.ID.String() + ":" + q.key})
-	}
-	return quick
 }
 
 // messengerSendFiles sends a message's attachments as Messenger media (an

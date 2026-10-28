@@ -229,7 +229,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
     }
   }, [scrollToBottom]);
 
-  // A relay control, quick reply or retry is an ordinary message: it shows
+  // A relay control or retry is an ordinary message: it shows
   // in the conversation (with its receipt), takes the same retry path, and
   // eagent reads it like anything typed.
   const sendRelay = useCallback((text: string, routing?: MessageRouting): Promise<void> => {
@@ -393,7 +393,6 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
         ended={sessionEnded(messages, questions, thread)}
         relay={relay}
         onSending={handleSending}
-        onQuick={sendRelay}
         handle={composer}
       />
       {relayMenu && relay && <RelaySheet relay={relay} onClose={() => setRelayMenu(false)} onSend={sendCommand} />}
@@ -1002,16 +1001,7 @@ function ActivityBubble({ a }: { a: Activity }) {
 /** What the thread can ask of its composer. */
 type ComposerHandle = { quote: (line: string) => void };
 
-/** One-tap replies for a working relay: the user's most repeated messages to agents. */
-const quickReplies: { label: string; text: string; routing?: MessageRouting }[] = [
-  { label: "Keep going", text: "Keep going." },
-  { label: "Commit & push", text: "Commit and push." },
-  { label: "Deploy", text: "Deploy it." },
-  { label: "Screenshots", text: "Take screenshots of where things stand and show me." },
-  { label: "Stop", text: "Stop.", routing: { route: "agent", delivery: "interrupt" } },
-];
-
-function Composer({ threadId, ended, relay, onSending, onQuick, handle }: { threadId: string; ended: boolean; relay: ThreadRelay | null; onSending: (sending: boolean) => void; onQuick: (text: string, routing?: MessageRouting) => Promise<void>; handle: React.MutableRefObject<ComposerHandle | null> }) {
+function Composer({ threadId, ended, relay, onSending, handle }: { threadId: string; ended: boolean; relay: ThreadRelay | null; onSending: (sending: boolean) => void; handle: React.MutableRefObject<ComposerHandle | null> }) {
   const attachmentsEnabled = useStore((s) => s.attachmentsEnabled);
   const connection = useStore((s) => s.connection);
   const draft = useStore((s) => s.drafts[threadId] ?? "");
@@ -1037,15 +1027,37 @@ function Composer({ threadId, ended, relay, onSending, onQuick, handle }: { thre
   const [route, setRoute] = useState<EagentRoute | null>(null);
   const toAgent = live && route !== "eagent";
   const [sendMenu, setSendMenu] = useState(false);
-  // Quick replies show while the agent can act on them.
-  const quick = live && relay?.state !== "exited";
-  const [quickBusy, setQuickBusy] = useState(false);
+  // Who gets it shows as a small avatar in the field; tapping it pops the
+  // choice out, and picking puts it away again.
+  const [routeOpen, setRouteOpen] = useState(false);
+  const routeRef = useRef<HTMLDivElement>(null);
   const pressTimer = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false);
   useEffect(() => {
     setRoute(null);
     setSendMenu(false);
+    setRouteOpen(false);
   }, [threadId]);
+  useEffect(() => {
+    if (!routeOpen) return;
+    const away = (e: PointerEvent) => {
+      if (!routeRef.current?.contains(e.target as Node)) setRouteOpen(false);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setRouteOpen(false);
+    };
+    window.addEventListener("pointerdown", away, true);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("pointerdown", away, true);
+      window.removeEventListener("keydown", key);
+    };
+  }, [routeOpen]);
+  const pickRoute = (r: EagentRoute) => {
+    setRoute(r);
+    setRouteOpen(false);
+    ref.current?.focus();
+  };
   // The click a long press's lift produces is swallowed once; any later
   // press resets that.
   useEffect(() => {
@@ -1122,16 +1134,6 @@ function Composer({ threadId, ended, relay, onSending, onQuick, handle }: { thre
       handle.current = null;
     };
   });
-
-  const sendQuick = async (q: (typeof quickReplies)[number]) => {
-    if (quickBusy) return;
-    setQuickBusy(true);
-    try {
-      await onQuick(q.text, q.routing);
-    } finally {
-      setQuickBusy(false);
-    }
-  };
 
   const addFiles = (files: FileList | File[]) => {
     const list = Array.from(files).filter((f) => f.size > 0);
@@ -1242,31 +1244,6 @@ function Composer({ threadId, ended, relay, onSending, onQuick, handle }: { thre
     >
       <UploadTray items={uploads} onRemove={removeUpload} />
       {ended && <div className="composer-note">This session has ended. Your reply is kept here for the next one.</div>}
-      {quick && (
-        <div className="quick-row" role="group" aria-label={`Quick replies to ${agent}`}>
-          {quickReplies.map((q) => (
-            <button key={q.label} type="button" className={`quick-chip${q.routing?.delivery === "interrupt" ? " stop" : ""}`} title={q.routing?.delivery === "interrupt" ? `Interrupts ${agent}: "${q.text}"` : `Sends "${q.text}"`} disabled={quickBusy} onClick={() => void sendQuick(q)}>
-              {q.label}
-            </button>
-          ))}
-        </div>
-      )}
-      {live && (
-        <div className="route-row">
-          <span className="route-label" id={`route-${threadId}`}>
-            To
-          </span>
-          <div className="segmented" role="radiogroup" aria-labelledby={`route-${threadId}`}>
-            <button type="button" role="radio" aria-checked={toAgent} className={toAgent ? "active" : ""} onClick={() => setRoute("agent")}>
-              {agent}
-            </button>
-            <button type="button" role="radio" aria-checked={!toAgent} className={!toAgent ? "active" : ""} onClick={() => setRoute("eagent")}>
-              eagent
-            </button>
-          </div>
-          {toAgent && <span className="route-hint">Hold send to interrupt</span>}
-        </div>
-      )}
       <form
         className="composer"
         onSubmit={(e) => {
@@ -1292,27 +1269,52 @@ function Composer({ threadId, ended, relay, onSending, onQuick, handle }: { thre
             </button>
           </>
         )}
-        <textarea
-          ref={ref}
-          rows={1}
-          placeholder={offline ? "Offline. Your reply is kept until you're back." : live ? `Message ${toAgent ? agent : "eagent"}…` : "Reply to the agent…"}
-          value={text}
-          enterKeyHint={touch ? "enter" : "send"}
-          onChange={(e) => update(e.target.value)}
-          onPaste={(e) => {
-            const files = Array.from(e.clipboardData.files ?? []);
-            if (files.length > 0) {
-              e.preventDefault();
-              addFiles(files);
-            }
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey || !touch)) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-        />
+        <div className={`composer-field${live ? " with-route" : ""}`} ref={routeRef}>
+          {live && (
+            <button type="button" className="route-pip" aria-label={`To ${toAgent ? agent : "eagent"}. Change who gets it`} aria-haspopup="menu" aria-expanded={routeOpen} title={`To ${toAgent ? agent : "eagent"}`} onClick={() => setRouteOpen((o) => !o)}>
+              <Avatar name={toAgent ? agent : "eagent"} small />
+            </button>
+          )}
+          {routeOpen && (
+            <div className="route-pop" role="menu" aria-label="Who gets your message">
+              <button type="button" role="menuitemradio" aria-checked={toAgent} className={toAgent ? "active" : ""} onClick={() => pickRoute("agent")}>
+                <Avatar name={agent} small />
+                <span className="item-text">
+                  <span>{agent}</span>
+                  <small>Straight to it. Hold send to interrupt.</small>
+                </span>
+              </button>
+              <button type="button" role="menuitemradio" aria-checked={!toAgent} className={!toAgent ? "active" : ""} onClick={() => pickRoute("eagent")}>
+                <Avatar name="eagent" small />
+                <span className="item-text">
+                  <span>eagent</span>
+                  <small>Kept for eagent: status, settings, questions.</small>
+                </span>
+              </button>
+            </div>
+          )}
+          <textarea
+            ref={ref}
+            rows={1}
+            placeholder={offline ? "Offline. Your reply is kept until you're back." : live ? `Message ${toAgent ? agent : "eagent"}…` : "Reply to the agent…"}
+            value={text}
+            enterKeyHint={touch ? "enter" : "send"}
+            onChange={(e) => update(e.target.value)}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files ?? []);
+              if (files.length > 0) {
+                e.preventDefault();
+                addFiles(files);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey || !touch)) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+          />
+        </div>
         <button
           type="submit"
           className="send-btn"

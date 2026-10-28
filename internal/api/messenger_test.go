@@ -772,10 +772,9 @@ func TestMessengerRelayCommands(t *testing.T) {
 	b.must(200, "DELETE", "/api/v1/connectors/"+id, nil)
 }
 
-// An agent's message from a relay thread comes with the app's quick
-// replies; a tap sends the same text to that thread (Stop interrupting the
-// agent). Other threads, and a stopped relay, get no buttons.
-func TestMessengerRelayQuickReplies(t *testing.T) {
+// An agent's message from a relay thread comes as plain text: no buttons
+// under it (the user types what they want to say).
+func TestMessengerRelayMessagesHaveNoButtons(t *testing.T) {
 	_, a := setup(t)
 	g := withMessenger(t)
 	psid := "psid-" + uuid.NewString()[:8]
@@ -783,55 +782,13 @@ func TestMessengerRelayQuickReplies(t *testing.T) {
 
 	ext := "eagent:quick-" + uuid.NewString()[:8]
 	a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+ext+"/messages", map[string]any{"title": "relay", "agent": "eagent", "sender": "user", "body": "typed in the terminal"})
-	thread := sub(a.must(http.StatusOK, "PATCH", "/api/v1/threads/ext:"+ext, map[string]any{"meta": map[string]any{"relay": map[string]any{"name": "codex", "agent": "codex", "label": "Codex", "state": "working"}}}), "thread")
-	id := str(thread, "id")
+	a.must(http.StatusOK, "PATCH", "/api/v1/threads/ext:"+ext, map[string]any{"meta": map[string]any{"relay": map[string]any{"name": "codex", "agent": "codex", "label": "Codex", "state": "working"}}})
 	a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+ext+"/messages", map[string]any{"body": "Codex finished the migration."})
 	from := g.mark()
 	relay(t)
 	sent := g.texts(from)
-	if len(sent) != 1 || !strings.Contains(sent[0].Text, "Codex finished the migration.") {
+	if len(sent) != 1 || !strings.Contains(sent[0].Text, "Codex finished the migration.") || len(sent[0].Quick) != 0 {
 		t.Fatalf("relayed: %+v", sent)
-	}
-	quick := sent[0].Quick
-	if len(quick) != 3 || quick[0].Title != "Keep going" || quick[1].Title != "Commit & push" || quick[2].Title != "Stop" || quick[2].Payload != "rq:"+id+":stop" {
-		t.Fatalf("quick replies: %+v", quick)
-	}
-	// A question waits in the thread; a tap is still a plain message.
-	q := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+ext+"/questions", map[string]any{"prompt": "Which branch?", "options": []map[string]any{{"label": "main"}}}), "question"), "id")
-	relay(t)
-	lastUser := func() map[string]any {
-		t.Helper()
-		msgs := a.must(http.StatusOK, "GET", "/api/v1/threads/ext:"+ext+"/messages?sender=user", nil)["messages"].([]any)
-		return msgs[len(msgs)-1].(map[string]any)
-	}
-	tap(t, psid, quick[1].Title, quick[1].Payload)
-	if m := lastUser(); m["body"] != "Commit and push." || m["origin"] != "session" || m["meta"].(map[string]any)["eagent.route"] != nil {
-		t.Fatalf("Commit & push: %v", m)
-	}
-	tap(t, psid, quick[2].Title, quick[2].Payload)
-	m := lastUser()
-	meta := m["meta"].(map[string]any)
-	if m["body"] != "Stop." || meta["eagent.route"] != "agent" || meta["eagent.delivery"] != "interrupt" || meta["eagent.client"] == nil {
-		t.Fatalf("Stop: %v", m)
-	}
-	if st := str(sub(a.must(http.StatusOK, "GET", "/api/v1/questions/"+q, nil), "question"), "status"); st != "pending" {
-		t.Fatalf("a quick reply answered the question: %s", st)
-	}
-
-	// Once the agent has stopped, and in a thread without a relay, no buttons.
-	a.must(http.StatusOK, "PATCH", "/api/v1/threads/ext:"+ext, map[string]any{"meta": map[string]any{"relay": map[string]any{"name": "codex", "agent": "codex", "state": "stopped"}}})
-	a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+ext+"/messages", map[string]any{"body": "Codex has stopped."})
-	plain := "plain-" + uuid.NewString()[:8]
-	a.must(http.StatusCreated, "POST", "/api/v1/threads/ext:"+plain+"/messages", map[string]any{"title": "plain", "body": "No relay here."})
-	from = g.mark()
-	relay(t)
-	for _, m := range g.texts(from) {
-		if len(m.Quick) > 0 {
-			t.Fatalf("buttons on %q: %+v", m.Text, m.Quick)
-		}
-	}
-	if len(g.texts(from)) == 0 {
-		t.Fatal("nothing relayed")
 	}
 }
 

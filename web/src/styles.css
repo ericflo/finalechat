@@ -342,12 +342,20 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 /* A long press on send offers timed sends in a relay thread; no callout. */
 .send-btn { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
 /* Relay thread: who the next message is for. */
-.route-row { display: flex; align-items: center; gap: 8px; max-width: 760px; margin: 0 auto 8px; min-width: 0; }
-.route-label { flex: none; font-size: 13px; font-weight: 600; color: var(--text-3); }
-.route-row .segmented { flex: none; }
-.route-row .segmented button { min-height: 32px; padding: 4px 12px; max-width: 132px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.route-row .segmented button.active { color: var(--accent); }
-.route-hint { margin-left: auto; min-width: 0; font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Relay threads: who gets the message, as a small avatar inside the field. */
+.composer-field { position: relative; flex: 1; min-width: 0; display: flex; }
+.composer-field textarea { width: 100%; }
+.composer-field.with-route textarea { padding-left: 44px; }
+.route-pip { position: absolute; left: 7px; bottom: 8px; z-index: 1; display: flex; border-radius: 9px; }
+.route-pip .avatar { width: 28px; height: 28px; font-size: 11.5px; border-radius: 8px; }
+.route-pip:active { transform: scale(0.94); }
+.route-pop { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 20; min-width: 250px; max-width: calc(100vw - 32px); padding: 6px; border-radius: 16px; background: var(--elevated); border: 1px solid var(--border); box-shadow: var(--shadow-lg); animation: fade-in 0.12s; }
+.route-pop button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 11px; text-align: left; }
+.route-pop button:hover { background: var(--surface-2); }
+.route-pop button.active { background: var(--accent-soft); }
+.route-pop button.active > .item-text > span { color: var(--accent); }
+.route-pop .item-text { display: flex; flex-direction: column; min-width: 0; font-size: 15px; font-weight: 600; }
+.route-pop .item-text small { font-size: 12.5px; font-weight: 400; color: var(--text-3); }
 /* A new session's agent picker: eagent, or an agent eagent starts and relays to. */
 .agent-picker { display: flex; flex-wrap: wrap; gap: 6px; max-width: 760px; margin: 0 auto 8px; }
 .agent-chip { min-height: 34px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2); font-size: 14px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -687,7 +695,7 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .running-row > svg { width: 18px; height: 18px; flex: none; color: var(--text-3); }
 @media (prefers-reduced-motion: reduce) { .relay-badge .relay-dot { animation: none; } }
 
-/* Relay threads: receipts, the agent's own reports and screens, quick replies. */
+/* Relay threads: receipts, the agent's own reports and screens. */
 .relay-bell { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 30px; height: 28px; border-radius: 999px; color: var(--text-2); border: 1px solid var(--border); background: var(--surface); }
 .relay-bell svg { width: 15px; height: 15px; }
 .relay-bell:hover { color: var(--accent); border-color: var(--accent); }
@@ -724,12 +732,6 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .screen-head .message-action:hover, .screen-head .message-action:focus-visible { background: rgba(255,255,255,0.12); color: #fff; }
 .screen-text { margin: 0; padding: 10px 12px 12px; font-family: var(--mono); font-size: 11px; line-height: 1.35; white-space: pre; overflow-x: auto; tab-size: 8; -webkit-overflow-scrolling: touch; }
 .screen-text:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.quick-row { display: flex; gap: 6px; max-width: 760px; margin: 0 auto 8px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
-.quick-row::-webkit-scrollbar { display: none; }
-.quick-chip { flex: none; min-height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2); font-size: 13.5px; font-weight: 600; white-space: nowrap; }
-.quick-chip:hover { border-color: var(--accent); color: var(--accent); }
-.quick-chip:active { transform: scale(0.97); }
-.quick-chip.stop { color: var(--red); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
 .recent-picker { display: flex; align-items: center; gap: 6px; max-width: 760px; margin: 0 auto 8px; overflow-x: auto; scrollbar-width: none; }
 .recent-picker::-webkit-scrollbar { display: none; }
 .recent-icon { flex: none; width: 16px; height: 16px; color: var(--text-3); }
