@@ -140,13 +140,13 @@ func TestArtifactPublicationAndPortableDownload(t *testing.T) {
 	}
 	// Error responses on the preview route must stay framable too, so the
 	// app shows the real status instead of an XFO denial.
-	status, h, _ = artifactRequest(t, b, "GET", base+"/revisions/00000000-0000-0000-0000-000000000000/preview?surface=settings", nil)
-	if h.Get("X-Frame-Options") != "SAMEORIGIN" {
-		t.Fatalf("preview error X-Frame-Options = %q (status %d), want SAMEORIGIN", h.Get("X-Frame-Options"), status)
+	_, he, _ := artifactRequest(t, b, "GET", base+"/revisions/00000000-0000-0000-0000-000000000000/preview?surface=settings", nil)
+	if got := he.Get("X-Frame-Options"); got != "SAMEORIGIN" {
+		t.Fatalf("preview error X-Frame-Options = %q, want SAMEORIGIN", got)
 	}
 	// Non-preview routes keep DENY.
-	_, h, _ = artifactRequest(t, b, "GET", "/api/v1/health", nil)
-	if got := h.Get("X-Frame-Options"); got != "DENY" {
+	_, hh, _ := artifactRequest(t, b, "GET", "/api/v1/health", nil)
+	if got := hh.Get("X-Frame-Options"); got != "DENY" {
 		t.Fatalf("non-preview X-Frame-Options = %q, want DENY", got)
 	}
 	csp := h.Get("Content-Security-Policy")
