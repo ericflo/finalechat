@@ -462,6 +462,9 @@ func (s *Server) handleArtifactFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleArtifactPreview(w http.ResponseWriter, r *http.Request) {
+	// Set before any error path so a failed preview is still framable by the
+	// app (the browser then shows the real status instead of an XFO denial).
+	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 	a, rev, err := s.revisionFor(r)
 	if err != nil {
 		writeError(w, err)
@@ -484,7 +487,6 @@ func (s *Server) handleArtifactPreview(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "private, no-store")
-	h.Set("X-Frame-Options", "SAMEORIGIN")
 	h.Set("Referrer-Policy", "no-referrer")
 	// sandbox in the response protects direct navigations too. The parent
 	// also uses sandbox=allow-scripts; the uploaded page never gets our origin.

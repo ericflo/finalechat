@@ -23,7 +23,6 @@ export function ThreadSettingsPanel({ thread, onClose }: { thread: string; onClo
   return <Sheet className="thread-settings-sheet" label="Agent settings" onClose={() => dirty ? setClosing(true) : onClose()}>
     <header className="ts-header"><div><span className="ts-eyebrow">IN THIS CONVERSATION</span><h2>Agent settings</h2></div><button className="icon-btn" aria-label="Close settings" onClick={() => dirty ? setClosing(true) : onClose()}><IconClose /></button></header>
     <ThreadSummaryBlock id={thread} />
-    <ThreadRoutesLine id={thread} />
     {closing && <div className="ts-discard">You have unsaved changes.<button className="btn small" onClick={() => setClosing(false)}>Keep editing</button><button className="btn small" onClick={onClose}>Discard changes</button></div>}
     {error && <p className="ts-message" role="alert">{error}</p>}
     {links === null && !error && <p className="ts-message">Loading your agent’s settings…</p>}
@@ -217,44 +216,7 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
   </>;
 }
 
-const asRecord = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
-const shortModel = (m: string) => m.split("/").pop() ?? m;
-const shortHost = (h: unknown) => String(h ?? "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 
-/** One compact line: the routes this conversation is actually running, from
- * the thread's meta (eagent publishes models/hosts/efforts there and
- * refreshes them when a route changes). Full detail in the hover text. This
- * is the thread settings' subject; the editor below it is the session-scoped
- * resource when one is published, else the project defaults. */
-function ThreadRoutesLine({ id }: { id: string }) {
-  const thread = useStore((s) => s.threads[id]);
-  if (!thread) return null;
-  const models = asRecord(thread.meta.models);
-  const efforts = asRecord(thread.meta.efforts);
-  const hosts = asRecord(thread.meta.hosts);
-  const order = ["orchestrator", "task", "narrator"];
-  const actors = [...order, ...Object.keys(models)].filter((a, i, arr) => a in models && arr.indexOf(a) === i);
-  const parts = actors.map((a) => {
-    const m = String(models[a] ?? "");
-    if (!m) return null;
-    const e = efforts[a] ? ` @ ${String(efforts[a])}` : "";
-    return `${a === "orchestrator" ? "orch" : a} ${shortModel(m)}${e}`;
-  }).filter(Boolean) as string[];
-  if (!parts.length) return null;
-  const cfg = thread.meta.config;
-  const title = actors.map((a) => {
-    const m = String(models[a] ?? "");
-    const e = efforts[a] ? ` @ ${String(efforts[a])}` : "";
-    const h = shortHost(hosts[a]);
-    return `${a}: ${m}${e}${h ? ` · ${h}` : ""}`;
-  }).join("\n") + (typeof cfg === "string" && cfg ? `\nbase: ${cfg}` : "");
-  return (
-    <div className="ts-routes" title={title}>
-      <span className="ts-routes-title">This session{typeof cfg === "string" && cfg ? ` · base ${cfg}` : ""}</span>
-      <span className="ts-routes-line">{parts.join("  ·  ")}</span>
-    </div>
-  );
-}
 
 function FocusedSettings({ view, proposal, onProposal }: { view: ResourceView; proposal: SettingsProposal | null; onProposal: (p: SettingsProposal | null) => void }) {
   const [tab, setTab] = useState("Models");
