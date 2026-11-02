@@ -203,6 +203,7 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
   const action = view?.resource.descriptor.actions?.find(a => a.operation === proposal?.operation);
   return <>
     <div className="ts-context"><span className={`ts-dot ${unavailable ? "offline" : ""}`} /><strong>{link.provider === "eagent" ? "eagent" : link.provider === "claude-code" ? "Claude Code" : link.provider === "codex" ? "Codex" : link.provider}</strong><span>{link.scope === "session" ? "This session" : link.scope === "user" ? "User defaults" : "Project defaults"}</span><span className="ts-connection">{unavailable ? "Offline" : "Connected"}</span></div>
+    {ready && view && <RoutesBlock view={view} />}
     <div className="ts-body">
       {!ready && <p className="ts-message">Opening settings…</p>}
       {ready && view && (site && !standard ? <iframe ref={frame} title="Integration settings" className="ts-frame" sandbox="allow-scripts" referrerPolicy="no-referrer" src={`/api/v1/artifacts/${link.artifact_id}/revisions/${site.revision.id}/preview?surface=settings`} onLoad={mount} /> : <FocusedSettings view={view} proposal={proposal} onProposal={stage} />)}
@@ -214,6 +215,39 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
       {site && <button className="ts-fallback" disabled={!!proposal || busy} onClick={() => { bridge.current?.close(); setStandard(v => !v); }}>{standard ? "Use agent’s editor" : "Use simple editor"}</button>}
     </footer>
   </>;
+}
+
+/** Read-only routes actually in force: session-scoped resources carry
+ * snapshot.details.routes (replayed from the session log, fallbacks
+ * included); project resources carry details.effective_routes (file
+ * overrides included). Shown above the editor so a session started with
+ * custom per-actor picks doesn't display as the preset's lineup. */
+function RoutesBlock({ view }: { view: ResourceView }) {
+  const details = view.resource.snapshot.details ?? {};
+  const raw = details.routes ?? details.effective_routes;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const routes = raw as Record<string, Record<string, unknown>>;
+  const order = ["orchestrator", "task", "narrator"];
+  const actors = [...order, ...Object.keys(routes)].filter((a, i, arr) => a in routes && arr.indexOf(a) === i);
+  const rows = actors.map((a) => ({ actor: a, r: routes[a] ?? {} })).filter(({ r }) => !!r.model);
+  if (!rows.length) return null;
+  const short = (m: string) => m.split("/").pop() ?? m;
+  return (
+    <div className="ts-routes">
+      <div className="ts-routes-title">{view.resource.scope === "session" ? "This session runs" : "In force for new sessions"}</div>
+      {rows.map(({ actor, r }) => {
+        const effort = String(r.effort ?? r.reasoning_effort ?? "");
+        const host = String(r.host ?? r.base_url ?? "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+        return (
+          <div key={actor} className="ts-route-row">
+            <span className="ts-route-actor">{actor}</span>
+            <span className="ts-route-model">{short(String(r.model))}{effort ? ` @ ${effort}` : ""}</span>
+            {host ? <span className="ts-route-host">{host}</span> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function FocusedSettings({ view, proposal, onProposal }: { view: ResourceView; proposal: SettingsProposal | null; onProposal: (p: SettingsProposal | null) => void }) {

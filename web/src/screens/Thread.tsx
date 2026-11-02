@@ -518,19 +518,41 @@ const metaChips: { key: string; alt?: string; icon: (p: React.SVGProps<SVGSVGEle
   { key: "tokens", icon: IconCpu, format: (v) => (typeof v === "number" ? `${v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1000 ? (v / 1000).toFixed(0) + "k" : v} tok` : String(v)) },
 ];
 
+const asRecord = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+
 /** The reserved meta chips, after `lead` (the relay badge) when there is one. */
 function MetaStrip({ thread, lead }: { thread: Thread; lead?: React.ReactNode }) {
   const chips = metaChips
-    .map((c) => {
+    .flatMap((c) => {
+      // eagent publishes the full per-actor route map as meta.models (with
+      // meta.hosts / meta.efforts); when present, show one chip per actor so
+      // custom per-session picks are visible, not just the orchestrator id.
+      if (c.key === "model") {
+        const models = asRecord(thread.meta.models);
+        const efforts = asRecord(thread.meta.efforts);
+        const hosts = asRecord(thread.meta.hosts);
+        const order = ["orchestrator", "task", "narrator"];
+        const actors = [...order.filter((a) => a in models), ...Object.keys(models).filter((a) => !order.includes(a))];
+        const expanded = actors.map((actor) => {
+          const m = String(models[actor] ?? "");
+          if (!m) return null;
+          const short = m.split("/").pop() ?? m;
+          const effort = efforts[actor] ? ` @ ${String(efforts[actor])}` : "";
+          const host = hosts[actor] ? ` · ${String(hosts[actor]).replace(/^https?:\/\//, "").replace(/\/.*$/, "")}` : "";
+          const label = actor === "orchestrator" ? "orch" : actor === "task" ? "task" : actor === "narrator" ? "narr" : actor;
+          return { key: "model:" + actor, icon: IconCpu, text: `${label} ${short}`, hint: `${actor}: ${m}${effort}${host}` };
+        }).filter((x): x is NonNullable<typeof x> => !!x);
+        if (expanded.length) return expanded;
+      }
       const raw = thread.meta[c.key] ?? (c.alt ? thread.meta[c.alt] : undefined);
-      if (raw === undefined || raw === null || raw === "") return null;
+      if (raw === undefined || raw === null || raw === "") return [];
       const text = c.format ? c.format(raw) : String(raw);
       let hint = `${c.key}: ${raw}`;
       // The folder chip is where the agent works now; when that has moved
       // away from the project it was started in, the hover text says so.
       const project = thread.meta.project;
       if (c.key === "cwd" && typeof project === "string" && project !== "" && project !== raw) hint += ` · project: ${project}`;
-      return { key: c.key, icon: c.icon, text, hint };
+      return [{ key: c.key, icon: c.icon, text, hint }];
     })
     .filter((c): c is NonNullable<typeof c> => !!c);
   if (chips.length === 0 && !lead) return null;

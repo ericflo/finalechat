@@ -5,6 +5,12 @@
 .ts-eyebrow{font-size:10px;font-weight:700;letter-spacing:1.4px;color:var(--text-3)}
 .ts-header h2{font-size:25px;letter-spacing:-.7px;margin:4px 0 0;line-height:1.25}
 .ts-context{padding:0 26px 18px;display:flex;align-items:center;gap:8px;font-size:12px;border-bottom:1px solid var(--border);color:var(--text-3);flex:none}
+.ts-routes{flex:none;padding:12px 26px 14px;border-bottom:1px solid var(--border);background:var(--surface)}
+.ts-routes-title{font-size:10.5px;font-weight:650;text-transform:uppercase;letter-spacing:.7px;color:var(--text-3);margin-bottom:8px}
+.ts-route-row{display:flex;align-items:baseline;gap:8px;font-size:12.5px;padding:2px 0}
+.ts-route-actor{flex:none;width:88px;color:var(--text-3);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.ts-route-model{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ts-route-host{margin-left:auto;color:var(--text-3);font-size:11px;flex:none}
 .ts-context strong{color:var(--text);font-weight:650}.ts-connection{margin-left:auto}.ts-dot{width:6px;height:6px;border-radius:50%;background:#328c63}.ts-dot.offline{background:#9a9a9a}
 .ts-body{flex:1;min-height:0;display:flex;overflow:auto}.ts-frame{width:100%;height:100%;border:0;min-height:300px;background:var(--bg)}
 .ts-footer{flex:none;padding:16px 26px max(16px,env(safe-area-inset-bottom));border-top:1px solid var(--border);background:var(--surface)}
