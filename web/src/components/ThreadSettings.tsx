@@ -23,7 +23,7 @@ export function ThreadSettingsPanel({ thread, onClose }: { thread: string; onClo
   return <Sheet className="thread-settings-sheet" label="Agent settings" onClose={() => dirty ? setClosing(true) : onClose()}>
     <header className="ts-header"><div><span className="ts-eyebrow">IN THIS CONVERSATION</span><h2>Agent settings</h2></div><button className="icon-btn" aria-label="Close settings" onClick={() => dirty ? setClosing(true) : onClose()}><IconClose /></button></header>
     <ThreadSummaryBlock id={thread} />
-    <ThreadRoutesBlock id={thread} />
+    <ThreadRoutesLine id={thread} />
     {closing && <div className="ts-discard">You have unsaved changes.<button className="btn small" onClick={() => setClosing(false)}>Keep editing</button><button className="btn small" onClick={onClose}>Discard changes</button></div>}
     {error && <p className="ts-message" role="alert">{error}</p>}
     {links === null && !error && <p className="ts-message">Loading your agent’s settings…</p>}
@@ -204,7 +204,6 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
   const action = view?.resource.descriptor.actions?.find(a => a.operation === proposal?.operation);
   return <>
     <div className="ts-context"><span className={`ts-dot ${unavailable ? "offline" : ""}`} /><strong>{link.provider === "eagent" ? "eagent" : link.provider === "claude-code" ? "Claude Code" : link.provider === "codex" ? "Codex" : link.provider}</strong><span>{link.scope === "session" ? "This session" : link.scope === "user" ? "User defaults" : "Project defaults"}</span><span className="ts-connection">{unavailable ? "Offline" : "Connected"}</span></div>
-    {ready && view && view.resource.scope !== "session" && <RoutesBlock view={view} />}
     <div className="ts-body">
       {!ready && <p className="ts-message">Opening settings…</p>}
       {ready && view && (site && !standard ? <iframe ref={frame} title="Integration settings" className="ts-frame" sandbox="allow-scripts" referrerPolicy="no-referrer" src={`/api/v1/artifacts/${link.artifact_id}/revisions/${site.revision.id}/preview?surface=settings`} onLoad={mount} /> : <FocusedSettings view={view} proposal={proposal} onProposal={stage} />)}
@@ -218,61 +217,41 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
   </>;
 }
 
-/** Read-only routes of the selected resource. Only project-scoped resources
- * use this: the thread's own routes come from ThreadRoutesBlock (meta), and a
- * session-scoped resource would duplicate it. Project resources carry
- * details.effective_routes (file overrides included). */
-function RoutesBlock({ view }: { view: ResourceView }) {
-  const details = view.resource.snapshot.details ?? {};
-  const raw = details.effective_routes;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  return <RoutesList title="Project defaults · apply to new or resumed sessions" raw={raw as Record<string, unknown>} />;
-}
+const asRecord = (v: unknown): Record<string, unknown> => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+const shortModel = (m: string) => m.split("/").pop() ?? m;
+const shortHost = (h: unknown) => String(h ?? "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 
-/** The routes this conversation is actually running, from the thread's meta
- * (eagent publishes models/hosts/efforts there and refreshes them when a
- * fallback switches routes). This is what "thread settings" shows first. */
-function ThreadRoutesBlock({ id }: { id: string }) {
+/** One compact line: the routes this conversation is actually running, from
+ * the thread's meta (eagent publishes models/hosts/efforts there and
+ * refreshes them when a route changes). Full detail in the hover text. This
+ * is the thread settings' subject; the editor below it is the session-scoped
+ * resource when one is published, else the project defaults. */
+function ThreadRoutesLine({ id }: { id: string }) {
   const thread = useStore((s) => s.threads[id]);
   if (!thread) return null;
-  const models = thread.meta.models;
-  if (!models || typeof models !== "object" || Array.isArray(models)) return null;
-  const efforts = thread.meta.efforts;
-  const hosts = thread.meta.hosts;
-  const routes: Record<string, Record<string, unknown>> = {};
-  for (const [actor, model] of Object.entries(models as Record<string, unknown>)) {
-    if (!model) continue;
-    const rec = (efforts && typeof efforts === "object" && !Array.isArray(efforts)) ? (efforts as Record<string, unknown>)[actor] : undefined;
-    const host = (hosts && typeof hosts === "object" && !Array.isArray(hosts)) ? (hosts as Record<string, unknown>)[actor] : undefined;
-    routes[actor] = { model, effort: rec ?? "", host: host ?? "" };
-  }
-  if (!Object.keys(routes).length) return null;
-  const cfg = thread.meta.config;
-  const title = typeof cfg === "string" && cfg ? `This session runs · base ${cfg}` : "This session runs";
-  return <RoutesList title={title} raw={routes} />;
-}
-
-function RoutesList({ title, raw }: { title: string; raw: Record<string, unknown> }) {
-  const routes = raw as Record<string, Record<string, unknown>>;
+  const models = asRecord(thread.meta.models);
+  const efforts = asRecord(thread.meta.efforts);
+  const hosts = asRecord(thread.meta.hosts);
   const order = ["orchestrator", "task", "narrator"];
-  const actors = [...order, ...Object.keys(routes)].filter((a, i, arr) => a in routes && arr.indexOf(a) === i);
-  const rows = actors.map((a) => ({ actor: a, r: routes[a] ?? {} })).filter(({ r }) => !!r.model);
-  if (!rows.length) return null;
-  const short = (m: string) => m.split("/").pop() ?? m;
+  const actors = [...order, ...Object.keys(models)].filter((a, i, arr) => a in models && arr.indexOf(a) === i);
+  const parts = actors.map((a) => {
+    const m = String(models[a] ?? "");
+    if (!m) return null;
+    const e = efforts[a] ? ` @ ${String(efforts[a])}` : "";
+    return `${a === "orchestrator" ? "orch" : a} ${shortModel(m)}${e}`;
+  }).filter(Boolean) as string[];
+  if (!parts.length) return null;
+  const cfg = thread.meta.config;
+  const title = actors.map((a) => {
+    const m = String(models[a] ?? "");
+    const e = efforts[a] ? ` @ ${String(efforts[a])}` : "";
+    const h = shortHost(hosts[a]);
+    return `${a}: ${m}${e}${h ? ` · ${h}` : ""}`;
+  }).join("\n") + (typeof cfg === "string" && cfg ? `\nbase: ${cfg}` : "");
   return (
-    <div className="ts-routes">
-      <div className="ts-routes-title">{title}</div>
-      {rows.map(({ actor, r }) => {
-        const effort = String(r.effort ?? r.reasoning_effort ?? "");
-        const host = String(r.host ?? r.base_url ?? "").replace(/^https?:\/\//, "").replace(/\/.*$/, "");
-        return (
-          <div key={actor} className="ts-route-row">
-            <span className="ts-route-actor">{actor}</span>
-            <span className="ts-route-model">{short(String(r.model))}{effort ? ` @ ${effort}` : ""}</span>
-            {host ? <span className="ts-route-host">{host}</span> : null}
-          </div>
-        );
-      })}
+    <div className="ts-routes" title={title}>
+      <span className="ts-routes-title">This session{typeof cfg === "string" && cfg ? ` · base ${cfg}` : ""}</span>
+      <span className="ts-routes-line">{parts.join("  ·  ")}</span>
     </div>
   );
 }
