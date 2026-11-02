@@ -46,3 +46,15 @@ func TestSessionStartIsAnActionWithAPrompt(t *testing.T) {
 		t.Fatal("session.start accepted without the operation granted")
 	}
 }
+
+func TestGrantValidateAcceptsRouteClass(t *testing.T) {
+	g := Grant{Key: "k-session-1", Label: "l", Scope: "session", Operations: []string{"settings.apply", "settings.refresh"}, Classes: []string{"preference", "route"}}
+	if err := g.Validate(); err != nil {
+		t.Fatalf("route class rejected: %v", err)
+	}
+	bad := g
+	bad.Classes = []string{"nonsense"}
+	if err := bad.Validate(); err == nil {
+		t.Fatal("unknown class accepted")
+	}
+}

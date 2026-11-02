@@ -40,7 +40,7 @@ func (g Grant) Validate() error {
 		}
 	}
 	for _, c := range g.Classes {
-		if !slices.Contains([]string{"preference", "credential_reference", "permissions", "executable", "cost"}, c) {
+		if !slices.Contains([]string{"preference", "credential_reference", "permissions", "executable", "cost", "route"}, c) {
 			return fmt.Errorf("unsupported field class %q", c)
 		}
 	}
