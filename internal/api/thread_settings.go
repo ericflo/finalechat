@@ -48,6 +48,38 @@ func (s *Server) handleConnectOwnAgent(w http.ResponseWriter, r *http.Request) {
 			}
 			seen[g.Key] = true
 		}
+		// A session-scoped grant must derive from a grant the connector
+		// already holds (key = held key + "-session-" + session id); a
+		// connector cannot conjure access to arbitrary sessions.
+		p := principalFrom(r.Context())
+		existing, err := s.store.GetConnector(r.Context(), p.user.ID, id)
+		if err != nil {
+			writeError(w, errForbidden)
+			return
+		}
+		held := map[string]bool{}
+		for _, g := range existing.RequestedGrants {
+			held[g.Key] = true
+		}
+		for _, g := range existing.Grants {
+			held[g.Key] = true
+		}
+		for _, g := range in.Grants {
+			if g.Scope != "session" {
+				continue
+			}
+			derived := false
+			for k := range held {
+				if rest, ok := strings.CutPrefix(g.Key, k+"-session-"); ok && rest != "" && len(rest) <= 64 {
+					derived = true
+					break
+				}
+			}
+			if !derived {
+				writeError(w, errForbidden)
+				return
+			}
+		}
 	}
 	p := principalFrom(r.Context())
 	c, err := s.store.ConnectOwnAgent(r.Context(), p.user.ID, id, auth.HashToken(in.Secret), in.Grants)
