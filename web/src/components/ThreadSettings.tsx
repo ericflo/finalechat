@@ -281,7 +281,7 @@ function FocusedSettings({ view, proposal, onProposal }: { view: ResourceView; p
   const [tab, setTab] = useState("Models");
   const [query, setQuery] = useState("");
   const { resource: r } = view;
-  const group = (key: string) => /model|reasoning|effort/i.test(key) ? "Models" : /permission|sandbox|approval|budget|turn|concurr|narrator|verbosity/i.test(key) ? "Behavior" : "Advanced";
+  const group = (key: string) => /model|reasoning|effort|route/i.test(key) ? "Models" : /permission|sandbox|approval|budget|turn|concurr|narrator|verbosity/i.test(key) ? "Behavior" : "Advanced";
   const fields = r.descriptor.fields.filter(f => group(f.key) === tab && `${f.key} ${f.label} ${f.description}`.toLowerCase().includes(query.toLowerCase()));
   return <div className="ts-focused"><nav className="ts-tabs" aria-label="Settings categories">{["Models", "Behavior", "Advanced"].map(name => <button key={name} aria-pressed={tab === name} onClick={() => { setTab(name); setQuery(""); }}>{name}</button>)}</nav><div className="ts-fields"><h3>{tab === "Models" ? "Choose how your agent thinks" : tab === "Behavior" ? "Make it work your way" : "Fine-tune your setup"}</h3>{tab === "Advanced" && <input aria-label="Search advanced settings" placeholder="Find a setting…" value={query} onChange={e => setQuery(e.target.value)} />}{!fields.length && <p>No {tab.toLowerCase()} settings are published for this session.</p>}{fields.map(f => <SettingInput key={f.key} field={f} saved={r.snapshot.saved[f.key] ?? r.snapshot.effective[f.key]} effective={undefined} edit={proposal?.edits?.find(e => e.key === f.key)} onEdit={change => {
     const edits = (proposal?.edits || []).filter(e => e.key !== change.key); edits.push(change);
