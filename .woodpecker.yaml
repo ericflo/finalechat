@@ -4,7 +4,7 @@
 
 steps:
   - name: test-server
-    image: docker.io/library/golang:1.26-bookworm@sha256:9fdc884aacc3bec89b20ffc69f4bb369c78210e3e4f600387b5128b12c199f81
+    image: docker.io/library/golang:1.26.10-bookworm@sha256:e0c50aecba3a2edfab18924d493cd9210b73c4746fc5fd5b3bb46e0ec7f0465a
     commands:
       - export HOME=/tmp/finalechat-home GOCACHE=/tmp/finalechat-go-build GOMODCACHE=/tmp/finalechat-go-mod GOFLAGS=-buildvcs=false
       - mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE"
@@ -35,7 +35,7 @@ steps:
           capabilities: {drop: [ALL]}
 
   - name: test-web
-    image: docker.io/library/node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
+    image: docker.io/library/node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
     commands:
       - export HOME=/tmp/finalechat-home npm_config_cache=/tmp/finalechat-npm
       - mkdir -p "$HOME"
@@ -59,7 +59,7 @@ steps:
           capabilities: {drop: [ALL]}
 
   - name: test-cli
-    image: docker.io/library/python:3.13-slim@sha256:ffb752e139c0a19692a43af8d8523b274222dd68eebad5d583b45c2201c6e30a
+    image: docker.io/library/python:3.13-slim@sha256:09a17cad02668ae61ece136b4fd36ac3849e14f670ebedb637ea3e15580525bc
     commands:
       - python3 -m py_compile cli/finalechat
       - python3 cli/finalechat --help >/dev/null
@@ -82,7 +82,7 @@ steps:
           capabilities: {drop: [ALL]}
 
   - name: publish-immutable-image
-    image: docker.io/moby/buildkit:v0.30.0-rootless@sha256:d76eb1caecac5733ef7553c1e90a1b21f1bb218cd1142d3553de0747b4a14ba9
+    image: docker.io/moby/buildkit:v0.34.2-rootless@sha256:c8252268760e1baba80780d63d738ef9f260fb7c7c0973c78494cb9ddd99eda1
     depends_on: [test-server, test-web, test-cli]
     when:
       - evaluate: 'CI_PIPELINE_EVENT == "push" && CI_COMMIT_BRANCH == CI_REPO_DEFAULT_BRANCH'

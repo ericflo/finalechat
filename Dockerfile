@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
 
 # ---- Web app ---------------------------------------------------------------
-FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS web
+FROM node:22-bookworm-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,id=finalechat-npm,target=/root/.npm,sharing=locked \
@@ -16,8 +16,8 @@ RUN npm run build
 # The Go suite exercises real SQL, LISTEN/NOTIFY fan-out and long-polls, so it
 # runs against the same PostgreSQL major as production. The Go toolchain is
 # copied from the official image into the postgres image; both are Alpine.
-FROM golang:1.26-alpine@sha256:ce864e7223ac17b1775e6fd0b4c0db580c2eb50e7953a427916379e4b92a1628 AS toolchain
-FROM postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685 AS test
+FROM golang:1.26.10-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS toolchain
+FROM postgres:16.15-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab AS test
 COPY --from=toolchain /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH GOPATH=/go GOFLAGS=-mod=readonly CGO_ENABLED=0
 WORKDIR /src
@@ -43,7 +43,7 @@ RUN --mount=type=cache,id=finalechat-go-mod,target=/go/pkg/mod,sharing=locked \
     && date -u +%Y-%m-%dT%H:%M:%SZ >/tmp/tests-passed
 
 # ---- Server ----------------------------------------------------------------
-FROM golang:1.26-bookworm@sha256:9fdc884aacc3bec89b20ffc69f4bb369c78210e3e4f600387b5128b12c199f81 AS build
+FROM golang:1.26.10-bookworm@sha256:e0c50aecba3a2edfab18924d493cd9210b73c4746fc5fd5b3bb46e0ec7f0465a AS build
 WORKDIR /src
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=-mod=readonly
 COPY go.mod go.sum ./
