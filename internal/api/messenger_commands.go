@@ -508,9 +508,16 @@ var homePrefixRe = regexp.MustCompile(`^/(?:home|Users)/[^/]+`)
 func shortDir(p string) string { return homePrefixRe.ReplaceAllString(p, "~") }
 
 func (c *mchat) newSession(prompt string) error {
-	starters, err := c.s.messengerStarters(c.ctx, c.user.ID)
+	all, err := c.s.messengerStarters(c.ctx, c.user.ID)
 	if err != nil {
 		return err
+	}
+	// Only projects whose agent is connected right now are offered.
+	var starters []messengerStarter
+	for _, st := range all {
+		if st.connector.Online() {
+			starters = append(starters, st)
+		}
 	}
 	if len(starters) == 0 {
 		c.say("No eagent is connected. On the machine, run `eagent connector run` (or `eagent serve`) in the project, then try /new again.", nil)
@@ -524,11 +531,7 @@ func (c *mchat) newSession(prompt string) error {
 	var quick []messenger.QuickReply
 	ids := make([]string, 0, len(starters))
 	for i, st := range starters {
-		online := ""
-		if !st.connector.Online() {
-			online = " (offline)"
-		}
-		fmt.Fprintf(&b, "\n%d. %s%s", i+1, st.resource.Label, online)
+		fmt.Fprintf(&b, "\n%d. %s", i+1, st.resource.Label)
 		ids = append(ids, st.resource.ID.String())
 		if len(quick) < messenger.MaxQuickReplies {
 			quick = append(quick, messenger.QuickReply{Title: strconv.Itoa(i+1) + " " + st.resource.Label, Payload: "np:" + st.resource.ID.String()})

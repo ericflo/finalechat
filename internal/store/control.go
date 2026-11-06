@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ericflo/finalechat/internal/artifact"
@@ -173,6 +174,11 @@ type SettingsResource struct {
 
 const resourceColumns = "id,user_id,connector_id,resource_key,label,scope,generation,descriptor,snapshot,updated_at"
 
+// qualified prefixes each column in a comma-separated list with a table alias.
+func qualified(alias, columns string) string {
+	return alias + "." + strings.ReplaceAll(columns, ",", ","+alias+".")
+}
+
 func scanResource(row pgx.Row) (*SettingsResource, error) {
 	var r SettingsResource
 	var d, s []byte
@@ -190,7 +196,7 @@ func (s *Store) GetSettingsResource(ctx context.Context, userID, id uuid.UUID) (
 	return scanResource(s.pool.QueryRow(ctx, "SELECT "+resourceColumns+" FROM settings_resources WHERE user_id=$1 AND id=$2", userID, id))
 }
 func (s *Store) ListSettingsResources(ctx context.Context, userID, connectorID uuid.UUID) ([]*SettingsResource, error) {
-	rows, err := s.pool.Query(ctx, "SELECT "+resourceColumns+" FROM settings_resources WHERE user_id=$1 AND connector_id=$2 ORDER BY resource_key", userID, connectorID)
+	rows, err := s.pool.Query(ctx, "SELECT "+qualified("r", resourceColumns)+" FROM settings_resources r JOIN connectors c ON c.id=r.connector_id AND c.user_id=r.user_id WHERE r.user_id=$1 AND r.connector_id=$2 AND "+grantHeld+" ORDER BY r.scope<>'project',r.resource_key", userID, connectorID)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +229,7 @@ func (s *Store) ThreadSessionSettings(ctx context.Context, thread *Thread) ([]Se
 	rows, err := s.pool.Query(ctx, `SELECT r.id,r.label,r.generation,
 		COALESCE(c.last_seen_at>now()-interval '90 seconds',false) AND r.snapshot->>'runtime_known'='true'
 		FROM settings_resources r JOIN connectors c ON c.id=r.connector_id AND c.user_id=r.user_id
-		WHERE r.user_id=$1 AND r.scope='session' AND c.state='active'
+		WHERE r.user_id=$1 AND r.scope='session' AND c.state='active' AND `+grantHeld+`
 		AND r.snapshot->'details'->>'thread_external_id'=$2
 		ORDER BY r.updated_at DESC,r.id LIMIT 100`, thread.UserID, *thread.ExternalID)
 	if err != nil {

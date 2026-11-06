@@ -70,3 +70,39 @@ func TestOwnAgentConnectAndThreadDiscovery(t *testing.T) {
 	bad.Operations = []string{"session.launch"}
 	f.agent.must(422, "POST", "/api/v1/connectors/"+autoID+"/connect", map[string]any{"secret": str(created, "secret"), "requested_grants": []control.Grant{bad}})
 }
+
+// A conversation's settings list its running session's resource first, then
+// the project defaults; once the connector drops the session's grant (the
+// session ended), that resource disappears from the conversation and from
+// the connector's resource list.
+func TestThreadSettingsSessionFirstAndEndedSessionsDisappear(t *testing.T) {
+	f := newControlFixture(t)
+	external := "eagent:" + uuid.NewString()
+	f.agent.must(201, "POST", "/api/v1/threads", map[string]any{"external_id": external, "title": "Session"})
+	session := control.Grant{Key: f.grant.Key + "-session-1", Label: "Session 1", Scope: "session", Operations: []string{"settings.apply", "settings.refresh"}, Classes: []string{"preference", "route"}}
+	f.agent.must(200, "POST", "/api/v1/connectors/"+f.id+"/connect", map[string]any{"secret": f.connector.token, "requested_grants": []control.Grant{f.grant, session}})
+	f.snapshot.Details = map[string]any{"thread_external_ids": []string{external}}
+	f.connector.must(200, "PUT", "/api/v1/connectors/"+f.id+"/resources/"+f.grant.Key, map[string]any{"instance": f.instance, "descriptor": f.descriptor, "snapshot": f.snapshot})
+	min, max := float64(1), float64(16)
+	descriptor := control.Descriptor{Format: control.Format, SchemaVersion: "runtime/1", AdapterVersion: "1", Fields: []control.Field{{Key: "/task_concurrency", Label: "Task workers", Shape: control.Shape{Type: "integer", Minimum: &min, Maximum: &max}, Writable: true, Class: "preference", EffectiveWhen: "next_task"}}}
+	snapshot := control.Snapshot{Version: "r1", Context: "test", Saved: map[string]any{"/task_concurrency": 3}, Effective: map[string]any{"/task_concurrency": 3}, RuntimeKnown: true, Details: map[string]any{"thread_external_id": external}}
+	f.connector.must(200, "PUT", "/api/v1/connectors/"+f.id+"/resources/"+session.Key, map[string]any{"instance": f.instance, "generation": "g1", "descriptor": descriptor, "snapshot": snapshot})
+	out := f.browser.must(200, "GET", "/api/v1/threads/ext:"+external+"/settings", nil)
+	rows := out["resources"].([]any)
+	if len(rows) != 2 || rows[0].(map[string]any)["scope"] != "session" || rows[1].(map[string]any)["scope"] != "project" {
+		t.Fatalf("thread settings = %v", rows)
+	}
+	if rows[0].(map[string]any)["available"] != true {
+		t.Fatalf("running session not available: %v", rows[0])
+	}
+	f.agent.must(200, "POST", "/api/v1/connectors/"+f.id+"/connect", map[string]any{"secret": f.connector.token, "requested_grants": []control.Grant{f.grant}})
+	out = f.browser.must(200, "GET", "/api/v1/threads/ext:"+external+"/settings", nil)
+	rows = out["resources"].([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["scope"] != "project" {
+		t.Fatalf("ended session still listed: %v", rows)
+	}
+	detail := f.browser.must(200, "GET", "/api/v1/connectors/"+f.id, nil)
+	if got := len(detail["resources"].([]any)); got != 1 {
+		t.Fatalf("connector lists %d resources, want only the granted one", got)
+	}
+}

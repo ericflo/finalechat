@@ -62,7 +62,9 @@ export function Inbox({ filter }: { filter: string | null }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
-  const { starters } = useSessionStarters();
+  // Only agents connected right now: one that went quiet weeks ago is not
+  // something to start a session on.
+  const starters = useSessionStarters().starters.filter((s) => s.online);
   const searchTimer = useRef<number | undefined>(undefined);
   const lastIndex = useRef<number | null>(null);
   const selectAllRef = useRef<HTMLInputElement | null>(null);

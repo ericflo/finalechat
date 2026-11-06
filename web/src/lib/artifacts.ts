@@ -14,7 +14,6 @@ export interface SettingsSnapshot { version: string; context: string; saved: Rec
 export interface SettingsResource { id: string; connector_id: string; key: string; label: string; scope: string; generation: string; descriptor: SettingsDescriptor; snapshot: SettingsSnapshot; updated_at: string }
 export interface ResourceView { resource: SettingsResource; connector: Connector; online: boolean; website?: { artifact_id: string; revision_id: string } | null }
 export interface ThreadSettingsLink { id: string; label: string; scope: string; provider: string; available: boolean; artifact_id?: string; revision_id?: string }
-export interface SessionSettingsLink { id: string; label: string; generation: string; available: boolean }
 export interface SettingsBinding { artifact_id: string; resource_id: string; revision_id: string; generation: string }
 export interface SettingsSurfaceLease { id: string; resource_id: string; generation: string; expires_at: string }
 export interface SettingEdit { op: "set" | "unset"; key: string; value?: unknown }
@@ -34,7 +33,6 @@ export const artifactAPI = {
 };
 export const controlAPI = {
   threadSettings: (thread: string) => request<{ resources: ThreadSettingsLink[] }>("GET", `${b}/threads/${thread}/settings`),
-  forThread: (thread: string) => request<{ resources: SessionSettingsLink[] }>("GET", `${b}/threads/${thread}/settings-resources`),
   connectors: () => request<{ connectors: Connector[] }>("GET", `${b}/connectors`),
   connector: (id: string) => request<{ connector: Connector; online: boolean; resources: SettingsResource[] }>("GET", `${b}/connectors/${id}`),
   approve: (id: string, grants: Grant[]) => request<{ connector: Connector }>("POST", `${b}/connectors/${id}/approve`, { grants }),

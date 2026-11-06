@@ -1228,8 +1228,8 @@ remain authorized. Account deletion removes the related audit along with the acc
 | `GET /artifacts/{id}/revisions/{revision}/download` | Download the portable ZIP archive |
 | `GET /artifacts/{id}/revisions/{revision}/message` | Locate a chat message for an archived source anchor |
 | `POST /connectors` | Connect an owned installation and receive a scoped credential |
-| `POST /connectors/{connector}/connect` | Connect an existing owned installation |
-| `GET /threads/{thread}/settings` | List agent settings available in this conversation |
+| `POST /connectors/{connector}/connect` | Connect an existing owned installation; with `requested_grants`, replace its grants (account credential plus the local secret) |
+| `GET /threads/{thread}/settings` | List this conversation’s settings: its session’s own resource first, then project defaults; only resources whose grant the connector still holds |
 | `GET /connectors` | List paired and pending installations |
 | `GET /connectors/{connector}` | Connector pairing state and grants |
 | `POST /connectors/{connector}/approve` | Approve a subset of requested grants |
