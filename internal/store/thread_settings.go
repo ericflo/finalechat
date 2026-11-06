@@ -29,6 +29,10 @@ func (s *Store) ConnectOwnAgent(ctx context.Context, owner, id uuid.UUID, hash [
 		RETURNING `+connectorColumns, owner, id, hash, raw))
 }
 
+// grantHeld restricts a query over settings_resources r joined to its
+// connector c to resources whose key the connector is currently granted.
+const grantHeld = `c.grants @> jsonb_build_array(jsonb_build_object('key', r.resource_key))`
+
 type ThreadSettingsLink struct {
 	ID         uuid.UUID  `json:"id"`
 	Label      string     `json:"label"`
@@ -45,9 +49,13 @@ func (s *Store) ThreadSettings(ctx context.Context, thread *Thread) ([]ThreadSet
 	if thread.ExternalID != nil {
 		external = *thread.ExternalID
 	}
-	// A conversation's own settings website (its archived editor) links a
-	// resource to it; the resource's own website, published for the
-	// resource itself, is the editor to open when the conversation has none.
+	// A resource belongs to a conversation when the connector names the
+	// conversation in its snapshot (thread_external_id for one session,
+	// thread_external_ids for project defaults) or when one of the
+	// conversation's own artifacts is bound to it. Only resources the
+	// connector still holds a grant for are listed, so a session that ended
+	// (and whose grant its connector dropped) disappears. The session's own
+	// resource comes first. website is the resource's optional editor page.
 	rows, err := s.pool.Query(ctx, `SELECT r.id,r.label,r.scope,c.provider,
 		COALESCE(c.last_seen_at>now()-interval '90 seconds',false) AND
 		(r.scope<>'session' OR r.snapshot->>'runtime_known'='true'),
@@ -61,10 +69,10 @@ func (s *Store) ThreadSettings(ctx context.Context, thread *Thread) ([]ThreadSet
 		JOIN artifacts a ON a.id=b.artifact_id AND a.user_id=r.user_id
 		WHERE b.resource_id=r.id AND a.resource_id=r.id AND a.current_revision_id=b.revision_id
 		AND b.generation=r.generation ORDER BY b.updated_at DESC LIMIT 1) site ON true
-		WHERE r.user_id=$1 AND c.state='active' AND (own.artifact_id IS NOT NULL OR
+		WHERE r.user_id=$1 AND c.state='active' AND `+grantHeld+` AND (own.artifact_id IS NOT NULL OR
 		($3<>'' AND (r.snapshot->'details'->>'thread_external_id'=$3 OR
 		(r.snapshot->'details'->'thread_external_ids') ? $3)))
-		ORDER BY CASE WHEN r.scope='session' THEN 1 ELSE 0 END,r.updated_at DESC,r.id LIMIT 100`, thread.UserID, thread.ID, external)
+		ORDER BY CASE WHEN r.scope='session' THEN 0 ELSE 1 END,r.updated_at DESC,r.id LIMIT 100`, thread.UserID, thread.ID, external)
 	if err != nil {
 		return nil, err
 	}
