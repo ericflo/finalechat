@@ -19,9 +19,10 @@ const shots=process.env.FINALECHAT_SCREENSHOTS || '/tmp/finalechat-thread-settin
 await mkdir(shots,{recursive:true});
 
 const connector={id:'connector',name:'eagent · llmbox · Development',provider:'eagent',state:'active',grants:[],requested_grants:[]};
-const routeField=(actor,part,schema)=>({key:`/routes/${actor}/${part}`,label:`${actor[0].toUpperCase()+actor.slice(1)} ${part==='effort'?'reasoning effort':part}`,schema,writable:true,unset:false,class:'route',effective_when:'immediate'});
+const routeField=(actor,part,schema)=>({key:`/routes/${actor}/${part}`,label:`${actor[0].toUpperCase()+actor.slice(1)} ${part==='effort'?'reasoning effort':part}`,schema,writable:true,unset:false,class:'route',effective_when:'immediate',...(part==='model'?{suggest:{list:'models',group_by:`/routes/${actor}/provider`}}:{})});
+const models=[{value:'z-ai/glm-5.3',label:'GLM-5.3 · OpenRouter',group:'openrouter'},{value:'moonshotai/kimi-k3',label:'Kimi K3 · OpenRouter',group:'openrouter'},{value:'claude-opus-5-5',label:'Claude Opus 5.5 · Anthropic',group:'anthropic'},{value:'claude-sonnet-5-5',label:'Claude Sonnet 5.5 · Anthropic',group:'anthropic'}];
 const session={id:'session',connector_id:'connector',key:'project-x-session-1',label:'Development · Session 1',scope:'session',generation:'g1',updated_at:new Date().toISOString(),
- descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.runtime-settings/v1',adapter_version:'1',fields:[
+ descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.runtime-settings/v1',adapter_version:'1',suggestions:{models},fields:[
   {key:'/task_concurrency',label:'Task workers at once',schema:{type:'integer',minimum:1,maximum:128},writable:true,unset:false,class:'preference',effective_when:'next_task'},
   {key:'/narrator_tick_seconds',label:'Narrator check interval (seconds)',schema:{type:'integer',minimum:1,maximum:86400},writable:true,unset:false,class:'preference',effective_when:'immediate'},
   ...['orchestrator','task','narrator'].flatMap(a=>[routeField(a,'provider',{type:'string',enum:['meta','openrouter','anthropic']}),routeField(a,'model',{type:'string',max_length:200}),routeField(a,'effort',{type:'string',enum:['low','medium','high','xhigh']})]),
@@ -82,12 +83,25 @@ try {
     // Opens on this session, in FinaleChat's own form, with its real routes.
     await page.getByRole('button',{name:'This session',exact:true,pressed:true}).waitFor();
     await page.getByLabel('Orchestrator model',{exact:true}).waitFor();
-    assert.equal(await page.getByLabel('Orchestrator model',{exact:true}).inputValue(),'claude-opus-5-5');
-    assert.equal(await page.getByLabel('Task model',{exact:true}).inputValue(),'z-ai/glm-5.3');
+    assert.equal(await page.getByLabel('Orchestrator model',{exact:true}).inputValue(),session.snapshot.saved['/routes/orchestrator/model']);
+    assert.equal(await page.getByLabel('Task model',{exact:true}).inputValue(),session.snapshot.saved['/routes/task/model']);
     assert.equal(await page.locator('iframe').count(),0,'the session panel must not frame an agent page');
     assert.equal(await page.getByRole('button',{name:'Advanced',exact:true}).count(),0,'empty tab shown');
     await page.waitForTimeout(700); await page.screenshot({path:`${shots}/${name}-session.png`});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'host overflow');
+    // The model field: typed, or picked from the provider's known models.
+    await page.getByRole('button',{name:/^Browse \d+ choices for Orchestrator model$/}).click();
+    const sheet=page.locator('.suggest-sheet');
+    await sheet.waitFor();
+    assert.equal(await sheet.locator('.item').count(),2,'only the picked provider\'s models');
+    await page.waitForTimeout(500); await page.screenshot({path:`${shots}/${name}-model-picker.png`});
+    const pick=name==='phone'?'sonnet':'opus';
+    await sheet.getByPlaceholder('Search…').fill(pick);
+    await sheet.getByRole('button',{name:new RegExp('Claude '+(pick==='sonnet'?'Sonnet':'Opus')+' 5.5')}).click();
+    assert.equal(await page.getByLabel('Orchestrator model',{exact:true}).inputValue(),`claude-${pick}-5-5`);
+    await page.getByLabel('Task provider',{exact:true}).selectOption(name==='phone'?'openrouter':'anthropic');
+    await page.getByRole('button',{name:'Browse 2 choices for Task model'}).waitFor();
+    await page.getByLabel('Task model',{exact:true}).fill(`some/new-model-${name}`);
     await page.getByLabel('Task reasoning effort',{exact:true}).selectOption('xhigh');
     await page.getByRole('button',{name:'Behavior',exact:true}).click();
     await page.getByLabel('Task workers at once',{exact:true}).fill(name==='phone'?'5':'6');
@@ -95,7 +109,8 @@ try {
     await page.getByText('Saved · next task',{exact:true}).waitFor();
     const sent=commands[commands.length-1];
     assert.equal(sent.resource,'session');assert.equal(sent.surface_lease_id,undefined);
-    assert.deepEqual(sent.proposal.edits.map(e=>e.key).sort(),['/routes/task/effort','/task_concurrency']);
+    assert.deepEqual(sent.proposal.edits.map(e=>e.key).sort(),['/routes/orchestrator/model','/routes/task/effort','/routes/task/model','/routes/task/provider','/task_concurrency']);
+    assert.equal(sent.proposal.edits.find(e=>e.key==='/routes/task/model').value,`some/new-model-${name}`);
    } else {
     // Not running: say so; never fall back to showing project defaults.
     await page.getByRole('heading',{name:'This session isn’t running'}).waitFor();

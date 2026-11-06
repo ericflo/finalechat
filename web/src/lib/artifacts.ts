@@ -8,8 +8,12 @@ export interface RevisionInfo { id: string; created_at: string; captured_at: str
 export interface Grant { key: string; label: string; scope: string; operations: string[]; classes: string[] }
 export interface Connector { id: string; name: string; provider: string; state: "pending" | "active" | "revoked"; requested_grants: Grant[]; grants: Grant[]; last_seen_at: string | null; expires_at: string }
 export interface Shape { type: "string" | "boolean" | "integer" | "number" | "array" | "object"; enum?: unknown[]; minimum?: number; maximum?: number; max_length?: number; items?: Shape; properties?: Record<string, Shape>; required?: string[] }
-export interface SettingField { key: string; label: string; description?: string; schema: Shape; writable: boolean; unset: boolean; locked_reason?: string; class: string; effective_when: string; source?: string }
-export interface SettingsDescriptor { format: string; schema_version: string; adapter_version: string; fields: SettingField[]; actions?: { operation: string; label: string; class: string; parameters: Shape }[] }
+export interface Suggest { list: string; group_by?: string }
+export interface Suggestion { value: string; label?: string; group?: string }
+export interface SettingField { key: string; label: string; description?: string; schema: Shape; writable: boolean; unset: boolean; locked_reason?: string; class: string; effective_when: string; source?: string; suggest?: Suggest }
+export interface ActionInput { name: string; label: string; description?: string; suggest?: Suggest }
+export interface SettingsAction { operation: string; label: string; class: string; parameters: Shape; inputs?: ActionInput[] }
+export interface SettingsDescriptor { format: string; schema_version: string; adapter_version: string; fields: SettingField[]; actions?: SettingsAction[]; suggestions?: Record<string, Suggestion[]> }
 export interface SettingsSnapshot { version: string; context: string; saved: Record<string, unknown>; effective: Record<string, unknown>; runtime_known: boolean; runtime_version?: string; details?: Record<string, unknown> }
 export interface SettingsResource { id: string; connector_id: string; key: string; label: string; scope: string; generation: string; descriptor: SettingsDescriptor; snapshot: SettingsSnapshot; updated_at: string }
 export interface ResourceView { resource: SettingsResource; connector: Connector; online: boolean; website?: { artifact_id: string; revision_id: string } | null }
@@ -46,6 +50,16 @@ export const controlAPI = {
   deleteDraft: (id: string) => request<{ ok: true }>("DELETE", `${b}/settings-resources/${id}/draft`),
   audit: (id: string, before?: string) => request<{ audit: { id: string; command_id: string; event: string; detail: Record<string, unknown>; created_at: string }[]; next_before?: string }>("GET", `${b}/settings-resources/${id}/audit${before ? `?before=${before}` : ""}`),
 };
+
+/** The suggestions a field or input offers: its list, narrowed to the
+ * entries in the group named by the value of the field it groups by (all of
+ * them while that is unset). */
+export function suggestionsFor(descriptor: SettingsDescriptor, suggest: Suggest | undefined, valueOf: (key: string) => unknown): Suggestion[] | undefined {
+  if (!suggest) return undefined;
+  const list = descriptor.suggestions?.[suggest.list] ?? [];
+  const group = suggest.group_by ? valueOf(suggest.group_by) : undefined;
+  return typeof group === "string" && group !== "" ? list.filter((s) => s.group === group) : list;
+}
 
 export const effectLabel: Record<string, string> = { immediate: "Immediately", next_turn: "Next turn", next_task: "Next task", new_or_resumed_session: "New or resumed sessions", restart_required: "After restart", unknown: "Runtime effect unconfirmed" };
 export const scopeLabel: Record<string, string> = { project: "Project defaults", project_local: "Local project defaults", user: "User defaults", profile: "Profile", session: "This runtime session" };

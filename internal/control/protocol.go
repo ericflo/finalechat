@@ -182,12 +182,42 @@ type Field struct {
 	Class         string `json:"class"`
 	EffectiveWhen string `json:"effective_when"`
 	Source        string `json:"source,omitempty"`
+	// Suggest offers a named list of the descriptor's suggestions as choices
+	// for a string field. Anything the schema allows can still be entered.
+	Suggest *Suggest `json:"suggest,omitempty"`
+}
+
+// Suggest names a descriptor suggestion list for a field. With GroupBy set,
+// only the entries whose group equals that other field's current value are
+// offered (a model list narrowed to the provider chosen beside it).
+type Suggest struct {
+	List    string `json:"list"`
+	GroupBy string `json:"group_by,omitempty"`
+}
+
+// Suggestion is one offered value, with an optional human label and group.
+type Suggestion struct {
+	Value string `json:"value"`
+	Label string `json:"label,omitempty"`
+	Group string `json:"group,omitempty"`
 }
 type Action struct {
 	Operation  string `json:"operation"`
 	Label      string `json:"label"`
 	Class      string `json:"class"`
 	Parameters Shape  `json:"parameters"`
+	// Inputs are the parameters a client may ask the user for, in order,
+	// with labels and suggestions; parameters not listed are set by the
+	// client itself or left out.
+	Inputs []Input `json:"inputs,omitempty"`
+}
+
+// Input presents one action parameter to the user.
+type Input struct {
+	Name        string   `json:"name"`
+	Label       string   `json:"label"`
+	Description string   `json:"description,omitempty"`
+	Suggest     *Suggest `json:"suggest,omitempty"` // GroupBy names another input
 }
 type Descriptor struct {
 	Format         string   `json:"format"`
@@ -195,6 +225,8 @@ type Descriptor struct {
 	AdapterVersion string   `json:"adapter_version"`
 	Fields         []Field  `json:"fields"`
 	Actions        []Action `json:"actions,omitempty"`
+	// Suggestions are named lists of values fields may offer as choices.
+	Suggestions map[string][]Suggestion `json:"suggestions,omitempty"`
 }
 type Snapshot struct {
 	Version        string         `json:"version"`
@@ -226,6 +258,32 @@ func (d Descriptor) Validate(g Grant) error {
 			return fmt.Errorf("%s: %w", f.Key, err)
 		}
 	}
+	if len(d.Suggestions) > 8 {
+		return fmt.Errorf("too many suggestion lists")
+	}
+	entries := 0
+	for name, list := range d.Suggestions {
+		if name == "" || len(name) > 64 {
+			return fmt.Errorf("invalid suggestion list name")
+		}
+		entries += len(list)
+		for _, s := range list {
+			if s.Value == "" || len(s.Value) > 500 || len(s.Label) > 200 || len(s.Group) > 500 {
+				return fmt.Errorf("invalid suggestion in %s", name)
+			}
+		}
+	}
+	if entries > 5000 {
+		return fmt.Errorf("too many suggestions")
+	}
+	for _, f := range d.Fields {
+		if f.Suggest == nil {
+			continue
+		}
+		if _, ok := d.Suggestions[f.Suggest.List]; !ok || f.Shape.Type != "string" || f.Suggest.GroupBy != "" && !seen[f.Suggest.GroupBy] {
+			return fmt.Errorf("%s: invalid suggestions", f.Key)
+		}
+	}
 	seen = map[string]bool{}
 	for _, a := range d.Actions {
 		if seen[a.Operation] || a.Label == "" || !slices.Contains(g.Operations, a.Operation) || !slices.Contains(g.Classes, a.Class) {
@@ -237,6 +295,27 @@ func (d Descriptor) Validate(g Grant) error {
 		}
 		if err := a.Parameters.Check(0); err != nil {
 			return err
+		}
+		if len(a.Inputs) > 64 {
+			return fmt.Errorf("%s: too many inputs", a.Operation)
+		}
+		named := map[string]bool{}
+		for _, in := range a.Inputs {
+			prop, ok := a.Parameters.Properties[in.Name]
+			if !ok || named[in.Name] || in.Label == "" || len(in.Label) > 300 || len(in.Description) > 4000 {
+				return fmt.Errorf("%s: invalid input %q", a.Operation, in.Name)
+			}
+			named[in.Name] = true
+			if in.Suggest != nil {
+				if _, ok := d.Suggestions[in.Suggest.List]; !ok || prop.Type != "string" {
+					return fmt.Errorf("%s: invalid suggestions for %q", a.Operation, in.Name)
+				}
+			}
+		}
+		for _, in := range a.Inputs {
+			if in.Suggest != nil && in.Suggest.GroupBy != "" && !named[in.Suggest.GroupBy] {
+				return fmt.Errorf("%s: %q groups by an unknown input", a.Operation, in.Name)
+			}
 		}
 	}
 	return bounded(d, MaxDocumentBytes)

@@ -94,12 +94,16 @@ export function relayDetail(p: RelayProfile): string {
 /** Starts a session through the trusted command channel and resolves to the
  * id of its thread once the integration's mirror has created it. With a
  * relay profile, eagent starts that agent to do the work. */
-export async function startSession(starter: SessionStarter, prompt: string, cwd: string | null, relay: RelayProfile | null, onStatus: (s: string) => void, cancelled: () => boolean): Promise<string> {
+export async function startSession(starter: SessionStarter, prompt: string, cwd: string | null, relay: RelayProfile | null, options: Record<string, unknown>, onStatus: (s: string) => void, cancelled: () => boolean): Promise<string> {
   onStatus(relay ? `Asking eagent to start ${relayName(relay)}…` : "Asking eagent to start the session…");
   // The connector republishes its settings whenever they change; take the
   // version it holds now, not the one the page loaded a while ago.
   const r = (await controlAPI.resource(starter.resource.id)).resource;
-  const parameters: Record<string, unknown> = { prompt: prompt.trim() };
+  // The options the agent asks for (its declared inputs), as the user set
+  // them; only inputs the action still declares are sent.
+  const inputs = new Set(r.descriptor.actions?.find((a) => a.operation === "session.start")?.inputs?.map((i) => i.name));
+  const parameters: Record<string, unknown> = Object.fromEntries(Object.entries(options).filter(([k, v]) => inputs.has(k) && v !== undefined && v !== ""));
+  parameters.prompt = prompt.trim();
   if (cwd && cwd !== directoryChoices(r).root) parameters.cwd = cwd;
   if (relay) {
     if (!relayProfiles(r).some((p) => p.name === relay.name)) throw new Error(`This project no longer offers ${relayName(relay)}.`);

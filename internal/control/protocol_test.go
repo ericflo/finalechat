@@ -58,3 +58,58 @@ func TestGrantValidateAcceptsRouteClass(t *testing.T) {
 		t.Fatal("unknown class accepted")
 	}
 }
+
+func TestDescriptorSuggestions(t *testing.T) {
+	g := Grant{Key: "k", Label: "l", Scope: "session", Operations: []string{"settings.apply"}, Classes: []string{"route"}}
+	d := Descriptor{Format: Format, SchemaVersion: "s/1", AdapterVersion: "1",
+		Fields: []Field{
+			{Key: "/provider", Label: "Provider", Shape: Shape{Type: "string", Enum: []any{"a", "b"}}, Writable: true, Class: "route", EffectiveWhen: "immediate"},
+			{Key: "/model", Label: "Model", Shape: Shape{Type: "string"}, Writable: true, Class: "route", EffectiveWhen: "immediate", Suggest: &Suggest{List: "models", GroupBy: "/provider"}},
+		},
+		Suggestions: map[string][]Suggestion{"models": {{Value: "m1", Label: "Model 1", Group: "a"}, {Value: "m2", Group: "b"}}},
+	}
+	if err := d.Validate(g); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Descriptor){
+		"unknown list":     func(d *Descriptor) { d.Fields[1].Suggest = &Suggest{List: "nope"} },
+		"unknown group_by": func(d *Descriptor) { d.Fields[1].Suggest = &Suggest{List: "models", GroupBy: "/missing"} },
+		"non-string field": func(d *Descriptor) { d.Fields[1].Shape = Shape{Type: "integer"} },
+		"empty value":      func(d *Descriptor) { d.Suggestions = map[string][]Suggestion{"models": {{Value: ""}}} },
+		"too many":         func(d *Descriptor) { d.Suggestions = map[string][]Suggestion{"models": make([]Suggestion, 5001)} },
+	} {
+		bad := d
+		bad.Fields = append([]Field{}, d.Fields...)
+		mutate(&bad)
+		if bad.Validate(g) == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
+func TestActionInputs(t *testing.T) {
+	g := Grant{Key: "k", Label: "l", Scope: "project", Operations: []string{"session.start"}, Classes: []string{"cost"}}
+	params := Shape{Type: "object", Properties: map[string]Shape{"prompt": {Type: "string"}, "provider": {Type: "string", Enum: []any{"a"}}, "model": {Type: "string"}, "n": {Type: "integer"}}}
+	d := Descriptor{Format: Format, SchemaVersion: "s/1", AdapterVersion: "1",
+		Actions:     []Action{{Operation: "session.start", Label: "Start", Class: "cost", Parameters: params, Inputs: []Input{{Name: "provider", Label: "Provider"}, {Name: "model", Label: "Model", Suggest: &Suggest{List: "models", GroupBy: "provider"}}}}},
+		Suggestions: map[string][]Suggestion{"models": {{Value: "m", Group: "a"}}},
+	}
+	if err := d.Validate(g); err != nil {
+		t.Fatal(err)
+	}
+	for name, in := range map[string][]Input{
+		"unknown parameter": {{Name: "nope", Label: "x"}},
+		"duplicate":         {{Name: "model", Label: "x"}, {Name: "model", Label: "y"}},
+		"no label":          {{Name: "model"}},
+		"unknown list":      {{Name: "model", Label: "x", Suggest: &Suggest{List: "nope"}}},
+		"non-string":        {{Name: "n", Label: "x", Suggest: &Suggest{List: "models"}}},
+		"unknown group":     {{Name: "model", Label: "x", Suggest: &Suggest{List: "models", GroupBy: "prompt"}}},
+	} {
+		bad := d
+		bad.Actions = []Action{d.Actions[0]}
+		bad.Actions[0].Inputs = in
+		if bad.Validate(g) == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}

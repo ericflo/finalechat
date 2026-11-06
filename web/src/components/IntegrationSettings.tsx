@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { controlAPI, effectLabel, scopeLabel, validateProposal, validateShape, type ResourceView, type SettingEdit, type SettingField, type SettingsCommand, type SettingsProposal, type SettingsResource } from "../lib/artifacts";
+import { controlAPI, effectLabel, scopeLabel, suggestionsFor, validateProposal, validateShape, type ResourceView, type SettingEdit, type SettingField, type SettingsCommand, type SettingsProposal, type SettingsResource, type Suggestion } from "../lib/artifacts";
+import { Sheet } from "./Common";
 import { toast } from "../lib/store";
 
 export function useSettingsResource(id: string | null) {
@@ -142,7 +143,8 @@ export function GenericSettingsForm({ resource, proposal, onProposal }: { resour
     // version the whole edit set began against until it is explicitly reviewed.
     onProposal({ operation: "settings.apply", schema_version: previous?.schema_version || resource.descriptor.schema_version, expected_version: previous?.expected_version || resource.snapshot.version, generation: previous?.generation ?? resource.generation, edits });
   };
-  return <div className="generic-settings"><input aria-label="Search settings" placeholder="Search settings…" value={query} onChange={(e) => setQuery(e.target.value)} />{resource.descriptor.fields.filter((f) => `${f.key} ${f.label} ${f.description || ""}`.toLowerCase().includes(query.toLowerCase())).map((field) => <SettingInput key={`${resource.snapshot.version}:${field.key}`} field={field} saved={resource.snapshot.saved[field.key]} effective={resource.snapshot.effective[field.key]} edit={proposal?.edits?.find((e) => e.key === field.key)} onEdit={edit} />)}<GenericSettingsActions resource={resource} proposal={proposal} onProposal={onProposal} /></div>;
+  const valueOf = (key: string) => { const e = proposal?.edits?.find((x) => x.key === key); return e ? (e.op === "set" ? e.value : undefined) : resource.snapshot.saved[key] ?? resource.snapshot.effective[key]; };
+  return <div className="generic-settings"><input aria-label="Search settings" placeholder="Search settings…" value={query} onChange={(e) => setQuery(e.target.value)} />{resource.descriptor.fields.filter((f) => `${f.key} ${f.label} ${f.description || ""}`.toLowerCase().includes(query.toLowerCase())).map((field) => <SettingInput key={`${resource.snapshot.version}:${field.key}`} field={field} saved={resource.snapshot.saved[field.key]} effective={resource.snapshot.effective[field.key]} edit={proposal?.edits?.find((e) => e.key === field.key)} onEdit={edit} suggestions={suggestionsFor(resource.descriptor, field.suggest, valueOf)} />)}<GenericSettingsActions resource={resource} proposal={proposal} onProposal={onProposal} /></div>;
 }
 
 function GenericSettingsActions({ resource, proposal, onProposal }: { resource: SettingsResource; proposal: SettingsProposal | null; onProposal: (p: SettingsProposal | null) => void }) {
@@ -156,7 +158,7 @@ function GenericSettingsActions({ resource, proposal, onProposal }: { resource: 
   </details>;
 }
 
-export function SettingInput({ field: f, saved, effective, edit, onEdit, resetLabel = "Inherit default" }: { field: SettingField; saved: unknown; effective: unknown; edit?: SettingEdit; onEdit: (e: SettingEdit) => void; resetLabel?: string }) {
+export function SettingInput({ field: f, saved, effective, edit, onEdit, resetLabel = "Inherit default", suggestions }: { field: SettingField; saved: unknown; effective: unknown; edit?: SettingEdit; onEdit: (e: SettingEdit) => void; resetLabel?: string; suggestions?: Suggestion[] }) {
   const value = edit?.op === "set" ? edit.value : edit?.op === "unset" ? undefined : saved;
   const [text, setText] = useState(inputValue(value));
   const [error, setError] = useState("");
@@ -168,9 +170,43 @@ export function SettingInput({ field: f, saved, effective, edit, onEdit, resetLa
       : f.schema.type === "boolean" ? <select id={id} disabled={!f.writable} value={value === undefined ? "" : String(value)} onChange={(e) => changed(e.target.value === "true")}><option value="" disabled>Inherited / unset</option><option value="true">On</option><option value="false">Off</option></select>
         : f.schema.type === "array" || f.schema.type === "object" ? <textarea id={id} disabled={!f.writable} value={text} rows={4} onChange={(e) => { setText(e.target.value); try { changed(JSON.parse(e.target.value)); } catch { setError("Enter valid JSON."); onEdit({ op: "set", key: f.key, value: null }); } }} />
           : f.schema.type === "string" && (f.schema.max_length || 0) > 8192 ? <textarea id={id} disabled={!f.writable} value={text} rows={6} onChange={(e) => { setText(e.target.value); changed(e.target.value); }} />
+          : suggestions && f.schema.type === "string" ? <SuggestedText id={id} disabled={!f.writable} value={text} suggestions={suggestions} label={f.label} onChange={(v) => { setText(v); changed(v); }} />
           : <input id={id} disabled={!f.writable} type={f.schema.type === "string" ? "text" : "number"} min={f.schema.minimum} max={f.schema.maximum} value={text} onChange={(e) => { setText(e.target.value); changed(f.schema.type === "string" ? e.target.value : e.target.value === "" ? null : Number(e.target.value)); }} />}
     <small>{f.writable ? effectLabel[f.effective_when] : f.locked_reason || "Read only"}{f.source ? ` · ${f.source}` : ""}{effective !== undefined ? ` · Effective: ${displayValue(effective)}` : ""}</small>
     {f.writable && f.unset && <button className="btn small" onClick={() => { setError(""); onEdit({ op: "unset", key: f.key }); }}>{resetLabel}</button>}
     {error && <p role="alert" className="artifact-error">{error}</p>}
   </div>;
+}
+
+/** Free text with suggested values: type anything, get matches as you type,
+ * or browse the whole list in a searchable sheet. */
+function SuggestedText({ id, value, suggestions, label, disabled, onChange }: { id: string; value: string; suggestions: Suggestion[]; label: string; disabled: boolean; onChange: (v: string) => void }) {
+  const [browsing, setBrowsing] = useState(false);
+  const listId = `${id}-suggestions`;
+  return <div className="suggest-row">
+    <input id={id} disabled={disabled} type="text" list={listId} autoComplete="off" autoCapitalize="none" spellCheck={false} value={value} onChange={(e) => onChange(e.target.value)} />
+    <datalist id={listId}>{suggestions.slice(0, 500).map((s) => <option key={`${s.group}|${s.value}`} value={s.value}>{s.label}</option>)}</datalist>
+    <button type="button" className="btn small" disabled={disabled || !suggestions.length} onClick={() => setBrowsing(true)} aria-label={`Browse ${suggestions.length} choices for ${label}`}>Browse</button>
+    {browsing && <SuggestionSheet title={label} current={value} suggestions={suggestions} onPick={(v) => { onChange(v); setBrowsing(false); }} onClose={() => setBrowsing(false)} />}
+  </div>;
+}
+
+function SuggestionSheet({ title, current, suggestions, onPick, onClose }: { title: string; current: string; suggestions: Suggestion[]; onPick: (v: string) => void; onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const found = q ? suggestions.filter((s) => `${s.value} ${s.label ?? ""} ${s.group ?? ""}`.toLowerCase().includes(q)) : suggestions;
+  const shown = found.slice(0, 200);
+  return <Sheet onClose={onClose} label={title}>
+    <div className="suggest-sheet">
+      <h2>{title}</h2>
+      <input aria-label={`Search ${title}`} placeholder="Search…" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={query} onChange={(e) => setQuery(e.target.value)} />
+      <div className="suggest-list">
+        {shown.map((s) => <button key={`${s.group}|${s.value}`} type="button" className={`item${s.value === current ? " active" : ""}`} onClick={() => onPick(s.value)}>
+          <span className="suggest-label">{s.label || s.value}</span>{s.label && s.label !== s.value && <small>{s.value}</small>}
+        </button>)}
+        {!found.length && <p>Nothing matches. You can still type any value.</p>}
+        {found.length > shown.length && <p>Showing {shown.length} of {found.length}. Search to narrow.</p>}
+      </div>
+    </div>
+  </Sheet>;
 }

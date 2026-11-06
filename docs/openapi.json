@@ -8630,6 +8630,9 @@
           },
           "source": {
             "type": "string"
+          },
+          "suggest": {
+            "$ref": "#/components/schemas/SettingsSuggest"
           }
         },
         "required": [
@@ -8677,6 +8680,32 @@
                 },
                 "parameters": {
                   "$ref": "#/components/schemas/SettingsShape"
+                },
+                "inputs": {
+                  "type": "array",
+                  "description": "The parameters a client may ask the user for, in order. Parameters not listed are set by the client or left out.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "label": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "suggest": {
+                        "$ref": "#/components/schemas/SettingsSuggest"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "label"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
@@ -8686,6 +8715,16 @@
                 "parameters"
               ],
               "additionalProperties": false
+            }
+          },
+          "suggestions": {
+            "type": "object",
+            "description": "Named lists of values that string fields and action inputs may offer as choices; any value the schema allows can still be entered. At most 8 lists and 5000 entries.",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/SettingsSuggestion"
+              }
             }
           }
         },
@@ -8855,6 +8894,40 @@
           }
         },
         "description": "Lease credentials appear only in connector claim/renew responses. An attempt above 1 permits reconciliation only, never blind repetition of an uncertain action."
+      },
+      "SettingsSuggest": {
+        "type": "object",
+        "description": "Offers a named list of the descriptor's suggestions as choices. With group_by, only entries whose group equals that other field's (or input's) current value.",
+        "properties": {
+          "list": {
+            "type": "string"
+          },
+          "group_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "list"
+        ],
+        "additionalProperties": false
+      },
+      "SettingsSuggestion": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
       }
     }
   }
