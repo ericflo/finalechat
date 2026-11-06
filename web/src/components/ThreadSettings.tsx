@@ -3,7 +3,7 @@ import { Sheet } from "./Common";
 import { IconClose, IconEdit } from "./Icons";
 import { toast, updateThread, useStore } from "../lib/store";
 import { SettingInput } from "./IntegrationSettings";
-import { artifactAPI, controlAPI, effectLabel, validateProposal, type ArtifactRevision, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
+import { artifactAPI, controlAPI, effectLabel, suggestionsFor, validateProposal, type ArtifactRevision, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
 import { connectArtifactFrame } from "../lib/artifact-bridge";
 import "./thread-settings.css";
 
@@ -250,7 +250,8 @@ function FocusedSettings({ view, proposal, onProposal }: { view: ResourceView; p
   const tab = groups.includes(picked) ? picked : groups[0] ?? "Models";
   const inTab = r.descriptor.fields.filter(f => groupOf(f.key) === tab);
   const fields = inTab.filter(f => `${f.key} ${f.label} ${f.description}`.toLowerCase().includes(query.toLowerCase()));
-  return <div className="ts-focused">{groups.length > 1 && <nav className="ts-tabs" aria-label="Settings categories">{groups.map(name => <button key={name} aria-pressed={tab === name} onClick={() => { setTab(name); setQuery(""); }}>{name}</button>)}</nav>}<div className="ts-fields"><h3>{groupTitle[tab]}</h3>{inTab.length > 12 && <input aria-label={`Search ${tab.toLowerCase()} settings`} placeholder="Find a setting…" value={query} onChange={e => setQuery(e.target.value)} />}{!r.descriptor.fields.length && <p>No settings are published here.</p>}{fields.map(f => <SettingInput key={f.key} field={f} saved={r.snapshot.saved[f.key] ?? r.snapshot.effective[f.key]} effective={undefined} edit={proposal?.edits?.find(e => e.key === f.key)} onEdit={change => {
+  const valueOf = (key: string) => { const e = proposal?.edits?.find(x => x.key === key); return e ? (e.op === "set" ? e.value : undefined) : r.snapshot.saved[key] ?? r.snapshot.effective[key]; };
+  return <div className="ts-focused">{groups.length > 1 && <nav className="ts-tabs" aria-label="Settings categories">{groups.map(name => <button key={name} aria-pressed={tab === name} onClick={() => { setTab(name); setQuery(""); }}>{name}</button>)}</nav>}<div className="ts-fields"><h3>{groupTitle[tab]}</h3>{inTab.length > 12 && <input aria-label={`Search ${tab.toLowerCase()} settings`} placeholder="Find a setting…" value={query} onChange={e => setQuery(e.target.value)} />}{!r.descriptor.fields.length && <p>No settings are published here.</p>}{fields.map(f => <SettingInput key={f.key} field={f} saved={r.snapshot.saved[f.key] ?? r.snapshot.effective[f.key]} effective={undefined} edit={proposal?.edits?.find(e => e.key === f.key)} suggestions={suggestionsFor(r.descriptor, f.suggest, valueOf)} onEdit={change => {
     const edits = (proposal?.edits || []).filter(e => e.key !== change.key); edits.push(change);
     onProposal({ operation: "settings.apply", schema_version: proposal?.schema_version || r.descriptor.schema_version, expected_version: proposal?.expected_version || r.snapshot.version, generation: proposal?.generation ?? r.generation, edits });
   }} />)}</div></div>;

@@ -4,6 +4,8 @@ import { IconChevron, IconClock, IconFolder, IconSend, IconSettings } from "../c
 import { directoryChoices, relayName, relayProfiles, startSession, useSessionStarters } from "../components/NewSession";
 import { RunningRelays, agentName, runningRelays } from "../components/Relay";
 import { ResourceSettingsSheet } from "../components/ThreadSettings";
+import { SettingInput } from "../components/IntegrationSettings";
+import { suggestionsFor, type SettingsAction, type SettingsResource } from "../lib/artifacts";
 import { TopBar } from "../components/TopBar";
 import { navigate } from "../lib/router";
 
@@ -100,6 +102,35 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
       }),
     [recentKey, profiles],
   );
+  // The options the agent asks for when it starts a session itself (its
+  // configuration and models), remembered per connector. A relayed agent
+  // brings its own models, so they are not offered with one.
+  const startAction = starter?.resource.descriptor.actions?.find((a) => a.operation === "session.start");
+  const optionsKey = starter ? `fc.draft.${starter.connector.id}.options` : "";
+  const [options, setOptions] = useState<Record<string, unknown>>({});
+  useEffect(() => {
+    try {
+      const raw: unknown = optionsKey ? JSON.parse(localStorage.getItem(optionsKey) ?? "{}") : {};
+      setOptions(raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {});
+    } catch {
+      setOptions({});
+    }
+  }, [optionsKey]);
+  const setOption = (name: string, value: unknown) =>
+    setOptions((prev) => {
+      const next = { ...prev };
+      if (value === undefined || value === "") delete next[name];
+      else next[name] = value;
+      try {
+        if (optionsKey) localStorage.setItem(optionsKey, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const offerOptions = !relay && !!startAction?.inputs?.length;
+  const chosen = offerOptions ? startAction!.inputs!.filter((i) => options[i.name] !== undefined) : [];
   // A relayed agent may start with nothing to do yet; eagent needs a task.
   const ready = !!text.trim() || !!relay;
   // Set again on mount: StrictMode's dev remount would otherwise leave it true.
@@ -129,7 +160,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
     setBusy(true);
     setError(null);
     try {
-      const threadId = await startSession(starter, text, dir || null, relay, setStatus, () => cancelled.current);
+      const threadId = await startSession(starter, text, dir || null, relay, offerOptions ? options : {}, setStatus, () => cancelled.current);
       if (relay && dir) rememberRecent(recentKey, { relay: relay.name, dir });
       navigate(`/t/${threadId}`, { replace: true });
     } catch (err) {
@@ -187,7 +218,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
               </p>
             ) : (
               <p>
-                It will start in <code>{home(dir)}</code> with this project&rsquo;s settings. Change either above, then say what to do.
+                It will start in <code>{home(dir)}</code> {chosen.length ? "with the options you chose" : <>with this project&rsquo;s settings</>}. Change them, then say what to do.
               </p>
             )}
             {!starter.online && <p>This project&rsquo;s eagent is offline right now. Start it there, then send.</p>}
@@ -218,6 +249,15 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
                   </button>
                 );
               })}
+            </div>
+          )}
+          {offerOptions && (
+            <div className="folder-row">
+              <button type="button" className="folder-chip" title="Configuration and models for this session" disabled={busy} onClick={() => setOptionsOpen(true)}>
+                <IconSettings aria-hidden="true" />
+                <span>{chosen[0] ? `${String(options[chosen[0].name])}${chosen.length > 1 ? ` +${chosen.length - 1}` : ""}` : "Project settings"}</span>
+                <IconChevron aria-hidden="true" className="folder-chip-more" />
+              </button>
             </div>
           )}
           {profiles.length > 0 && (
@@ -289,6 +329,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
       )}
       {picking && choices && <DirectorySheet choices={choices} current={dir} who={relay ? who : null} onChoose={choose} onClose={() => setPicking(false)} />}
       {settingsOpen && <ResourceSettingsSheet resourceId={resourceId} onClose={() => setSettingsOpen(false)} />}
+      {optionsOpen && starter && startAction && <StartOptionsSheet resource={starter.resource} action={startAction} values={options} onChange={setOption} onClose={() => setOptionsOpen(false)} />}
     </div>
   );
 }
@@ -347,6 +388,46 @@ function DirectorySheet({ choices, current, who, onChoose, onClose }: { choices:
             ))}
         </div>
         {q && !isPath && found.length === 0 && <p style={{ marginTop: 10 }}>No folder here matches. Type a full path, like ~/Development/project.</p>}
+      </div>
+    </Sheet>
+  );
+}
+
+/** The inputs the agent declares for starting a session, as a form: each
+ * left empty keeps the project's own setting. */
+function StartOptionsSheet({ resource, action, values, onChange, onClose }: { resource: SettingsResource; action: SettingsAction; values: Record<string, unknown>; onChange: (name: string, value: unknown) => void; onClose: () => void }) {
+  const inputs = action.inputs ?? [];
+  return (
+    <Sheet onClose={onClose} label="Session options">
+      <div className="start-options">
+        <h2>This session</h2>
+        <p>Left empty, each comes from the project&rsquo;s settings. These apply to this session only.</p>
+        {inputs.map((input) => {
+          const schema = action.parameters.properties?.[input.name];
+          if (!schema) return null;
+          const value = values[input.name];
+          return (
+            <SettingInput
+              key={input.name}
+              field={{ key: `start-${input.name}`, label: input.label, description: input.description, schema, writable: true, unset: value !== undefined, class: action.class, effective_when: "" }}
+              saved={value}
+              effective={undefined}
+              resetLabel="Use the project's"
+              suggestions={suggestionsFor(resource.descriptor, input.suggest, (name) => values[name])}
+              onEdit={(edit) => onChange(input.name, edit.op === "set" ? edit.value : undefined)}
+            />
+          );
+        })}
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+          {inputs.some((i) => values[i.name] !== undefined) && (
+            <button type="button" className="btn" onClick={() => inputs.forEach((i) => onChange(i.name, undefined))}>
+              Reset all
+            </button>
+          )}
+          <button type="button" className="btn primary" onClick={onClose}>
+            Done
+          </button>
+        </div>
       </div>
     </Sheet>
   );

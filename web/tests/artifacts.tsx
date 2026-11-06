@@ -10,6 +10,7 @@ import { ResourceSettingsScreen } from "../src/screens/Connectors";
 import { InspectMessage } from "../src/components/InspectMessage";
 import { ThreadScreen } from "../src/screens/Thread";
 import type { Thread, Message } from "../src/lib/types";
+import { DraftSessionScreen } from "../src/screens/Draft";
 
 const fixture: ResourceView = {
   online: true,
@@ -66,4 +67,5 @@ function RuntimeFixture() {
   if (route.path.includes("/artifacts/")) return <ArtifactFixture />;
   return <ThreadScreen id="thread" highlightQuestion={null} />;
 }
-createRoot(document.getElementById("root")!).render(initial.has("thread") ? <ThreadFixture /> : initial.has("runtime") ? <RuntimeFixture /> : initial.has("navigation") ? <NavigationFixture /> : initial.has("artifact") ? <ArtifactFixture /> : <Controls />);
+function DraftFixture() { const route = useRoute(); return route.path.startsWith("/t/") ? <ThreadScreen id={route.path.slice(3)} highlightQuestion={null} /> : <DraftSessionScreen resourceId="project" />; }
+createRoot(document.getElementById("root")!).render(initial.has("draft") ? <DraftFixture /> : initial.has("thread") ? <ThreadFixture /> : initial.has("runtime") ? <RuntimeFixture /> : initial.has("navigation") ? <NavigationFixture /> : initial.has("artifact") ? <ArtifactFixture /> : <Controls />);
