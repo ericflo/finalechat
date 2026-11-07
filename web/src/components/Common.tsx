@@ -144,6 +144,7 @@ function luminance({ h, s, l }: { h: number; s: number; l: number }): number {
 
 /** How many sheets hold the page still; the thread's scroll tracking ignores
  * scroll events while one is open. */
+const sheetStack: object[] = [];
 export let sheetsOpen = 0;
 
 /** Pointers currently down anywhere. A sheet opened while one is held (a
@@ -213,8 +214,13 @@ export function Sheet({ onClose, children, label, className = "" }: { onClose: (
     };
   }, []);
 
+  // Sheets stack (a picker over a form): keys belong to the top one only, so
+  // Escape closes one sheet, not every sheet open.
   useEffect(() => {
+    const me = {};
+    sheetStack.push(me);
     const onKey = (e: KeyboardEvent) => {
+      if (sheetStack[sheetStack.length - 1] !== me) return;
       if (e.key === "Escape") onCloseRef.current();
       if (e.key === "Tab" && ref.current) {
         const items = Array.from(ref.current.querySelectorAll<HTMLElement>("input, textarea, button, [href], [tabindex]:not([tabindex='-1'])")).filter((el) => !el.hasAttribute("disabled"));
@@ -231,7 +237,10 @@ export function Sheet({ onClose, children, label, className = "" }: { onClose: (
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      sheetStack.splice(sheetStack.indexOf(me), 1);
+    };
   }, []);
 
   const swallowUnarmed = (e: ReactPointerEvent | React.MouseEvent) => {

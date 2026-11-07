@@ -15,6 +15,9 @@
 
 .sf-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; transition: border-color 0.15s, box-shadow 0.15s; }
 .sf-card.pending { border-color: color-mix(in srgb, var(--amber) 55%, transparent); box-shadow: 0 0 0 3px var(--amber-soft); }
+.sf-card.flash { animation: sf-flash 0.9s var(--ease); }
+@keyframes sf-flash { 0% { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); } 100% { border-color: var(--border); box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .sf-card.flash { animation: none; } }
 .sf-card > header { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .sf-card > header h4 { font-size: 15px; font-weight: 650; margin: 0; letter-spacing: -0.1px; }
 .sf-card > header .sf-link { margin-left: auto; }
@@ -85,6 +88,7 @@
 .sf-option { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 0; border-radius: 12px; background: none; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
 .sf-option:hover, .sf-option:focus-visible { background: var(--surface-2); outline: 0; }
 .sf-option.on { background: var(--accent-soft); }
+div.sf-option { cursor: default; }
 .sf-option.custom { border: 1px dashed var(--border-strong); margin-bottom: 4px; }
 .sf-option-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .sf-option-text > span { font-size: 15px; font-weight: 550; display: flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
@@ -97,6 +101,9 @@
 .start-sheet-head { padding: 6px 18px 12px; flex: none; }
 .start-sheet-head h2 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.3px; }
 .start-sheet-head p { font-size: 13px; color: var(--text-3); line-height: 1.45; margin: 0; }
+.start-sheet-head p.start-sheet-status { font-size: 14px; color: var(--text-2); margin: 2px 0 4px; }
+.start-sheet-status strong { color: var(--text); font-weight: 650; }
+.start-sheet-status.changed strong { color: var(--accent); }
 .start-sheet-body { overflow-y: auto; padding: 0 14px 16px; flex: 1; min-height: 0; overscroll-behavior: contain; }
 .start-sheet-foot { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 18px calc(12px + var(--sab)); border-top: 1px solid var(--border); background: var(--elevated); }
 .start-sheet-foot .btn.primary { margin-left: auto; min-width: 96px; }
