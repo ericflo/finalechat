@@ -185,6 +185,14 @@ type Field struct {
 	// Suggest offers a named list of the descriptor's suggestions as choices
 	// for a string field. Anything the schema allows can still be entered.
 	Suggest *Suggest `json:"suggest,omitempty"`
+	// Section names the part of the form the field belongs to (a client may
+	// show sections as tabs or headings); Group gathers related fields, such
+	// as one model route's provider, model and effort, under one title.
+	// Fields of a group are listed together, in descriptor order.
+	Section string `json:"section,omitempty"`
+	Group   string `json:"group,omitempty"`
+	// Advanced fields are rarely changed; a client may show them on request.
+	Advanced bool `json:"advanced,omitempty"`
 }
 
 // Suggest names a descriptor suggestion list for a field. With GroupBy set,
@@ -196,10 +204,19 @@ type Suggest struct {
 }
 
 // Suggestion is one offered value, with an optional human label and group.
+// Where a field or input groups its suggestions by another (Suggest.GroupBy),
+// a suggestion's group is the value that other one takes with it: picking a
+// model from a provider's group picks that provider too.
 type Suggestion struct {
 	Value string `json:"value"`
 	Label string `json:"label,omitempty"`
 	Group string `json:"group,omitempty"`
+	// Detail is a short second line, such as a price or what a preset runs.
+	Detail string `json:"detail,omitempty"`
+	// Implies gives the values other fields (by key) or inputs (by name) of
+	// the same form take when this value is chosen and they are left alone,
+	// so a client can show what a choice brings with it. Display only.
+	Implies map[string]any `json:"implies,omitempty"`
 }
 type Action struct {
 	Operation  string `json:"operation"`
@@ -218,6 +235,11 @@ type Input struct {
 	Label       string   `json:"label"`
 	Description string   `json:"description,omitempty"`
 	Suggest     *Suggest `json:"suggest,omitempty"` // GroupBy names another input
+	// Group gathers related inputs under one title, as Field.Group does.
+	Group string `json:"group,omitempty"`
+	// Default is the value the action uses when the input is left out, shown
+	// so the user knows what leaving it alone means. It must fit the schema.
+	Default any `json:"default,omitempty"`
 }
 type Descriptor struct {
 	Format         string   `json:"format"`
@@ -244,7 +266,7 @@ func (d Descriptor) Validate(g Grant) error {
 	}
 	seen := map[string]bool{}
 	for _, f := range d.Fields {
-		if f.Key == "" || len(f.Key) > 200 || seen[f.Key] || f.Label == "" || len(f.Label) > 300 || len(f.Description) > 4000 {
+		if f.Key == "" || len(f.Key) > 200 || seen[f.Key] || f.Label == "" || len(f.Label) > 300 || len(f.Description) > 4000 || len(f.Section) > 80 || len(f.Group) > 120 {
 			return fmt.Errorf("invalid field")
 		}
 		seen[f.Key] = true
@@ -268,7 +290,7 @@ func (d Descriptor) Validate(g Grant) error {
 		}
 		entries += len(list)
 		for _, s := range list {
-			if s.Value == "" || len(s.Value) > 500 || len(s.Label) > 200 || len(s.Group) > 500 {
+			if s.Value == "" || len(s.Value) > 500 || len(s.Label) > 200 || len(s.Group) > 500 || len(s.Detail) > 300 || !validImplies(s.Implies) {
 				return fmt.Errorf("invalid suggestion in %s", name)
 			}
 		}
@@ -302,8 +324,11 @@ func (d Descriptor) Validate(g Grant) error {
 		named := map[string]bool{}
 		for _, in := range a.Inputs {
 			prop, ok := a.Parameters.Properties[in.Name]
-			if !ok || named[in.Name] || in.Label == "" || len(in.Label) > 300 || len(in.Description) > 4000 {
+			if !ok || named[in.Name] || in.Label == "" || len(in.Label) > 300 || len(in.Description) > 4000 || len(in.Group) > 120 {
 				return fmt.Errorf("%s: invalid input %q", a.Operation, in.Name)
+			}
+			if in.Default != nil && prop.Validate(in.Default) != nil {
+				return fmt.Errorf("%s: default for %q does not fit its schema", a.Operation, in.Name)
 			}
 			named[in.Name] = true
 			if in.Suggest != nil {
@@ -400,6 +425,30 @@ func (s Snapshot) Validate() error {
 	}
 	return bounded(s, MaxDocumentBytes)
 }
+
+// validImplies bounds a suggestion's implied values: a few dozen named
+// scalars.
+func validImplies(m map[string]any) bool {
+	if len(m) > 64 {
+		return false
+	}
+	for k, v := range m {
+		if k == "" || len(k) > 200 {
+			return false
+		}
+		switch x := v.(type) {
+		case string:
+			if len(x) > 500 {
+				return false
+			}
+		case bool, float64, int, int64, nil:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func bounded(v any, n int) error {
 	raw, err := json.Marshal(v)
 	if err != nil || len(raw) > n {

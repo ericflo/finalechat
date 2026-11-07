@@ -305,9 +305,8 @@ try {
   await page.goto(`${base}/tests/artifacts.html?runtime=1`);
   await gear.click();
   console.log('PASS compact phone header, direct archive icon, multiple archive picker and settings gear');
-  await page.getByRole("button", {name:"Advanced",exact:true}).click();
   await page.getByLabel("Concurrency", { exact: true }).fill("6");
-  await page.getByText("Unsaved changes", {exact:true}).waitFor();
+  await page.getByText("1 unsaved change", {exact:true}).waitFor();
   assert.equal(await page.getByRole("button", { name: "Save draft", exact: true }).count(), 0);
   const priorRuntimeCommands = commands.length;
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -321,7 +320,7 @@ try {
   await page.getByLabel("Concurrency", { exact: true }).fill("7");
   await page.evaluate(() => { window.fixture.resource.snapshot.runtime_known = false; });
   await page.clock.runFor(11000);
-  await page.getByText("Reconnect the agent to save changes.", { exact: true }).waitFor();
+  await page.getByText("Resume the session to change its settings.", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "Save", exact: true }).isDisabled(), true, "offline runtime remained writable");
 
   console.log("PASS chat-to-live-settings navigation, session generation, native acknowledgement wording, no offline runtime drafts");

@@ -165,15 +165,18 @@ export function SettingInput({ field: f, saved, effective, edit, onEdit, resetLa
   useEffect(() => setText(f.schema.type === "object" || f.schema.type === "array" ? JSON.stringify(value, null, 2) || "" : inputValue(value)), [value, f.schema.type]);
   const changed = (v: unknown) => { const error = validateShape(f.schema, v); setError(error || ""); onEdit({ op: "set", key: f.key, value: v }); };
   const id = `setting-${f.key}`;
+  const reset = () => { setError(""); onEdit({ op: "unset", key: f.key }); };
+  // Going back to the default is always one of the choices, when there is one.
+  const defaultOption = f.unset ? <option value="">{effective !== undefined && value === undefined ? `Default (${displayValue(effective)})` : "Default"}</option> : value === undefined ? <option value="" disabled>Choose…</option> : null;
   return <div className="field settings-field"><label htmlFor={id}>{f.label}</label>{f.description && <p>{f.description}</p>}
-    {f.schema.enum ? <select id={id} disabled={!f.writable} value={JSON.stringify(value) ?? ""} onChange={(e) => changed(JSON.parse(e.target.value))}><option value="" disabled>Inherited / unset</option>{f.schema.enum.map((v, i) => <option key={i} value={JSON.stringify(v)}>{displayValue(v)}</option>)}</select>
-      : f.schema.type === "boolean" ? <select id={id} disabled={!f.writable} value={value === undefined ? "" : String(value)} onChange={(e) => changed(e.target.value === "true")}><option value="" disabled>Inherited / unset</option><option value="true">On</option><option value="false">Off</option></select>
+    {f.schema.enum ? <select id={id} disabled={!f.writable} value={JSON.stringify(value) ?? ""} onChange={(e) => e.target.value === "" ? reset() : changed(JSON.parse(e.target.value))}>{defaultOption}{f.schema.enum.map((v, i) => <option key={i} value={JSON.stringify(v)}>{displayValue(v)}</option>)}</select>
+      : f.schema.type === "boolean" ? <select id={id} disabled={!f.writable} value={value === undefined ? "" : String(value)} onChange={(e) => e.target.value === "" ? reset() : changed(e.target.value === "true")}>{defaultOption}<option value="true">On</option><option value="false">Off</option></select>
         : f.schema.type === "array" || f.schema.type === "object" ? <textarea id={id} disabled={!f.writable} value={text} rows={4} onChange={(e) => { setText(e.target.value); try { changed(JSON.parse(e.target.value)); } catch { setError("Enter valid JSON."); onEdit({ op: "set", key: f.key, value: null }); } }} />
           : f.schema.type === "string" && (f.schema.max_length || 0) > 8192 ? <textarea id={id} disabled={!f.writable} value={text} rows={6} onChange={(e) => { setText(e.target.value); changed(e.target.value); }} />
           : suggestions && f.schema.type === "string" ? <SuggestedText id={id} disabled={!f.writable} value={text} suggestions={suggestions} label={f.label} onChange={(v) => { setText(v); changed(v); }} />
           : <input id={id} disabled={!f.writable} type={f.schema.type === "string" ? "text" : "number"} min={f.schema.minimum} max={f.schema.maximum} value={text} onChange={(e) => { setText(e.target.value); changed(f.schema.type === "string" ? e.target.value : e.target.value === "" ? null : Number(e.target.value)); }} />}
     <small>{f.writable ? effectLabel[f.effective_when] : f.locked_reason || "Read only"}{f.source ? ` · ${f.source}` : ""}{effective !== undefined ? ` · Effective: ${displayValue(effective)}` : ""}</small>
-    {f.writable && f.unset && <button className="btn small" onClick={() => { setError(""); onEdit({ op: "unset", key: f.key }); }}>{resetLabel}</button>}
+    {f.writable && f.unset && value !== undefined && <button className="btn small" onClick={reset}>{resetLabel}</button>}
     {error && <p role="alert" className="artifact-error">{error}</p>}
   </div>;
 }

@@ -8633,6 +8633,20 @@
           },
           "suggest": {
             "$ref": "#/components/schemas/SettingsSuggest"
+          },
+          "section": {
+            "type": "string",
+            "maxLength": 80,
+            "description": "The part of the form the field belongs to; the app shows sections as tabs."
+          },
+          "group": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "Fields sharing a group are shown together under that title, such as one model route's provider, model and effort."
+          },
+          "advanced": {
+            "type": "boolean",
+            "description": "Rarely changed; the app shows it on request (or when it holds a value of its own)."
           }
         },
         "required": [
@@ -8698,6 +8712,14 @@
                       },
                       "suggest": {
                         "$ref": "#/components/schemas/SettingsSuggest"
+                      },
+                      "group": {
+                        "type": "string",
+                        "maxLength": 120,
+                        "description": "Inputs sharing a group are shown together under that title."
+                      },
+                      "default": {
+                        "description": "The value the action uses when the input is left out, shown so the user knows what leaving it alone means. Must fit the parameter's schema."
                       }
                     },
                     "required": [
@@ -8922,12 +8944,31 @@
           },
           "group": {
             "type": "string"
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "A short second line, such as a price or what a preset runs."
+          },
+          "implies": {
+            "type": "object",
+            "maxProperties": 64,
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            },
+            "description": "Values other fields (by key) or inputs (by name) of the same form take when this value is chosen and they are left alone. Display only."
           }
         },
         "required": [
           "value"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Where a field or input groups its suggestions by another (suggest.group_by), a suggestion's group is the value that other one takes with it: picking a model from a provider's group picks that provider too."
       }
     }
   }

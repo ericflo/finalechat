@@ -19,19 +19,29 @@ const shots=process.env.FINALECHAT_SCREENSHOTS || '/tmp/finalechat-thread-settin
 await mkdir(shots,{recursive:true});
 
 const connector={id:'connector',name:'eagent · llmbox · Development',provider:'eagent',state:'active',grants:[],requested_grants:[]};
-const routeField=(actor,part,schema)=>({key:`/routes/${actor}/${part}`,label:`${actor[0].toUpperCase()+actor.slice(1)} ${part==='effort'?'reasoning effort':part}`,schema,writable:true,unset:false,class:'route',effective_when:'immediate',...(part==='model'?{suggest:{list:'models',group_by:`/routes/${actor}/provider`}}:{})});
-const models=[{value:'z-ai/glm-5.3',label:'GLM-5.3 · OpenRouter',group:'openrouter'},{value:'moonshotai/kimi-k3',label:'Kimi K3 · OpenRouter',group:'openrouter'},{value:'claude-opus-5-5',label:'Claude Opus 5.5 · Anthropic',group:'anthropic'},{value:'claude-sonnet-5-5',label:'Claude Sonnet 5.5 · Anthropic',group:'anthropic'}];
+// As eagent publishes a running session: a card per actor (provider, model,
+// effort) under Models, its workers and narrator under Behavior.
+const routeField=(actor,part,schema)=>({key:`/routes/${actor}/${part}`,label:{provider:'Provider',model:'Model',effort:'Reasoning effort'}[part],section:'Models',group:actor[0].toUpperCase()+actor.slice(1),schema,writable:true,unset:false,class:'route',effective_when:'immediate',...(part==='model'?{suggest:{list:'models',group_by:`/routes/${actor}/provider`}}:part==='provider'?{suggest:{list:'providers'}}:{})});
+const models=[{value:'z-ai/glm-5.3',label:'GLM-5.3',group:'openrouter',detail:'$1 / $3 per M · 200K context'},{value:'moonshotai/kimi-k3',label:'Kimi K3',group:'openrouter'},{value:'claude-opus-5-5',label:'Claude Opus 5.5',group:'anthropic',detail:'$5 / $25 per M · 1M context'},{value:'claude-sonnet-5-5',label:'Claude Sonnet 5.5',group:'anthropic'}];
+const providers=[{value:'meta',label:'Meta'},{value:'openrouter',label:'OpenRouter'},{value:'anthropic',label:'Anthropic'}];
 const session={id:'session',connector_id:'connector',key:'project-x-session-1',label:'Development · Session 1',scope:'session',generation:'g1',updated_at:new Date().toISOString(),
- descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.runtime-settings/v1',adapter_version:'1',suggestions:{models},fields:[
-  {key:'/task_concurrency',label:'Task workers at once',schema:{type:'integer',minimum:1,maximum:128},writable:true,unset:false,class:'preference',effective_when:'next_task'},
-  {key:'/narrator_tick_seconds',label:'Narrator check interval (seconds)',schema:{type:'integer',minimum:1,maximum:86400},writable:true,unset:false,class:'preference',effective_when:'immediate'},
-  ...['orchestrator','task','narrator'].flatMap(a=>[routeField(a,'provider',{type:'string',enum:['meta','openrouter','anthropic']}),routeField(a,'model',{type:'string',max_length:200}),routeField(a,'effort',{type:'string',enum:['low','medium','high','xhigh']})]),
+ descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.runtime-settings/v1',adapter_version:'1',suggestions:{models,providers},fields:[
+  ...['orchestrator','task','narrator'].flatMap(a=>[routeField(a,'provider',{type:'string',enum:['meta','openrouter','anthropic']}),routeField(a,'model',{type:'string',max_length:200}),routeField(a,'effort',{type:'string',enum:['none','minimal','low','medium','high','xhigh','max']})]),
+  {key:'/task_concurrency',label:'Tasks at once',section:'Behavior',group:'Work',schema:{type:'integer',minimum:1,maximum:128},writable:true,unset:false,class:'preference',effective_when:'next_task'},
+  {key:'/narrator_tick_seconds',label:'Check interval (seconds)',section:'Behavior',group:'Narrator',schema:{type:'integer',minimum:1,maximum:86400},writable:true,unset:false,class:'preference',effective_when:'immediate'},
  ]},
  snapshot:{version:'s1',context:'Development · 1',runtime_known:true,details:{thread_external_id:'eagent:1'},
   saved:{'/task_concurrency':3,'/narrator_tick_seconds':30,'/routes/orchestrator/provider':'anthropic','/routes/orchestrator/model':'claude-opus-5-5','/routes/orchestrator/effort':'xhigh','/routes/task/provider':'openrouter','/routes/task/model':'z-ai/glm-5.3','/routes/task/effort':'high','/routes/narrator/provider':'meta','/routes/narrator/model':'muse-spark-1.3-contributor','/routes/narrator/effort':'low'},effective:{}}};
+// Project defaults: each can be set here or left to its default.
+const projectField=(key,label,section,group,schema,extra={})=>({key,label,section,group,schema,writable:true,unset:true,class:'preference',effective_when:'new_or_resumed_session',...extra});
 const project=fixture?JSON.parse(await readFile(path.join(fixture,'settings/state.json'),'utf8')):{
- descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.project/v1',adapter_version:'1',fields:[{key:'/orchestrator/model',label:'Orchestrator model',schema:{type:'string',max_length:200},writable:true,unset:true,class:'preference',effective_when:'new_or_resumed_session'},{key:'/task_concurrency',label:'Parallel tasks',schema:{type:'integer',minimum:1,maximum:128},writable:true,unset:true,class:'preference',effective_when:'new_or_resumed_session'}]},
- snapshot:{version:'p1',context:'Development',saved:{'/orchestrator/model':'muse-spark-1.3-contributor'},effective:{'/task_concurrency':3},runtime_known:false}};
+ descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.project/v1',adapter_version:'1',suggestions:{configs:[{value:'glm',group:'Together AI',detail:'GLM-5.3 orchestrating, GLM-5.3 Flash working, DeepSeek V4.1 Flash narrating'},{value:'anthropic-med',group:'Anthropic',detail:'Claude Opus 5.5 orchestrating, Claude Sonnet 5.5 working, Claude Haiku 4.5 narrating'}]},fields:[
+  projectField('/preset','Preset','Models','Configuration',{type:'string',enum:['glm','anthropic-med']},{suggest:{list:'configs'}}),
+  projectField('/orchestrator/model','Model','Models','Orchestrator',{type:'string',max_length:200}),
+  projectField('/orchestrator/base_url','Base URL','Models','Orchestrator',{type:'string',max_length:8192},{advanced:true}),
+  projectField('/task_concurrency','Tasks at once','Behavior','Work',{type:'integer',minimum:1,maximum:128}),
+ ]},
+ snapshot:{version:'p1',context:'Development',saved:{'/preset':'glm','/orchestrator/model':'muse-spark-1.3-contributor'},effective:{'/preset':'glm','/orchestrator/model':'muse-spark-1.3-contributor','/orchestrator/base_url':'https://api.together.xyz/v1','/task_concurrency':3},runtime_known:false}};
 Object.assign(project,{id:'project',connector_id:'connector',key:'project-x',label:'Development',scope:'project',generation:'',updated_at:new Date().toISOString()});
 const manifest=fixture?JSON.parse(await readFile(path.join(fixture,'manifest.json'),'utf8')):null;
 const website=fixture?await readFile(path.join(fixture,'settings/index.html'),'utf8'):'';
@@ -82,35 +92,50 @@ try {
    if(running) {
     // Opens on this session, in FinaleChat's own form, with its real routes.
     await page.getByRole('button',{name:'This session',exact:true,pressed:true}).waitFor();
-    await page.getByLabel('Orchestrator model',{exact:true}).waitFor();
-    assert.equal(await page.getByLabel('Orchestrator model',{exact:true}).inputValue(),session.snapshot.saved['/routes/orchestrator/model']);
-    assert.equal(await page.getByLabel('Task model',{exact:true}).inputValue(),session.snapshot.saved['/routes/task/model']);
+    const model=actor=>page.getByRole('button',{name:new RegExp('^'+actor+' model: ')});
+    const card=title=>page.getByRole('region',{name:title,exact:true});
+    await model('Orchestrator').waitFor();
+    const saved=session.snapshot.saved;
+    const named=v=>models.find(m=>m.value===v)?.label??v;
+    const at=p=>providers.find(x=>x.value===p).label;
+    assert.match(await model('Orchestrator').getAttribute('aria-label'),new RegExp(`: ${named(saved['/routes/orchestrator/model'])} at ${at(saved['/routes/orchestrator/provider'])}\\.`));
+    assert.match(await model('Task').getAttribute('aria-label'),new RegExp(`: ${named(saved['/routes/task/model']).replace(/[./]/g,'\\$&')} at ${at(saved['/routes/task/provider'])}\\.`));
     assert.equal(await page.locator('iframe').count(),0,'the session panel must not frame an agent page');
-    assert.equal(await page.getByRole('button',{name:'Advanced',exact:true}).count(),0,'empty tab shown');
+    assert.equal(await page.getByRole('button',{name:'Other',exact:true}).count(),0,'a section nobody declared');
     await page.waitForTimeout(700); await page.screenshot({path:`${shots}/${name}-session.png`});
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'host overflow');
-    // The model field: typed, or picked from the provider's known models.
-    await page.getByRole('button',{name:/^Browse \d+ choices for Orchestrator model$/}).click();
-    const sheet=page.locator('.suggest-sheet');
-    await sheet.waitFor();
-    assert.equal(await sheet.locator('.item').count(),2,'only the picked provider\'s models');
+    // A model from any provider, found by every word typed.
+    await model('Orchestrator').click();
+    const picker=page.locator('.sf-picker');
+    await picker.waitFor();
+    assert.equal(await picker.locator('.sf-option').count(),models.length,'every provider\'s models');
     await page.waitForTimeout(500); await page.screenshot({path:`${shots}/${name}-model-picker.png`});
-    const pick=name==='phone'?'sonnet':'opus';
-    await sheet.getByPlaceholder('Search…').fill(pick);
-    await sheet.getByRole('button',{name:new RegExp('Claude '+(pick==='sonnet'?'Sonnet':'Opus')+' 5.5')}).click();
-    assert.equal(await page.getByLabel('Orchestrator model',{exact:true}).inputValue(),`claude-${pick}-5-5`);
-    await page.getByLabel('Task provider',{exact:true}).selectOption(name==='phone'?'openrouter':'anthropic');
-    await page.getByRole('button',{name:'Browse 2 choices for Task model'}).waitFor();
-    await page.getByLabel('Task model',{exact:true}).fill(`some/new-model-${name}`);
-    await page.getByLabel('Task reasoning effort',{exact:true}).selectOption('xhigh');
+    const pick=name==='phone'?'Sonnet':'Opus';
+    await picker.getByRole('searchbox').fill(`${pick.toLowerCase()} anthropic`);
+    assert.equal(await picker.locator('.sf-option').count(),2,'the match, and typing it as an id');
+    await picker.getByRole('button',{name:new RegExp(`^Claude ${pick} 5\\.5`)}).click();
+    assert.match(await model('Orchestrator').getAttribute('aria-label'),new RegExp(`Claude ${pick} 5\\.5 at Anthropic`));
+    // Any id, at the provider chosen in the picker.
+    const provider=name==='phone'?'Anthropic':'OpenRouter';
+    await model('Task').click();
+    await picker.getByRole('button',{name:new RegExp(`^${provider}`)}).click();
+    await picker.getByRole('searchbox').fill(`some/new-model-${name}`);
+    await picker.getByRole('button',{name:/^Use “/}).click();
+    assert.match(await model('Task').getAttribute('aria-label'),new RegExp(`some/new-model-${name} at ${provider}`));
+    await card('Task').getByRole('radio',{name:name==='phone'?'xhigh':'max',exact:true}).click();
+    await card('Task').getByText('Unsaved',{exact:true}).waitFor();
     await page.getByRole('button',{name:'Behavior',exact:true}).click();
-    await page.getByLabel('Task workers at once',{exact:true}).fill(name==='phone'?'5':'6');
+    await page.getByLabel('Tasks at once',{exact:true}).fill(name==='phone'?'5':'6');
+    await page.getByText('5 unsaved changes',{exact:true}).waitFor();
+    await page.getByText('Orchestrator: model · Task: model, provider, reasoning effort · Work: tasks at once',{exact:true}).waitFor();
+    await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-session-changed.png`});
     await page.getByRole('button',{name:'Save',exact:true}).click();
     await page.getByText('Saved · next task',{exact:true}).waitFor();
     const sent=commands[commands.length-1];
     assert.equal(sent.resource,'session');assert.equal(sent.surface_lease_id,undefined);
     assert.deepEqual(sent.proposal.edits.map(e=>e.key).sort(),['/routes/orchestrator/model','/routes/task/effort','/routes/task/model','/routes/task/provider','/task_concurrency']);
     assert.equal(sent.proposal.edits.find(e=>e.key==='/routes/task/model').value,`some/new-model-${name}`);
+    assert.equal(sent.proposal.edits.find(e=>e.key==='/routes/task/provider').value,provider.toLowerCase());
    } else {
     // Not running: say so; never fall back to showing project defaults.
     await page.getByRole('heading',{name:'This session isn’t running'}).waitFor();
@@ -122,6 +147,22 @@ try {
    await page.getByText('Development · project defaults',{exact:true}).waitFor();
    await page.getByText('Defaults for new or resumed sessions.',{exact:true}).waitFor();
    await page.waitForTimeout(700); await page.screenshot({path:`${shots}/${name}-${running?'':'idle-'}project.png`});
+   if(!fixture && running && name==='phone') {
+    // A project default set here goes back to the default from the same list.
+    const presets=page.getByRole('region',{name:'Configuration',exact:true});
+    await presets.getByRole('radio',{name:/^anthropic-med/}).click();
+    await page.getByText('1 unsaved change',{exact:true}).waitFor();
+    assert.equal(await presets.getByRole('radio',{name:/^Default/}).isEnabled(),true);
+    await presets.getByRole('radio',{name:/^Default/}).click();
+    await page.getByText('Configuration: preset',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Save',exact:true}).click();
+    await page.getByText('Saved · new or resumed sessions',{exact:true}).waitFor();
+    assert.deepEqual(commands[commands.length-1].proposal.edits,[{op:'unset',key:'/preset'}]);
+    // Rarely changed settings wait behind a link.
+    assert.equal(await page.getByLabel('Base URL').count(),0);
+    await page.getByRole('button',{name:'Show 1 advanced setting',exact:true}).click();
+    await page.getByLabel('Base URL').waitFor();
+   }
    if(fixture && running) {
     // The agent's own editor, opened on request; one Save still submits.
     await page.getByRole('button',{name:'Open eagent’s own editor',exact:true}).click();
@@ -143,6 +184,6 @@ try {
    await page.close();
   }
  }
- assert.equal(commands.length,fixture?4:2);assert.deepEqual(errors,[]);
+ assert.equal(commands.length,fixture?4:3);assert.deepEqual(errors,[]);
  console.log(`PASS thread settings: session first, project on request${fixture?', agent editor optional':''}; screenshots in ${shots}`);
 } finally {await browser.close();await server.close();}
