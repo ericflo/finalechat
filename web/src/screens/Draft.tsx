@@ -417,10 +417,17 @@ function chipText(summary: ReturnType<typeof formSummary>): string {
  * left alone comes from the project (or from the configuration chosen). */
 function StartOptionsSheet({ form, onReset, onClose }: { form: FormModel; onReset: () => void; onClose: () => void }) {
   const any = form.items.some((i) => form.state(i.key).set);
+  // The first choice (the configuration) stays in view while the rest scroll.
+  const [first] = formSummary(form);
   return (
     <Sheet onClose={onClose} label="Session options" className="start-sheet">
       <div className="start-sheet-head">
         <h2>This session</h2>
+        {first && first.text ? (
+          <p className={`start-sheet-status${first.changed ? " changed" : ""}`} aria-live="polite">
+            {first.title}: <strong>{first.text}</strong>
+          </p>
+        ) : null}
         <p>For this new session only. Anything you leave alone comes from the project.</p>
       </div>
       <div className="start-sheet-body">

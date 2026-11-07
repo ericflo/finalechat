@@ -88,9 +88,17 @@ try {
   const card=title=>title==='Configuration'?sheet.locator('.sf-card').filter({has:page.locator('label',{hasText:/^Configuration$/})}):sheet.getByRole('region',{name:title,exact:true});
   const badge=(title,text)=>card(title).locator('.sf-badge').filter({hasText:new RegExp('^'+text+'$')}).first().waitFor();
   await badge('Task','Default');
-  // A preset: what it runs shows on every card before anything starts...
   const choice=name=>card('Configuration').getByRole('radio',{name});
+  const checked=async name=>assert.equal(await choice(name).getAttribute('aria-checked'),'true');
+  // Changing one thing on the project's own lineup makes it Custom...
+  await card('Task').getByRole('radio',{name:'high',exact:true}).click();
+  await badge('Configuration','Custom');
+  await checked(/^Custom Based on the default \(glm\): Task changed/);
+  // ...and a preset sets everything, like a game's graphics preset: what it
+  // runs shows on every card before anything starts.
   await choice(/^anthropic-med/).click();
+  await badge('Task','From anthropic-med');
+  assert.equal(await card('Task').getByRole('radio',{name:'medium',exact:true}).getAttribute('aria-checked'),'true');
   await badge('Configuration','Changed');
   await badge('Task','From anthropic-med');
   assert.match(await page.getByRole('button',{name:/^Task model: /}).getAttribute('aria-label'),/Claude Sonnet 5\.5 at Anthropic/);
@@ -112,6 +120,23 @@ try {
   await picker.getByRole('button',{name:/^Kimi K3/}).click();
   assert.match(await page.getByRole('button',{name:/^Task model: /}).getAttribute('aria-label'),/Kimi K3 at OpenRouter/);
   await badge('Task','Changed');
+  // One model changed: the preset reads Custom, and the rest stay as it set them.
+  await badge('Configuration','Custom');
+  await checked(/^Custom Based on anthropic-med: Task changed/);
+  await badge('Orchestrator','From anthropic-med');
+  await page.waitForTimeout(500); await page.screenshot({path:`${shots}/${name}-custom.png`});
+  // Back to exactly the preset, from the card or by picking it again.
+  await card('Task').getByRole('button',{name:'Back to anthropic-med',exact:true}).click();
+  await badge('Configuration','Changed');
+  await checked(/^anthropic-med/);
+  await page.getByRole('button',{name:/^Task model: /}).click();
+  await picker.getByRole('searchbox').fill('kimi');
+  await picker.getByRole('button',{name:/^Kimi K3/}).click();
+  await choice(/^anthropic-med/).click();
+  assert.match(await page.getByRole('button',{name:/^Task model: /}).getAttribute('aria-label'),/Claude Sonnet 5\.5 at Anthropic/);
+  await page.getByRole('button',{name:/^Task model: /}).click();
+  await picker.getByRole('searchbox').fill('kimi');
+  await picker.getByRole('button',{name:/^Kimi K3/}).click();
   // Any id can be typed in, at the provider shown.
   await page.getByRole('button',{name:/^Narrator model: /}).click();
   await picker.getByRole('searchbox').fill('some/typed-model');
@@ -125,7 +150,8 @@ try {
   await page.waitForTimeout(500); await page.screenshot({path:`${shots}/${name}-options.png`});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'overflow');
   await page.getByRole('button',{name:'Done',exact:true}).click();
-  await chip.getByText('anthropic-med · Orchestrator, Task +1 changed',{exact:true}).waitFor();
+  await chip.getByText('Custom (anthropic-med) · Orchestrator, Task +1 changed',{exact:true}).waitFor();
+  await summary.getByText('Custom (anthropic-med)',{exact:true}).waitFor();
   await summary.getByText('Kimi K3 · medium',{exact:true}).waitFor();
   await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-draft.png`});
   await page.getByPlaceholder('What should it do?').fill('do the thing');

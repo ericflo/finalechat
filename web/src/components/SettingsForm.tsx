@@ -34,6 +34,9 @@ export interface ItemState {
   fallback?: unknown;
   /** Where that comes from, when it is not simply the default. */
   fallbackFrom?: string;
+  /** For a choice that sets others (a preset and its models): the ones
+   * changed since, by card. Non-empty means it reads as Custom. */
+  custom?: string[];
 }
 
 /** A form over any settings source: the items, their state, and how to change them. */
@@ -112,6 +115,15 @@ export function startModel(descriptor: SettingsDescriptor, action: SettingsActio
     return schema ? [{ key: i.name, label: i.label, description: i.description, schema, suggest: i.suggest, group: i.group, writable: true, resettable: true }] : [];
   });
   const usable = (k: string, v: unknown) => v !== undefined && items.some((i) => i.key === k && !validateShape(i.schema, v));
+  // An input whose choices imply others (a configuration, and the models it
+  // runs) governs them, like a graphics preset: choosing it resets them to
+  // what it implies, and changing one afterwards makes it read as Custom.
+  const governs: Record<string, string[]> = {};
+  for (const i of inputs) {
+    const keys = new Set<string>();
+    for (const sug of i.suggest ? (lists[i.suggest.list] ?? []) : []) for (const k of Object.keys(sug.implies ?? {})) if (k !== i.name && items.some((x) => x.key === k)) keys.add(k);
+    if (keys.size) governs[i.name] = [...keys];
+  }
   const fallbackOf = (k: string, vals: Record<string, unknown>): { value: unknown; from?: string } | undefined => {
     const implied = (chosen: boolean) => {
       for (const i of inputs) {
@@ -130,17 +142,21 @@ export function startModel(descriptor: SettingsDescriptor, action: SettingsActio
     lists,
     state: (k) => {
       const fb = fallbackOf(k, values);
-      return usable(k, values[k]) ? { value: values[k], set: true, pending: false, fallback: fb?.value, fallbackFrom: fb?.from } : { value: fb?.value, set: false, pending: false, fallback: fb?.value, fallbackFrom: fb?.from };
+      const changed = (governs[k] ?? []).filter((g) => usable(g, values[g])).map((g) => items.find((i) => i.key === g)!);
+      const custom = changed.length ? [...new Set(changed.map((i) => i.group || i.label))] : undefined;
+      return usable(k, values[k]) ? { value: values[k], set: true, pending: false, fallback: fb?.value, fallbackFrom: fb?.from, custom } : { value: fb?.value, set: false, pending: false, fallback: fb?.value, fallbackFrom: fb?.from, custom };
     },
     set: (changes) => {
       const next: Record<string, unknown> = { ...values, ...changes };
-      // Choosing what it would be anyway is leaving it alone.
-      for (const k of Object.keys(changes)) if (fallbackOf(k, next) !== undefined && same(fallbackOf(k, next)!.value, next[k])) delete next[k];
+      for (const k of Object.keys(changes)) for (const g of governs[k] ?? []) if (!Object.hasOwn(changes, g)) delete next[g];
+      // Choosing what it would be anyway is leaving it alone (a preset,
+      // though, stays chosen).
+      for (const k of Object.keys(changes)) if (!governs[k] && fallbackOf(k, next) !== undefined && same(fallbackOf(k, next)!.value, next[k])) delete next[k];
       onChange(next);
     },
     reset: (keys) => {
       const next = { ...values };
-      for (const k of keys) delete next[k];
+      for (const k of keys) for (const g of [k, ...(governs[k] ?? [])]) delete next[g];
       onChange(next);
     },
   };
@@ -162,8 +178,8 @@ export function startParameters(model: FormModel): Record<string, unknown> {
 export function formSummary(model: FormModel): { title: string; text: string; changed: boolean }[] {
   return blocksOf(model.items).map((b) => {
     const targets = new Set(b.items.flatMap((i) => (i.suggest?.group_by ? [i.suggest.group_by] : [])));
-    const parts = b.items.filter((i) => !targets.has(i.key) && !i.advanced).map((i) => labelOf(model, i.key, model.state(i.key).value)).filter((t) => t !== "—");
-    return { title: b.group || b.first.label, text: parts.join(" · "), changed: b.items.some((i) => model.state(i.key).set || model.state(i.key).pending) };
+    const parts = b.items.filter((i) => !targets.has(i.key) && !i.advanced).map((i) => (model.state(i.key).custom ? `Custom (${labelOf(model, i.key, model.state(i.key).value)})` : labelOf(model, i.key, model.state(i.key).value))).filter((t) => t !== "—");
+    return { title: b.group || b.first.label, text: parts.join(" · "), changed: b.items.some((i) => model.state(i.key).set || model.state(i.key).pending || !!model.state(i.key).custom) };
   });
 }
 
@@ -231,8 +247,9 @@ export function SettingsForm({ model, empty }: { model: FormModel; empty?: React
   );
 }
 
-function Status({ pending, set, resettable, from }: { pending: boolean; set: boolean; resettable: boolean; from?: string }) {
+function Status({ pending, set, resettable, from, custom }: { pending: boolean; set: boolean; resettable: boolean; from?: string; custom?: boolean }) {
   if (pending) return <span className="sf-badge unsaved">Unsaved</span>;
+  if (custom) return <span className="sf-badge custom">Custom</span>;
   if (!resettable) return null;
   if (set) return <span className="sf-badge custom">Changed</span>;
   return <span className="sf-badge">{from ? `From ${from}` : "Default"}</span>;
@@ -243,7 +260,16 @@ function CardActions({ model, items }: { model: FormModel; items: FormItem[] }) 
   const pending = writable.filter((i) => model.state(i.key).pending);
   const set = writable.filter((i) => i.resettable && model.state(i.key).set);
   if (pending.length && model.revert) return <button type="button" className="sf-link" onClick={() => model.revert!(pending.map((i) => i.key))}>Undo</button>;
-  if (set.length) return <button type="button" className="sf-link" onClick={() => model.reset(set.map((i) => i.key))}>Use default</button>;
+  // A preset changed since: back to exactly what it sets.
+  const custom = writable.find((i) => model.state(i.key).custom);
+  if (custom) {
+    const st = model.state(custom.key);
+    return <button type="button" className="sf-link" onClick={() => (st.set ? model.set({ [custom.key]: st.value }) : model.reset([custom.key]))}>Back to {labelOf(model, custom.key, st.value)}</button>;
+  }
+  if (set.length) {
+    const from = set.map((i) => model.state(i.key).fallbackFrom);
+    return <button type="button" className="sf-link" onClick={() => model.reset(set.map((i) => i.key))}>{from[0] && from.every((f) => f === from[0]) ? `Back to ${from[0]}` : "Use default"}</button>;
+  }
   return null;
 }
 
@@ -254,8 +280,19 @@ function GroupCard({ model, title, items }: { model: FormModel; title: string; i
   const states = items.map((i) => model.state(i.key));
   const set = items.some((i, n) => i.resettable && !!states[n]?.set);
   const from = states.find((s) => !s.set && s.fallbackFrom)?.fallbackFrom;
+  // A card whose values change under you (a preset picked) says so.
+  const signature = JSON.stringify(states.map((s) => s.value));
+  const seen = useRef(signature);
+  const [flash, setFlash] = useState(false);
+  useEffect(() => {
+    if (seen.current === signature) return;
+    seen.current = signature;
+    setFlash(true);
+    const t = window.setTimeout(() => setFlash(false), 900);
+    return () => window.clearTimeout(t);
+  }, [signature]);
   return (
-    <section className={`sf-card${states.some((s) => s.pending) ? " pending" : ""}`} aria-label={title}>
+    <section className={`sf-card${states.some((s) => s.pending) ? " pending" : ""}${flash ? " flash" : ""}`} aria-label={title}>
       <header>
         <h4>{title}</h4>
         <Status pending={states.some((s) => s.pending)} set={set} resettable={items.some((i) => i.resettable)} from={from} />
@@ -272,7 +309,7 @@ function SingleCard({ model, item }: { model: FormModel; item: FormItem }) {
   const st = model.state(item.key);
   return (
     <section className={`sf-card single${st.pending ? " pending" : ""}`}>
-      <Row model={model} item={item} status={<Status pending={st.pending} set={st.set} resettable={item.resettable} from={st.fallbackFrom} />} actions={<CardActions model={model} items={[item]} />} />
+      <Row model={model} item={item} status={<Status pending={st.pending} set={st.set} resettable={item.resettable} from={st.fallbackFrom} custom={!!st.custom} />} actions={<CardActions model={model} items={[item]} />} />
     </section>
   );
 }
@@ -281,7 +318,7 @@ function Row({ model, item, inCard, own: ownLinks, status, actions }: { model: F
   const st = model.state(item.key);
   const id = `sf-${item.key.replace(/[^\w-]/g, "_")}`;
   // Inside a card, each setting can still go back on its own.
-  const own = inCard && ownLinks && item.writable ? (st.pending && model.revert ? <button type="button" className="sf-link small" onClick={() => model.revert!([item.key])}>Undo</button> : item.resettable && st.set ? <button type="button" className="sf-link small" onClick={() => model.reset([item.key])}>Use default</button> : null) : null;
+  const own = inCard && ownLinks && item.writable ? (st.pending && model.revert ? <button type="button" className="sf-link small" onClick={() => model.revert!([item.key])}>Undo</button> : item.resettable && st.set ? <button type="button" className="sf-link small" onClick={() => model.reset([item.key])}>{st.fallbackFrom ? `Back to ${st.fallbackFrom}` : "Use default"}</button> : null) : null;
   const note = [item.description, !item.writable ? item.lockedReason || "Read only" : item.timing].filter(Boolean).join(" · ");
   return (
     <div className={`sf-row${inCard ? " in-card" : ""}`}>
@@ -350,16 +387,26 @@ function ChoiceList({ model, item, id, list }: { model: FormModel; item: FormIte
   const st = model.state(item.key);
   const fallback = st.fallback !== undefined ? suggestion(list, st.fallback) : undefined;
   const rows = (item.schema.enum ?? []).map((v) => ({ v, s: suggestion(list, v) }));
+  const custom = customLine(model, item);
   return (
     <div className="sf-choices" role="radiogroup" id={id} aria-labelledby={`${id}-label`}>
+      {custom && <Choice on disabled={!item.writable} title="Custom" detail={custom} onClick={() => undefined} />}
       {item.resettable && (
-        <Choice on={!st.set} disabled={!item.writable} title="Default" detail={st.fallback !== undefined ? [fallback?.label || show(st.fallback), fallback?.detail].filter(Boolean).join(" — ") : undefined} onClick={() => model.reset([item.key])} />
+        <Choice on={!st.set && !custom} disabled={!item.writable} title="Default" detail={st.fallback !== undefined ? [fallback?.label || show(st.fallback), fallback?.detail].filter(Boolean).join(" — ") : undefined} onClick={() => model.reset([item.key])} />
       )}
       {rows.map(({ v, s }) => (
-        <Choice key={JSON.stringify(v)} on={(st.set || !item.resettable) && same(st.value, v)} disabled={!item.writable} title={s?.label || (v === "" ? "None" : show(v))} detail={s?.detail} onClick={() => model.set({ [item.key]: v })} />
+        <Choice key={JSON.stringify(v)} on={!custom && (st.set || !item.resettable) && same(st.value, v)} disabled={!item.writable} title={s?.label || (v === "" ? "None" : show(v))} detail={s?.detail} onClick={() => model.set({ [item.key]: v })} />
       ))}
     </div>
   );
+}
+
+/** "Based on openai-high: Narrator changed", for a preset changed since. */
+function customLine(model: FormModel, item: FormItem): string | undefined {
+  const st = model.state(item.key);
+  if (!st.custom) return undefined;
+  const name = labelOf(model, item.key, st.value);
+  return `Based on ${st.set ? name : st.value !== undefined ? `the default (${name})` : "the default"}: ${st.custom.join(", ")} changed`;
 }
 
 function Choice({ on, title, detail, disabled, onClick }: { on: boolean; title: string; detail?: string; disabled: boolean; onClick: () => void }) {
@@ -472,8 +519,9 @@ function PickerButton({ model, item, id, list: all }: { model: FormModel; item: 
   const group = by ? model.state(by.key).value : undefined;
   const hit = suggestion(list, st.value, group);
   const groupName = by && typeof group === "string" ? labelOf(model, by.key, group) : "";
-  const main = hit?.label || show(st.value);
-  const sub = [groupName, hit?.label && hit.label !== st.value ? show(st.value) : "", hit?.detail].filter(Boolean).join(" · ");
+  const custom = customLine(model, item);
+  const main = custom ? "Custom" : hit?.label || show(st.value);
+  const sub = custom ?? [groupName, hit?.label && hit.label !== st.value ? show(st.value) : "", hit?.detail].filter(Boolean).join(" · ");
   return (
     <>
       <button id={id} type="button" className="sf-pick" disabled={!item.writable} aria-label={`${fullLabel(item)}: ${main}${groupName ? ` at ${groupName}` : ""}. Change`} onClick={() => setOpen(true)}>
@@ -487,12 +535,13 @@ function PickerButton({ model, item, id, list: all }: { model: FormModel; item: 
         <PickerSheet
           title={fullLabel(item)}
           list={list}
-          current={typeof st.value === "string" && (st.set || st.pending || !item.resettable) ? st.value : ""}
+          current={typeof st.value === "string" && !custom && (st.set || st.pending || !item.resettable) ? st.value : ""}
+          customNote={custom}
           currentGroup={typeof group === "string" ? group : undefined}
           fallback={typeof st.fallback === "string" ? st.fallback : undefined}
           groups={by ? groupChoices(model, by.key, list) : listGroups(list)}
           allowCustom={!item.schema.enum}
-          defaultRow={item.resettable && !by ? { on: !st.set && !st.pending, detail: st.fallback !== undefined ? [suggestion(list, st.fallback)?.label || show(st.fallback), suggestion(list, st.fallback)?.detail].filter(Boolean).join(" — ") : undefined, pick: () => { model.reset([item.key]); setOpen(false); } } : undefined}
+          defaultRow={item.resettable && !by ? { on: !st.set && !st.pending && !custom, detail: st.fallback !== undefined ? [suggestion(list, st.fallback)?.label || show(st.fallback), suggestion(list, st.fallback)?.detail].filter(Boolean).join(" — ") : undefined, pick: () => { model.reset([item.key]); setOpen(false); } } : undefined}
           onPick={(value, g) => {
             const changes: Record<string, unknown> = { [item.key]: value };
             if (by && g !== undefined && g !== group && (!by.schema.enum || by.schema.enum.includes(g))) changes[by.key] = g;
@@ -519,7 +568,7 @@ function groupChoices(model: FormModel, key: string, list: Suggestion[]): { valu
   return values.map((v) => ({ value: v, label: labelOf(model, key, v) }));
 }
 
-function PickerSheet({ title, list, current, currentGroup, fallback, groups, allowCustom, defaultRow, onPick, onClose }: { title: string; list: Suggestion[]; current: string; currentGroup?: string; fallback?: string; groups: { value: string; label: string }[]; allowCustom: boolean; defaultRow?: { on: boolean; detail?: string; pick: () => void }; onPick: (value: string, group?: string) => void; onClose: () => void }) {
+function PickerSheet({ title, list, current, currentGroup, fallback, groups, allowCustom, defaultRow, customNote, onPick, onClose }: { title: string; list: Suggestion[]; current: string; currentGroup?: string; fallback?: string; groups: { value: string; label: string }[]; allowCustom: boolean; defaultRow?: { on: boolean; detail?: string; pick: () => void }; customNote?: string; onPick: (value: string, group?: string) => void; onClose: () => void }) {
   const [query, setQuery] = useState("");
   const counts = useMemo(() => {
     const m = new Map<string, number>();
@@ -590,6 +639,15 @@ function PickerSheet({ title, list, current, currentGroup, fallback, groups, all
           </div>
         )}
         <div className="sf-options">
+          {customNote && !q && !only && (
+            <div className="sf-option on" aria-current="true">
+              <span className="sf-option-text">
+                <span>Custom</span>
+                <small>{customNote}. Pick a preset to start over from it.</small>
+              </span>
+              <IconCheck className="sf-option-check" aria-hidden="true" />
+            </div>
+          )}
           {defaultRow && !q && !only && (
             <button type="button" className={`sf-option${defaultRow.on ? " on" : ""}`} aria-current={defaultRow.on || undefined} onClick={defaultRow.pick}>
               <span className="sf-option-text">

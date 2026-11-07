@@ -215,7 +215,9 @@ type Suggestion struct {
 	Detail string `json:"detail,omitempty"`
 	// Implies gives the values other fields (by key) or inputs (by name) of
 	// the same form take when this value is chosen and they are left alone,
-	// so a client can show what a choice brings with it. Display only.
+	// so a client can show what a choice brings with it. A client treats the
+	// choice like a preset: choosing it puts those back to what it implies,
+	// and changing one afterwards shows it as Custom, based on that value.
 	Implies map[string]any `json:"implies,omitempty"`
 }
 type Action struct {
