@@ -1,6 +1,8 @@
 package control
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -130,6 +132,20 @@ func TestFormLayoutAndImpliedValues(t *testing.T) {
 	}
 	if err := d.Validate(g); err != nil {
 		t.Fatal(err)
+	}
+	// As published: the API decodes numbers as json.Number.
+	raw, _ := json.Marshal(d)
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var published Descriptor
+	if err := dec.Decode(&published); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := published.Suggestions["configs"][1].Implies["n"].(json.Number); !ok {
+		t.Fatalf("implied number decoded as %T", published.Suggestions["configs"][1].Implies["n"])
+	}
+	if err := published.Validate(g); err != nil {
+		t.Fatalf("published descriptor: %v", err)
 	}
 	for name, mutate := range map[string]func(*Descriptor){
 		"default outside the enum":  func(d *Descriptor) { d.Actions[0].Inputs[0].Default = "c" },
