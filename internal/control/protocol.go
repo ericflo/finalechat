@@ -218,6 +218,9 @@ type Suggestion struct {
 	// so a client can show what a choice brings with it. A client treats the
 	// choice like a preset: choosing it puts those back to what it implies,
 	// and changing one afterwards shows it as Custom, based on that value.
+	// On a field, the client unsets those set separately (where they can be
+	// unset), and the agent applying the choice gives the rest their implied
+	// values unless the same proposal sets them.
 	Implies map[string]any `json:"implies,omitempty"`
 }
 type Action struct {

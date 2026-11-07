@@ -8961,7 +8961,7 @@
                 "null"
               ]
             },
-            "description": "Values other fields (by key) or inputs (by name) of the same form take when this value is chosen and they are left alone. The app treats the choice like a preset: choosing it puts those back to these values; changing one afterwards shows it as Custom."
+            "description": "Values other fields (by key) or inputs (by name) of the same form take when this value is chosen and they are left alone. The app treats the choice like a preset: choosing it puts those back to these values; changing one afterwards shows it as Custom. On a field, the app unsets those set separately (where they can be unset), and the agent applying the choice gives the rest these values unless the same proposal sets them."
           }
         },
         "required": [

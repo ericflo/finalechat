@@ -3,7 +3,7 @@ import { Sheet } from "./Common";
 import { IconClose, IconEdit } from "./Icons";
 import { toast, updateThread, useStore } from "../lib/store";
 import { SettingsForm, resourceModel } from "./SettingsForm";
-import { artifactAPI, controlAPI, effectLabel, validateProposal, type ArtifactRevision, type SettingEdit, type SettingField, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
+import { artifactAPI, controlAPI, effectLabel, validateProposal, type ArtifactRevision, type SettingEdit, type SettingsDescriptor, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
 import { connectArtifactFrame } from "../lib/artifact-bridge";
 import "./thread-settings.css";
 
@@ -223,7 +223,7 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
   const session = link.scope === "session";
   const unavailable = !view?.online || session && !view.resource.snapshot.runtime_known;
   const action = view?.resource.descriptor.actions?.find(a => a.operation === proposal?.operation);
-  const changes = changeList(view?.resource.descriptor.fields ?? [], proposal?.operation === "settings.apply" ? proposal.edits ?? [] : []);
+  const changes = changeList(view?.resource.descriptor, proposal?.operation === "settings.apply" ? proposal.edits ?? [] : []);
   return <>
     <div className="ts-context"><span className={`ts-dot ${unavailable ? "offline" : ""}`} /><strong>{providerName(link.provider)}</strong><span>{session ? "This session" : link.scope === "user" ? "User defaults" : `${link.label} · project defaults`}</span><span className="ts-connection">{!view ? "" : unavailable ? (session ? "Not running" : "Offline") : "Connected"}</span></div>
     <div className="ts-body">
@@ -239,13 +239,21 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
   </>;
 }
 
-/** What unsaved edits touch, by card: "Task: model, provider · Work: tasks at once". */
-function changeList(fields: SettingField[], edits: SettingEdit[]): { length: number; summary: string } {
+/** What unsaved edits touch, by card: "Task: model, provider · Work: tasks
+ * at once". A preset chosen says what it sets: "Configuration: preset
+ * anthropic-high (sets Orchestrator, Task, Narrator)". */
+function changeList(descriptor: SettingsDescriptor | undefined, edits: SettingEdit[]): { length: number; summary: string } {
+  const fields = descriptor?.fields ?? [];
   const byGroup = new Map<string, string[]>();
   for (const e of edits) {
     const f = fields.find(x => x.key === e.key);
     const group = f?.group ?? "";
-    const label = f ? (f.group && /^[A-Z][a-z]/.test(f.label) ? f.label.charAt(0).toLowerCase() + f.label.slice(1) : f.label) : e.key;
+    let label = f ? (f.group && /^[A-Z][a-z]/.test(f.label) ? f.label.charAt(0).toLowerCase() + f.label.slice(1) : f.label) : e.key;
+    const s = e.op === "set" && f?.suggest ? descriptor?.suggestions?.[f.suggest.list]?.find(x => x.value === e.value) : undefined;
+    if (s?.implies) {
+      const sets = [...new Set(fields.filter(g => Object.hasOwn(s.implies!, g.key)).map(g => g.group || g.label))];
+      label += ` ${s.label || s.value}${sets.length ? ` (sets ${sets.join(", ")})` : ""}`;
+    }
     byGroup.set(group, [...(byGroup.get(group) ?? []), label]);
   }
   return { length: edits.length, summary: [...byGroup].map(([g, labels]) => (g ? `${g}: ${labels.join(", ")}` : labels.join(", "))).join(" · ") };
