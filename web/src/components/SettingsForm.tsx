@@ -37,6 +37,10 @@ export interface ItemState {
   /** For a choice that sets others (a preset and its models): the ones
    * changed since, by card. Non-empty means it reads as Custom. */
   custom?: string[];
+  /** Set by such a choice (named), and still at its value. */
+  follows?: string;
+  /** Set by such a choice (named), and changed since. */
+  departs?: string;
 }
 
 /** A form over any settings source: the items, their state, and how to change them. */
@@ -73,35 +77,92 @@ export function labelOf(model: FormModel, key: string, value: unknown): string {
 const timingNote = (when: string) => (when === "next_turn" || when === "next_task" || when === "restart_required" ? `Takes effect: ${(effectLabel[when] ?? when).toLowerCase()}` : undefined);
 
 /** A settings resource as a form. Edits collect into one settings.apply
- * proposal, kept against the version they began from. */
+ * proposal, kept against the version they began from.
+ *
+ * A field whose choices imply others' values (a preset, and the models it
+ * runs) governs them like a graphics preset: choosing it shows them at its
+ * values and puts any set otherwise back to them, and a change to one
+ * afterwards makes it read as Custom, based on it. */
 export function resourceModel(r: SettingsResource, proposal: SettingsProposal | null, onProposal: (p: SettingsProposal | null) => void): FormModel {
   const edits = proposal?.operation === "settings.apply" ? (proposal.edits ?? []) : [];
+  const lists = r.descriptor.suggestions ?? {};
+  const fields = r.descriptor.fields;
   const saved = (k: string) => Object.hasOwn(r.snapshot.saved, k);
-  const field = (k: string) => r.descriptor.fields.find((f) => f.key === k);
-  const commit = (next: SettingEdit[]) =>
+  const field = (k: string) => fields.find((f) => f.key === k);
+  const base = (k: string) => (saved(k) ? r.snapshot.saved[k] : r.snapshot.effective[k]);
+  const editOf = (k: string) => edits.find((x) => x.key === k);
+  const governs: Record<string, string[]> = {};
+  // A choice that sets others is listed before what it sets.
+  const commit = (next: SettingEdit[]) => {
+    next = [...next.filter((e) => governs[e.key]), ...next.filter((e) => !governs[e.key])];
     onProposal(next.length ? { operation: "settings.apply", schema_version: proposal?.schema_version || r.descriptor.schema_version, expected_version: proposal?.expected_version || r.snapshot.version, generation: proposal?.generation ?? r.generation, edits: next } : null);
+  };
   const without = (keys: string[]) => edits.filter((e) => !keys.includes(e.key));
+  for (const f of fields) {
+    const keys = new Set<string>();
+    for (const sug of f.suggest ? (lists[f.suggest.list] ?? []) : []) for (const k of Object.keys(sug.implies ?? {})) if (k !== f.key && fields.some((x) => x.key === k)) keys.add(k);
+    if (keys.size) governs[f.key] = [...keys];
+  }
+  const governor = (k: string) => Object.keys(governs).find((g) => governs[g]!.includes(k));
+  // What the governing choice, as it stands with edits, gives a field.
+  const implied = (g: string, k: string, value?: unknown) => {
+    const e = editOf(g);
+    const v = value !== undefined ? value : e ? (e.op === "set" ? e.value : undefined) : base(g);
+    const f = field(g);
+    const s = f?.suggest ? suggestion(lists[f.suggest.list], v) : undefined;
+    return s?.implies && Object.hasOwn(s.implies, k) ? { value: s.implies[k], from: s.label || String(v) } : undefined;
+  };
+  const own = (k: string): ItemState => {
+    const e = editOf(k);
+    const g = governor(k);
+    // A choice just made, not yet saved, shows what it brings.
+    const imp = g ? implied(g, k) : undefined;
+    const fresh = !!imp && editOf(g!)?.op === "set";
+    const fallback = fresh ? imp!.value : saved(k) ? undefined : r.snapshot.effective[k];
+    const source = field(k)?.source;
+    const fallbackFrom = fresh ? imp!.from : !saved(k) && source && !/^(default|runtime:)/.test(source) ? source.replace(/^preset:/, "preset ").replace(/^env:/, "environment ") : undefined;
+    const st: ItemState = e ? { value: e.op === "set" ? e.value : fallback, set: e.op === "set", pending: true, fallback, fallbackFrom } : fresh ? { value: imp!.value, set: false, pending: false, fallback, fallbackFrom } : { value: base(k), set: saved(k), pending: false, fallback, fallbackFrom };
+    if (imp) {
+      if (same(st.value, imp.value)) st.follows = imp.from;
+      else st.departs = imp.from;
+    }
+    return st;
+  };
+  const state = (k: string): ItemState => {
+    const st = own(k);
+    const changed = (governs[k] ?? []).filter((g) => own(g).departs !== undefined).map((g) => fields.find((f) => f.key === g)!);
+    if (changed.length) st.custom = [...new Set(changed.map((f) => f.group || f.label))];
+    return st;
+  };
+  // Choosing a value of a governing field (again, too): what it governs goes
+  // back to what it implies. A saved field that can be unset is; the rest
+  // follow when the choice is saved.
+  const startOver = (next: SettingEdit[], g: string, keep: string[]) => {
+    const keys = (governs[g] ?? []).filter((k) => !keep.includes(k));
+    return [...next.filter((e) => !keys.includes(e.key)), ...keys.filter((k) => saved(k) && field(k)?.unset).map((k): SettingEdit => ({ op: "unset", key: k }))];
+  };
   return {
-    items: r.descriptor.fields.map((f) => ({ key: f.key, label: f.label, description: f.description, schema: f.schema, suggest: f.suggest, section: f.section, group: f.group, advanced: f.advanced, writable: f.writable, lockedReason: f.locked_reason, resettable: f.unset, timing: timingNote(f.effective_when) })),
-    lists: r.descriptor.suggestions ?? {},
-    state: (k) => {
-      const e = edits.find((x) => x.key === k);
-      const fallback = saved(k) ? undefined : r.snapshot.effective[k];
-      const source = field(k)?.source;
-      const fallbackFrom = !saved(k) && source && !/^(default|runtime:)/.test(source) ? source.replace(/^preset:/, "preset ").replace(/^env:/, "environment ") : undefined;
-      if (e) return { value: e.op === "set" ? e.value : fallback, set: e.op === "set", pending: true, fallback, fallbackFrom };
-      return { value: saved(k) ? r.snapshot.saved[k] : r.snapshot.effective[k], set: saved(k), pending: false, fallback, fallbackFrom };
-    },
+    items: fields.map((f) => ({ key: f.key, label: f.label, description: f.description, schema: f.schema, suggest: f.suggest, section: f.section, group: f.group, advanced: f.advanced, writable: f.writable, lockedReason: f.locked_reason, resettable: f.unset, timing: timingNote(f.effective_when) })),
+    lists,
+    state,
     set: (changes) => {
       let next = without(Object.keys(changes));
       for (const [k, v] of Object.entries(changes)) {
-        const base = saved(k) ? r.snapshot.saved[k] : r.snapshot.effective[k];
-        if (!same(v, base) || (!saved(k) && base === undefined)) next = [...next, { op: "set", key: k, value: v }];
+        const b = base(k);
+        // Chosen again with something changed since, a preset starts over.
+        const over = !!governs[k] && same(v, b) && (governs[k] ?? []).some((g) => saved(g) && !same(base(g), implied(k, g, v)?.value ?? base(g)));
+        if (governs[k]) next = startOver(next, k, Object.keys(changes));
+        if (!same(v, b) || over || (!saved(k) && b === undefined)) next = [...next, { op: "set", key: k, value: v }];
       }
       commit(next);
     },
-    reset: (keys) => commit([...without(keys), ...keys.filter((k) => saved(k) && field(k)?.unset).map((k): SettingEdit => ({ op: "unset", key: k }))]),
-    revert: (keys) => commit(without(keys)),
+    reset: (keys) => {
+      let next = without(keys);
+      for (const k of keys) if (governs[k]) next = startOver(next, k, keys);
+      commit([...next, ...keys.filter((k) => saved(k) && field(k)?.unset).map((k): SettingEdit => ({ op: "unset", key: k }))]);
+    },
+    // Undoing a choice undoes what it did to the fields it governs, too.
+    revert: (keys) => commit(without([...keys, ...keys.flatMap((k) => (editOf(k) ? (governs[k] ?? []) : []))])),
   };
 }
 
@@ -247,9 +308,11 @@ export function SettingsForm({ model, empty }: { model: FormModel; empty?: React
   );
 }
 
-function Status({ pending, set, resettable, from, custom }: { pending: boolean; set: boolean; resettable: boolean; from?: string; custom?: boolean }) {
+function Status({ pending, set, resettable, from, custom, follows, departs }: { pending: boolean; set: boolean; resettable: boolean; from?: string; custom?: boolean; follows?: string; departs?: boolean }) {
   if (pending) return <span className="sf-badge unsaved">Unsaved</span>;
   if (custom) return <span className="sf-badge custom">Custom</span>;
+  if (departs) return <span className="sf-badge custom">Changed</span>;
+  if (follows) return <span className="sf-badge">From {follows}</span>;
   if (!resettable) return null;
   if (set) return <span className="sf-badge custom">Changed</span>;
   return <span className="sf-badge">{from ? `From ${from}` : "Default"}</span>;
@@ -266,11 +329,32 @@ function CardActions({ model, items }: { model: FormModel; items: FormItem[] }) 
     const st = model.state(custom.key);
     return <button type="button" className="sf-link" onClick={() => (st.set ? model.set({ [custom.key]: st.value }) : model.reset([custom.key]))}>Back to {labelOf(model, custom.key, st.value)}</button>;
   }
+  // A setting a preset sets, changed since: back to the preset's value.
+  const departed = writable.filter((i) => model.state(i.key).departs !== undefined);
+  if (departed.length) return <button type="button" className="sf-link" onClick={() => backToPreset(model, departed)}>Back to {model.state(departed[0]!.key).departs}</button>;
   if (set.length) {
     const from = set.map((i) => model.state(i.key).fallbackFrom);
     return <button type="button" className="sf-link" onClick={() => model.reset(set.map((i) => i.key))}>{from[0] && from.every((f) => f === from[0]) ? `Back to ${from[0]}` : "Use default"}</button>;
   }
   return null;
+}
+
+/** Settings a preset sets go back to its values: unset where that gives
+ * them, else set to them. */
+function backToPreset(model: FormModel, items: FormItem[]) {
+  if (items.every((i) => i.resettable && model.state(i.key).set)) model.reset(items.map((i) => i.key));
+  else model.set(Object.fromEntries(items.map((i) => [i.key, presetValue(model, i.key)])));
+}
+
+/** What the preset a setting departs from gives it. */
+function presetValue(model: FormModel, key: string): unknown {
+  for (const g of model.items) {
+    const v = model.state(g.key).value;
+    const list = g.suggest ? model.lists[g.suggest.list] : undefined;
+    const s = suggestion(list, v);
+    if (s?.implies && Object.hasOwn(s.implies, key)) return s.implies[key];
+  }
+  return undefined;
 }
 
 function GroupCard({ model, title, items }: { model: FormModel; title: string; items: FormItem[] }) {
@@ -280,6 +364,9 @@ function GroupCard({ model, title, items }: { model: FormModel; title: string; i
   const states = items.map((i) => model.state(i.key));
   const set = items.some((i, n) => i.resettable && !!states[n]?.set);
   const from = states.find((s) => !s.set && s.fallbackFrom)?.fallbackFrom;
+  // Settings a preset sets: from it while they all still are, else changed.
+  const departs = states.some((s) => s.departs !== undefined);
+  const follows = !departs && states.some((s) => s.follows) ? states.find((s) => s.follows)?.follows : undefined;
   // A card whose values change under you (a preset picked) says so.
   const signature = JSON.stringify(states.map((s) => s.value));
   const seen = useRef(signature);
@@ -295,7 +382,7 @@ function GroupCard({ model, title, items }: { model: FormModel; title: string; i
     <section className={`sf-card${states.some((s) => s.pending) ? " pending" : ""}${flash ? " flash" : ""}`} aria-label={title}>
       <header>
         <h4>{title}</h4>
-        <Status pending={states.some((s) => s.pending)} set={set} resettable={items.some((i) => i.resettable)} from={from} />
+        <Status pending={states.some((s) => s.pending)} set={set} resettable={items.some((i) => i.resettable)} from={from} custom={states.some((s) => !!s.custom)} follows={follows} departs={departs} />
         <CardActions model={model} items={items} />
       </header>
       {members.map((i) => (
@@ -309,7 +396,7 @@ function SingleCard({ model, item }: { model: FormModel; item: FormItem }) {
   const st = model.state(item.key);
   return (
     <section className={`sf-card single${st.pending ? " pending" : ""}`}>
-      <Row model={model} item={item} status={<Status pending={st.pending} set={st.set} resettable={item.resettable} from={st.fallbackFrom} custom={!!st.custom} />} actions={<CardActions model={model} items={[item]} />} />
+      <Row model={model} item={item} status={<Status pending={st.pending} set={st.set} resettable={item.resettable} from={st.fallbackFrom} custom={!!st.custom} follows={st.follows} departs={st.departs !== undefined} />} actions={<CardActions model={model} items={[item]} />} />
     </section>
   );
 }
