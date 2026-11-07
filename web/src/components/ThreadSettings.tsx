@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Sheet } from "./Common";
 import { IconClose, IconEdit } from "./Icons";
 import { toast, updateThread, useStore } from "../lib/store";
-import { SettingInput } from "./IntegrationSettings";
-import { artifactAPI, controlAPI, effectLabel, suggestionsFor, validateProposal, type ArtifactRevision, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
+import { SettingsForm, resourceModel } from "./SettingsForm";
+import { artifactAPI, controlAPI, effectLabel, validateProposal, type ArtifactRevision, type SettingEdit, type SettingField, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
 import { connectArtifactFrame } from "../lib/artifact-bridge";
 import "./thread-settings.css";
 
@@ -223,36 +223,30 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
   const session = link.scope === "session";
   const unavailable = !view?.online || session && !view.resource.snapshot.runtime_known;
   const action = view?.resource.descriptor.actions?.find(a => a.operation === proposal?.operation);
+  const changes = changeList(view?.resource.descriptor.fields ?? [], proposal?.operation === "settings.apply" ? proposal.edits ?? [] : []);
   return <>
     <div className="ts-context"><span className={`ts-dot ${unavailable ? "offline" : ""}`} /><strong>{providerName(link.provider)}</strong><span>{session ? "This session" : link.scope === "user" ? "User defaults" : `${link.label} · project defaults`}</span><span className="ts-connection">{!view ? "" : unavailable ? (session ? "Not running" : "Offline") : "Connected"}</span></div>
     <div className="ts-body">
       {!view && !error && <p className="ts-message">Opening settings…</p>}
-      {view && (inSite ? <iframe ref={frame} title={`${providerName(link.provider)} settings`} className="ts-frame" sandbox="allow-scripts" referrerPolicy="no-referrer" src={`/api/v1/artifacts/${link.artifact_id}/revisions/${site!.revision.id}/preview?surface=settings`} onLoad={mount} /> : useSite ? <p className="ts-message">Opening {providerName(link.provider)}’s editor…</p> : <FocusedSettings view={view} proposal={proposal} onProposal={stage} />)}
+      {view && (inSite ? <iframe ref={frame} title={`${providerName(link.provider)} settings`} className="ts-frame" sandbox="allow-scripts" referrerPolicy="no-referrer" src={`/api/v1/artifacts/${link.artifact_id}/revisions/${site!.revision.id}/preview?surface=settings`} onLoad={mount} /> : useSite ? <p className="ts-message">Opening {providerName(link.provider)}’s editor…</p> : <div className="ts-form"><SettingsForm model={resourceModel(view.resource, proposal, stage)} /></div>)}
     </div>
     <footer className="ts-footer">
       {error && <p role="alert" className="ts-error">{error}</p>}
       {action && <p>{action.label}{action.class === "cost" ? " · Makes a paid provider request" : ""}</p>}
-      <div className="ts-save-row"><div aria-live="polite"><strong>{status || (proposal ? "Unsaved changes" : "You’re up to date")}</strong><small>{unavailable ? (session ? "Resume the session to change its settings." : "Reconnect the agent to save changes.") : session ? "Changes apply to this running session." : "Defaults for new or resumed sessions."}</small></div><button className="btn primary" disabled={!proposal || busy || unavailable} onClick={() => void save()}>{busy ? "Saving…" : action ? action.label : "Save"}</button></div>
+      <div className="ts-save-row"><div aria-live="polite"><strong>{status || (changes.length ? `${changes.length} unsaved change${changes.length === 1 ? "" : "s"}` : proposal ? "Unsaved changes" : "You’re up to date")}</strong><small>{unavailable ? (session ? "Resume the session to change its settings." : "Reconnect the agent to save changes.") : changes.length && !busy ? changes.summary : session ? "Changes apply to this running session." : "Defaults for new or resumed sessions."}</small></div>{proposal && !busy && !inSite && <button className="btn" onClick={() => stage(null)}>Discard</button>}<button className="btn primary" disabled={!proposal || busy || unavailable} onClick={() => void save()}>{busy ? "Saving…" : action ? action.label : "Save"}</button></div>
       {hasSite && <button className="ts-fallback" disabled={!!proposal || busy} onClick={() => { bridge.current?.close(); setUseSite(v => !v); }}>{useSite ? "Back to FinaleChat’s editor" : `Open ${providerName(link.provider)}’s own editor`}</button>}
     </footer>
   </>;
 }
 
-const groupOf = (key: string) => /model|reasoning|effort|route/i.test(key) ? "Models" : /permission|sandbox|approval|budget|turn|concurr|narrator|verbosity/i.test(key) ? "Behavior" : "Advanced";
-const groupTitle: Record<string, string> = { Models: "Choose how your agent thinks", Behavior: "Make it work your way", Advanced: "Fine-tune your setup" };
-
-/** The resource's fields, grouped into tabs; a tab with no fields is not shown. */
-function FocusedSettings({ view, proposal, onProposal }: { view: ResourceView; proposal: SettingsProposal | null; onProposal: (p: SettingsProposal | null) => void }) {
-  const { resource: r } = view;
-  const groups = ["Models", "Behavior", "Advanced"].filter(g => r.descriptor.fields.some(f => groupOf(f.key) === g));
-  const [picked, setTab] = useState("Models");
-  const [query, setQuery] = useState("");
-  const tab = groups.includes(picked) ? picked : groups[0] ?? "Models";
-  const inTab = r.descriptor.fields.filter(f => groupOf(f.key) === tab);
-  const fields = inTab.filter(f => `${f.key} ${f.label} ${f.description}`.toLowerCase().includes(query.toLowerCase()));
-  const valueOf = (key: string) => { const e = proposal?.edits?.find(x => x.key === key); return e ? (e.op === "set" ? e.value : undefined) : r.snapshot.saved[key] ?? r.snapshot.effective[key]; };
-  return <div className="ts-focused">{groups.length > 1 && <nav className="ts-tabs" aria-label="Settings categories">{groups.map(name => <button key={name} aria-pressed={tab === name} onClick={() => { setTab(name); setQuery(""); }}>{name}</button>)}</nav>}<div className="ts-fields"><h3>{groupTitle[tab]}</h3>{inTab.length > 12 && <input aria-label={`Search ${tab.toLowerCase()} settings`} placeholder="Find a setting…" value={query} onChange={e => setQuery(e.target.value)} />}{!r.descriptor.fields.length && <p>No settings are published here.</p>}{fields.map(f => <SettingInput key={f.key} field={f} saved={r.snapshot.saved[f.key] ?? r.snapshot.effective[f.key]} effective={undefined} edit={proposal?.edits?.find(e => e.key === f.key)} suggestions={suggestionsFor(r.descriptor, f.suggest, valueOf)} onEdit={change => {
-    const edits = (proposal?.edits || []).filter(e => e.key !== change.key); edits.push(change);
-    onProposal({ operation: "settings.apply", schema_version: proposal?.schema_version || r.descriptor.schema_version, expected_version: proposal?.expected_version || r.snapshot.version, generation: proposal?.generation ?? r.generation, edits });
-  }} />)}</div></div>;
+/** What unsaved edits touch, by card: "Task: model, provider · Work: tasks at once". */
+function changeList(fields: SettingField[], edits: SettingEdit[]): { length: number; summary: string } {
+  const byGroup = new Map<string, string[]>();
+  for (const e of edits) {
+    const f = fields.find(x => x.key === e.key);
+    const group = f?.group ?? "";
+    const label = f ? (f.group && /^[A-Z][a-z]/.test(f.label) ? f.label.charAt(0).toLowerCase() + f.label.slice(1) : f.label) : e.key;
+    byGroup.set(group, [...(byGroup.get(group) ?? []), label]);
+  }
+  return { length: edits.length, summary: [...byGroup].map(([g, labels]) => (g ? `${g}: ${labels.join(", ")}` : labels.join(", "))).join(" · ") };
 }

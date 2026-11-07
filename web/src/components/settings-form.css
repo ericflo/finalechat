@@ -1,0 +1,115 @@
+/* Settings forms: sections as tabs, groups as cards, a picker for long lists. */
+.sf { display: flex; flex-direction: column; gap: 12px; width: 100%; min-width: 0; }
+.sf-none { font-size: 13px; color: var(--text-3); padding: 8px 2px; }
+
+.sf-tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; background: var(--bg); }
+.sf-tabs::-webkit-scrollbar { display: none; }
+.sf-tabs button { flex: none; position: relative; font: inherit; font-size: 14px; padding: 10px 2px 9px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; color: var(--text-3); cursor: pointer; white-space: nowrap; }
+.sf-tabs button[aria-pressed="true"] { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
+.sf-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--amber); vertical-align: 2px; }
+
+.sf-search { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--surface); }
+.sf-search:focus-within { border-color: var(--accent); }
+.sf-search svg { width: 16px; height: 16px; flex: none; color: var(--text-3); }
+.sf-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: none; padding: 11px 0; font-size: 15px; color: var(--text); }
+
+.sf-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; transition: border-color 0.15s, box-shadow 0.15s; }
+.sf-card.pending { border-color: color-mix(in srgb, var(--amber) 55%, transparent); box-shadow: 0 0 0 3px var(--amber-soft); }
+.sf-card > header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sf-card > header h4 { font-size: 15px; font-weight: 650; margin: 0; letter-spacing: -0.1px; }
+.sf-card > header .sf-link { margin-left: auto; }
+
+.sf-badge { display: inline-flex; align-items: center; font-style: normal; font-size: 11px; font-weight: 600; line-height: 1; padding: 4px 7px; border-radius: 999px; background: var(--surface-2); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
+.sf-badge.custom { background: var(--accent-soft); color: var(--accent); }
+.sf-badge.unsaved { background: var(--amber-soft); color: var(--amber-text); }
+.sf-link { border: 0; background: none; padding: 4px 2px; font: inherit; font-size: 13px; font-weight: 600; color: var(--accent); cursor: pointer; white-space: nowrap; }
+.sf-link.small { font-size: 12px; font-weight: 500; }
+.sf-link:disabled { color: var(--text-3); cursor: default; }
+
+.sf-row { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.sf-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sf-row-head label { font-size: 13px; font-weight: 600; color: var(--text-2); min-width: 0; overflow-wrap: anywhere; }
+.sf-card.single .sf-row-head label { font-size: 14px; color: var(--text); }
+.sf-row-head > :last-child.sf-link { margin-left: auto; }
+.sf-row.in-card .sf-row-head label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-3); }
+.sf-note { font-size: 12px; line-height: 1.45; color: var(--text-3); }
+.sf-error { font-size: 12px; color: var(--red); margin: 0; }
+
+.sf-seg { display: flex; gap: 2px; padding: 2px; border-radius: 11px; border: 1px solid var(--border-strong); background: var(--bg); overflow-x: auto; scrollbar-width: none; }
+.sf-seg::-webkit-scrollbar { display: none; }
+.sf-seg button { flex: 1 0 auto; position: relative; font: inherit; font-size: 13px; min-height: 34px; padding: 0 5px; border: 0; border-radius: 9px; background: none; color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.sf-seg button:hover:not(:disabled):not(.on) { background: var(--surface-2); }
+.sf-seg button.on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.sf-seg button.on.inherited { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent); }
+.sf-seg button:disabled { cursor: default; opacity: 0.55; }
+.sf-default { position: absolute; top: 4px; right: 3px; width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: 0.5; }
+
+.sf-choices { display: flex; flex-direction: column; gap: 6px; }
+.sf-choice { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 11px 12px; border-radius: 12px; border: 1px solid var(--border); background: var(--bg); text-align: left; font: inherit; color: var(--text); cursor: pointer; }
+.sf-choice.on { border-color: var(--accent); background: var(--accent-soft); }
+.sf-choice:disabled { cursor: default; opacity: 0.55; }
+.sf-radio { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; border: 2px solid var(--border-strong); background: var(--surface); }
+.sf-choice.on .sf-radio { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 0 4px, var(--surface) 5px); }
+.sf-choice-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.sf-choice-text > span { font-size: 14.5px; font-weight: 600; overflow-wrap: anywhere; }
+.sf-choice-text small { font-size: 12.5px; color: var(--text-3); line-height: 1.4; overflow-wrap: anywhere; }
+
+.sf-select, .sf-input { width: 100%; min-width: 0; box-sizing: border-box; min-height: 42px; padding: 9px 12px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); font: inherit; font-size: 15px; outline: 0; }
+.sf-select:focus, .sf-input:focus { border-color: var(--accent); }
+.sf-input::placeholder { color: var(--text-3); opacity: 0.8; }
+.sf-input.mono { font-family: var(--mono); font-size: 13px; }
+
+.sf-pick { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-strong); background: var(--bg); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.sf-pick:hover:not(:disabled) { border-color: var(--accent); }
+.sf-pick:disabled { cursor: default; opacity: 0.55; }
+.sf-pick-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.sf-pick-main { font-size: 15.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-pick-sub { font-size: 12px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-pick-more { width: 18px; height: 18px; flex: none; color: var(--text-3); }
+
+.sf-more { align-self: center; border: 0; background: none; font: inherit; font-size: 13px; font-weight: 500; color: var(--text-3); text-decoration: underline; text-underline-offset: 3px; padding: 6px; cursor: pointer; }
+
+/* The picker: a long list with search and a filter by group. */
+.sf-picker-sheet .sheet { display: flex; flex-direction: column; height: 86dvh; max-height: 86dvh; overflow: hidden; }
+@media (min-width: 640px) { .sf-picker-sheet .sheet { height: min(720px, 86dvh); } }
+.sf-picker { display: flex; flex-direction: column; gap: 10px; min-height: 0; flex: 1; padding: 0 6px; }
+.sf-picker h2 { font-size: 18px; margin: 0; }
+.sf-filter { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; scrollbar-width: none; flex: none; }
+.sf-filter::-webkit-scrollbar { display: none; }
+.sf-filter button { flex: none; font: inherit; font-size: 13px; padding: 6px 11px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.sf-filter button small { font-size: 11px; color: var(--text-3); margin-left: 2px; }
+.sf-filter button[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
+.sf-filter button[aria-pressed="true"] small { color: inherit; opacity: 0.7; }
+.sf-options { overflow-y: auto; min-height: 120px; flex: 1; margin: 0 -6px; padding: 0 6px; overscroll-behavior: contain; }
+.sf-options-title { position: sticky; top: 0; z-index: 1; padding: 10px 12px 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase; color: var(--text-3); background: var(--elevated); }
+.sf-option { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 0; border-radius: 12px; background: none; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.sf-option:hover, .sf-option:focus-visible { background: var(--surface-2); outline: 0; }
+.sf-option.on { background: var(--accent-soft); }
+.sf-option.custom { border: 1px dashed var(--border-strong); margin-bottom: 4px; }
+.sf-option-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.sf-option-text > span { font-size: 15px; font-weight: 550; display: flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.sf-option-text small { font-size: 12px; color: var(--text-3); overflow-wrap: anywhere; }
+.sf-option-check { width: 18px; height: 18px; flex: none; color: var(--accent); }
+
+/* Start options: the same form in a sheet, with its actions kept in view. */
+.start-sheet .sheet { display: flex; flex-direction: column; padding: 0; max-height: 92dvh; overflow: hidden; }
+.start-sheet .grabber { flex: none; margin: 8px auto 4px; }
+.start-sheet-head { padding: 6px 18px 12px; flex: none; }
+.start-sheet-head h2 { font-size: 20px; margin: 0 0 4px; letter-spacing: -0.3px; }
+.start-sheet-head p { font-size: 13px; color: var(--text-3); line-height: 1.45; margin: 0; }
+.start-sheet-body { overflow-y: auto; padding: 0 14px 16px; flex: 1; min-height: 0; overscroll-behavior: contain; }
+.start-sheet-foot { flex: none; display: flex; align-items: center; gap: 10px; padding: 12px 18px calc(12px + var(--sab)); border-top: 1px solid var(--border); background: var(--elevated); }
+.start-sheet-foot .btn.primary { margin-left: auto; min-width: 96px; }
+
+/* What a new session will run with, on the draft before it starts. */
+.start-summary { display: grid; gap: 2px; width: min(420px, 100%); margin: 14px auto 0; padding: 6px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface); text-align: left; }
+.start-summary button { display: grid; grid-template-columns: minmax(84px, auto) 1fr auto; align-items: center; gap: 10px; padding: 8px 10px; border: 0; border-radius: 10px; background: none; font: inherit; color: var(--text); cursor: pointer; text-align: left; }
+.start-summary button:hover { background: var(--surface-2); }
+.start-summary .k { font-size: 12px; color: var(--text-3); }
+.start-summary .v { font-size: 13.5px; font-weight: 550; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; min-width: 0; overflow-wrap: anywhere; }
+.start-summary .changed .v { color: var(--accent); }
+.start-summary .changed .k::after { content: " •"; color: var(--accent); }
+.start-summary svg { width: 14px; height: 14px; color: var(--text-3); }
+.folder-chip.options { font-family: var(--font); }
+.folder-chip.changed { border-color: var(--accent); color: var(--accent); }
+.folder-chip.changed svg { color: var(--accent); }

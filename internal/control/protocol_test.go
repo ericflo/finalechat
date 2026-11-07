@@ -1,6 +1,9 @@
 package control
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestProposalRejectsOverlappingEditsInEitherOrder(t *testing.T) {
 	g := Grant{Operations: []string{"settings.apply"}, Classes: []string{"preference"}}
@@ -108,6 +111,41 @@ func TestActionInputs(t *testing.T) {
 		bad := d
 		bad.Actions = []Action{d.Actions[0]}
 		bad.Actions[0].Inputs = in
+		if bad.Validate(g) == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
+
+func TestFormLayoutAndImpliedValues(t *testing.T) {
+	g := Grant{Key: "k", Label: "l", Scope: "project", Operations: []string{"session.start"}, Classes: []string{"cost"}}
+	params := Shape{Type: "object", Properties: map[string]Shape{"prompt": {Type: "string"}, "config": {Type: "string", Enum: []any{"a", "b"}}, "model": {Type: "string"}}}
+	d := Descriptor{Format: Format, SchemaVersion: "s/1", AdapterVersion: "1",
+		Fields: []Field{{Key: "/model", Label: "Model", Shape: Shape{Type: "string"}, Class: "cost", EffectiveWhen: "immediate", Section: "Models", Group: "Orchestrator", Advanced: true}},
+		Actions: []Action{{Operation: "session.start", Label: "Start", Class: "cost", Parameters: params, Inputs: []Input{
+			{Name: "config", Label: "Configuration", Default: "a", Suggest: &Suggest{List: "configs"}},
+			{Name: "model", Label: "Model", Group: "Orchestrator", Default: "m1"},
+		}}},
+		Suggestions: map[string][]Suggestion{"configs": {{Value: "a", Label: "A", Detail: "runs m1", Implies: map[string]any{"model": "m1"}}, {Value: "b", Implies: map[string]any{"model": "m2", "n": 3.0, "on": true}}}},
+	}
+	if err := d.Validate(g); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*Descriptor){
+		"default outside the enum":  func(d *Descriptor) { d.Actions[0].Inputs[0].Default = "c" },
+		"default of the wrong type": func(d *Descriptor) { d.Actions[0].Inputs[1].Default = 4.0 },
+		"long section":              func(d *Descriptor) { d.Fields[0].Section = strings.Repeat("s", 81) },
+		"long group":                func(d *Descriptor) { d.Fields[0].Group = strings.Repeat("g", 121) },
+		"long detail":               func(d *Descriptor) { d.Suggestions["configs"][0].Detail = strings.Repeat("d", 301) },
+		"nested implied value":      func(d *Descriptor) { d.Suggestions["configs"][0].Implies = map[string]any{"model": map[string]any{}} },
+		"empty implied key":         func(d *Descriptor) { d.Suggestions["configs"][0].Implies = map[string]any{"": "x"} },
+	} {
+		bad := d
+		bad.Fields = append([]Field{}, d.Fields...)
+		bad.Actions = []Action{d.Actions[0]}
+		bad.Actions[0].Inputs = append([]Input{}, d.Actions[0].Inputs...)
+		bad.Suggestions = map[string][]Suggestion{"configs": append([]Suggestion{}, d.Suggestions["configs"]...)}
+		mutate(&bad)
 		if bad.Validate(g) == nil {
 			t.Errorf("%s accepted", name)
 		}

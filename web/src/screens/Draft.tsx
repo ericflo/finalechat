@@ -4,8 +4,7 @@ import { IconChevron, IconClock, IconFolder, IconSend, IconSettings } from "../c
 import { directoryChoices, relayName, relayProfiles, startSession, useSessionStarters } from "../components/NewSession";
 import { RunningRelays, agentName, runningRelays } from "../components/Relay";
 import { ResourceSettingsSheet } from "../components/ThreadSettings";
-import { SettingInput } from "../components/IntegrationSettings";
-import { suggestionsFor, type SettingsAction, type SettingsResource } from "../lib/artifacts";
+import { SettingsForm, formSummary, startModel, startParameters, type FormModel } from "../components/SettingsForm";
 import { TopBar } from "../components/TopBar";
 import { navigate } from "../lib/router";
 
@@ -116,21 +115,19 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
       setOptions({});
     }
   }, [optionsKey]);
-  const setOption = (name: string, value: unknown) =>
-    setOptions((prev) => {
-      const next = { ...prev };
-      if (value === undefined || value === "") delete next[name];
-      else next[name] = value;
-      try {
-        if (optionsKey) localStorage.setItem(optionsKey, JSON.stringify(next));
-      } catch {
-        // ignore
-      }
-      return next;
-    });
+  const saveOptions = (next: Record<string, unknown>) => {
+    setOptions(next);
+    try {
+      if (optionsKey) localStorage.setItem(optionsKey, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  };
   const [optionsOpen, setOptionsOpen] = useState(false);
   const offerOptions = !relay && !!startAction?.inputs?.length;
-  const chosen = offerOptions ? startAction!.inputs!.filter((i) => options[i.name] !== undefined) : [];
+  const form = offerOptions && starter && startAction ? startModel(starter.resource.descriptor, startAction, options, saveOptions) : null;
+  const summary = form ? formSummary(form) : [];
+  const changed = summary.filter((l) => l.changed);
   // A relayed agent may start with nothing to do yet; eagent needs a task.
   const ready = !!text.trim() || !!relay;
   // Set again on mount: StrictMode's dev remount would otherwise leave it true.
@@ -160,7 +157,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
     setBusy(true);
     setError(null);
     try {
-      const threadId = await startSession(starter, text, dir || null, relay, offerOptions ? options : {}, setStatus, () => cancelled.current);
+      const threadId = await startSession(starter, text, dir || null, relay, form ? startParameters(form) : {}, setStatus, () => cancelled.current);
       if (relay && dir) rememberRecent(recentKey, { relay: relay.name, dir });
       navigate(`/t/${threadId}`, { replace: true });
     } catch (err) {
@@ -218,8 +215,20 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
               </p>
             ) : (
               <p>
-                It will start in <code>{home(dir)}</code> {chosen.length ? "with the options you chose" : <>with this project&rsquo;s settings</>}. Change them, then say what to do.
+                It will start in <code>{home(dir)}</code>
+                {summary.length ? (changed.length ? " with your changes" : <> with this project&rsquo;s settings</>) : null}. Say what to do.
               </p>
+            )}
+            {!relay && summary.length > 0 && (
+              <div className="start-summary" aria-label="What it will run with">
+                {summary.map((l) => (
+                  <button key={l.title} type="button" className={l.changed ? "changed" : ""} onClick={() => setOptionsOpen(true)} disabled={busy}>
+                    <span className="k">{l.title}</span>
+                    <span className="v">{l.text || "—"}</span>
+                    <IconChevron aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
             )}
             {!starter.online && <p>This project&rsquo;s eagent is offline right now. Start it there, then send.</p>}
           </div>
@@ -253,9 +262,9 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
           )}
           {offerOptions && (
             <div className="folder-row">
-              <button type="button" className="folder-chip" title="Configuration and models for this session" disabled={busy} onClick={() => setOptionsOpen(true)}>
+              <button type="button" className={`folder-chip options${changed.length ? " changed" : ""}`} title="Configuration and models for this session" disabled={busy} onClick={() => setOptionsOpen(true)}>
                 <IconSettings aria-hidden="true" />
-                <span>{chosen[0] ? `${String(options[chosen[0].name])}${chosen.length > 1 ? ` +${chosen.length - 1}` : ""}` : "Project settings"}</span>
+                <span>{chipText(summary)}</span>
                 <IconChevron aria-hidden="true" className="folder-chip-more" />
               </button>
             </div>
@@ -329,7 +338,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
       )}
       {picking && choices && <DirectorySheet choices={choices} current={dir} who={relay ? who : null} onChoose={choose} onClose={() => setPicking(false)} />}
       {settingsOpen && <ResourceSettingsSheet resourceId={resourceId} onClose={() => setSettingsOpen(false)} />}
-      {optionsOpen && starter && startAction && <StartOptionsSheet resource={starter.resource} action={startAction} values={options} onChange={setOption} onClose={() => setOptionsOpen(false)} />}
+      {optionsOpen && form && <StartOptionsSheet form={form} onReset={() => saveOptions({})} onClose={() => setOptionsOpen(false)} />}
     </div>
   );
 }
@@ -393,41 +402,37 @@ function DirectorySheet({ choices, current, who, onChoose, onClose }: { choices:
   );
 }
 
+/** The composer chip: the first choice (the configuration), and which of
+ * the rest were changed. */
+function chipText(summary: ReturnType<typeof formSummary>): string {
+  const [first, ...rest] = summary;
+  if (!first) return "Session options";
+  const changed = rest.filter((l) => l.changed).map((l) => l.title);
+  const head = first.text || first.title;
+  if (!changed.length) return head;
+  return `${head} · ${changed.length > 2 ? `${changed.slice(0, 2).join(", ")} +${changed.length - 2}` : changed.join(", ")} changed`;
+}
+
 /** The inputs the agent declares for starting a session, as a form: each
- * left empty keeps the project's own setting. */
-function StartOptionsSheet({ resource, action, values, onChange, onClose }: { resource: SettingsResource; action: SettingsAction; values: Record<string, unknown>; onChange: (name: string, value: unknown) => void; onClose: () => void }) {
-  const inputs = action.inputs ?? [];
+ * left alone comes from the project (or from the configuration chosen). */
+function StartOptionsSheet({ form, onReset, onClose }: { form: FormModel; onReset: () => void; onClose: () => void }) {
+  const any = form.items.some((i) => form.state(i.key).set);
   return (
-    <Sheet onClose={onClose} label="Session options">
-      <div className="start-options">
+    <Sheet onClose={onClose} label="Session options" className="start-sheet">
+      <div className="start-sheet-head">
         <h2>This session</h2>
-        <p>Left empty, each comes from the project&rsquo;s settings. These apply to this session only.</p>
-        {inputs.map((input) => {
-          const schema = action.parameters.properties?.[input.name];
-          if (!schema) return null;
-          const value = values[input.name];
-          return (
-            <SettingInput
-              key={input.name}
-              field={{ key: `start-${input.name}`, label: input.label, description: input.description, schema, writable: true, unset: value !== undefined, class: action.class, effective_when: "" }}
-              saved={value}
-              effective={undefined}
-              resetLabel="Use the project's"
-              suggestions={suggestionsFor(resource.descriptor, input.suggest, (name) => values[name])}
-              onEdit={(edit) => onChange(input.name, edit.op === "set" ? edit.value : undefined)}
-            />
-          );
-        })}
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
-          {inputs.some((i) => values[i.name] !== undefined) && (
-            <button type="button" className="btn" onClick={() => inputs.forEach((i) => onChange(i.name, undefined))}>
-              Reset all
-            </button>
-          )}
-          <button type="button" className="btn primary" onClick={onClose}>
-            Done
-          </button>
-        </div>
+        <p>For this new session only. Anything you leave alone comes from the project.</p>
+      </div>
+      <div className="start-sheet-body">
+        <SettingsForm model={form} />
+      </div>
+      <div className="start-sheet-foot">
+        <button type="button" className="btn" disabled={!any} onClick={onReset}>
+          Reset all
+        </button>
+        <button type="button" className="btn primary" onClick={onClose}>
+          Done
+        </button>
       </div>
     </Sheet>
   );
