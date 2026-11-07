@@ -446,6 +446,11 @@ func validImplies(m map[string]any) bool {
 			if len(x) > 500 {
 				return false
 			}
+		case json.Number:
+			// The API decodes requests with UseNumber.
+			if f, err := x.Float64(); err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+				return false
+			}
 		case bool, float64, int, int64, nil:
 		default:
 			return false
