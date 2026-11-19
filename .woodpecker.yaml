@@ -4,7 +4,7 @@
 
 steps:
   - name: test-server
-    image: docker.io/library/golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0
+    image: localhost:32000/epsilon-ci-go:main-20261119084320-fb19a1937e22@sha256:0ea790411228b0510099dd16e2986e1ec87ad7a18a3b48cd7196319df447e45b
     commands:
       - export HOME=/tmp/finalechat-home GOCACHE=/tmp/finalechat-go-build GOMODCACHE=/tmp/finalechat-go-mod GOFLAGS=-buildvcs=false
       - mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE"
@@ -35,7 +35,7 @@ steps:
           capabilities: {drop: [ALL]}
 
   - name: test-web
-    image: docker.io/library/node:22-bookworm-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee
+    image: localhost:32000/epsilon-ci-node22:main-20261119084320-fb19a1937e22@sha256:a94896daaef04e6099a319f139cebed15dd2e8682a4e3bb6d1b60699b0978986
     commands:
       - export HOME=/tmp/finalechat-home npm_config_cache=/tmp/finalechat-npm
       - mkdir -p "$HOME"
@@ -59,7 +59,7 @@ steps:
           capabilities: {drop: [ALL]}
 
   - name: test-cli
-    image: docker.io/library/python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+    image: localhost:32000/epsilon-ci-python313:main-20261119084320-fb19a1937e22@sha256:f4ea2756a0a724af8f97cc7b24b45c8e9c8ad20e906f4f4eb00c7f690e1ea6ce
     commands:
       - python3 -m py_compile cli/finalechat
       - python3 cli/finalechat --help >/dev/null
