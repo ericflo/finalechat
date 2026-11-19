@@ -16,7 +16,7 @@ RUN npm run build
 # The Go suite exercises real SQL, LISTEN/NOTIFY fan-out and long-polls, so it
 # runs against the same PostgreSQL major as production. The Go toolchain is
 # copied from the official image into the postgres image; both are Alpine.
-FROM golang:1.26.10-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS toolchain
+FROM golang:1.26.11-alpine@sha256:ecb67f987aa1a57794c91d19ade7ae0209f2f0f5496aaef9e6ae85ddf92d02ab AS toolchain
 FROM postgres:16.15-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab AS test
 COPY --from=toolchain /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH GOPATH=/go GOFLAGS=-mod=readonly CGO_ENABLED=0
@@ -43,7 +43,7 @@ RUN --mount=type=cache,id=finalechat-go-mod,target=/go/pkg/mod,sharing=locked \
     && date -u +%Y-%m-%dT%H:%M:%SZ >/tmp/tests-passed
 
 # ---- Server ----------------------------------------------------------------
-FROM golang:1.26.10-bookworm@sha256:e0c50aecba3a2edfab18924d493cd9210b73c4746fc5fd5b3bb46e0ec7f0465a AS build
+FROM golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 AS build
 WORKDIR /src
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOFLAGS=-mod=readonly
 COPY go.mod go.sum ./
