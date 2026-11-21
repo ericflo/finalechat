@@ -725,6 +725,7 @@ function ThreadRow({
   return (
     <Link
       href={`/t/${t.id}`}
+      data-scroll-anchor={`/t/${t.id}`}
       className={`thread-row ${unread ? "unread" : ""} ${needs ? "needs-you" : ""} ${activity ? "live" : ""} ${selectMode ? "selecting" : ""} ${selected ? "selected" : ""}`}
       onPointerDown={startPress}
       onPointerUp={endPress}
