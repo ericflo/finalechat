@@ -200,7 +200,10 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
     const el = document.scrollingElement;
     // A sheet pins the body; the scroll it causes is not the reader moving.
     if (!el || sheetsOpen > 0) return;
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    // When a phone lays the page out taller than the screen (a zoomed-out
+    // page), scrollTop stops short of scrollHeight - clientHeight; measure
+    // against the taller of the two so the true bottom still counts.
+    const distance = el.scrollHeight - el.scrollTop - Math.max(el.clientHeight, window.innerHeight);
     const nearBottom = distance < 80;
     atBottomRef.current = nearBottom;
     setAtBottom(nearBottom);

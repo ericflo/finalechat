@@ -9,7 +9,7 @@ export function DocsScreen({ path, title }: { path: string; title: string }) {
     setHtml(null);
     fetch(path, { headers: { Accept: "text/markdown" } })
       .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((md) => setHtml(renderMarkdown(md)))
+      .then((md) => setHtml(scrollableTables(renderMarkdown(md))))
       .catch((e) => setError(e.message));
   }, [path]);
   return (
@@ -22,4 +22,10 @@ export function DocsScreen({ path, title }: { path: string; title: string }) {
       </div>
     </div>
   );
+}
+
+/** Docs tables fill the column when they fit and scroll sideways on their
+ * own when they do not, instead of widening the whole page on a phone. */
+function scrollableTables(html: string): string {
+  return html.replace(/<table>/g, '<div class="table-scroll"><table>').replace(/<\/table>/g, "</table></div>");
 }
