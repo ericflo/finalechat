@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Sheet } from "./Common";
 import { IconCheck, IconChevron, IconSearch } from "./Icons";
-import { effectLabel, validateShape, type SettingEdit, type SettingsAction, type SettingsDescriptor, type SettingsProposal, type SettingsResource, type Shape, type Suggest, type Suggestion } from "../lib/artifacts";
+import { effectLabel, validateShape, type ActionInput, type SettingEdit, type SettingsAction, type SettingsDescriptor, type SettingsProposal, type SettingsResource, type Shape, type Suggest, type Suggestion } from "../lib/artifacts";
 import "./settings-form.css";
 
 /** One thing a form asks about: a settings field, or an action's input. */
@@ -166,10 +166,23 @@ export function resourceModel(r: SettingsResource, proposal: SettingsProposal | 
   };
 }
 
+/** Whether an input applies: each parameter its `when` names holds one of
+ * the values listed. Parameters the client sets itself (`given`, such as
+ * the agent chosen beside the form) count first, then the choices made;
+ * one left out holds "". */
+export function inputApplies(input: ActionInput, given: Record<string, unknown>, values: Record<string, unknown> = {}): boolean {
+  return Object.entries(input.when ?? {}).every(([param, allowed]) => {
+    const v = Object.hasOwn(given, param) ? given[param] : Object.hasOwn(values, param) ? values[param] : "";
+    return allowed.some((a) => same(a, v ?? ""));
+  });
+}
+
 /** An action's inputs as a form: each left alone takes the value another
- * choice implies for it, or its declared default. */
-export function startModel(descriptor: SettingsDescriptor, action: SettingsAction, values: Record<string, unknown>, onChange: (next: Record<string, unknown>) => void): FormModel {
-  const inputs = action.inputs ?? [];
+ * choice implies for it, or its declared default. Only the inputs that
+ * apply to what the client set itself (`given`) are asked for; choices
+ * remembered for the others are kept for when they apply again. */
+export function startModel(descriptor: SettingsDescriptor, action: SettingsAction, values: Record<string, unknown>, onChange: (next: Record<string, unknown>) => void, given: Record<string, unknown> = {}): FormModel {
+  const inputs = (action.inputs ?? []).filter((i) => inputApplies(i, given, values));
   const lists = descriptor.suggestions ?? {};
   const items: FormItem[] = inputs.flatMap((i) => {
     const schema = action.parameters.properties?.[i.name];

@@ -245,6 +245,11 @@ type Input struct {
 	// Default is the value the action uses when the input is left out, shown
 	// so the user knows what leaving it alone means. It must fit the schema.
 	Default any `json:"default,omitempty"`
+	// When limits the input to some values of other parameters: it applies
+	// only while each parameter named holds one of the values listed, where
+	// a parameter left out holds "". A client asks only for the inputs that
+	// apply and sends only theirs (the model for the agent chosen beside it).
+	When map[string][]any `json:"when,omitempty"`
 }
 type Descriptor struct {
 	Format         string   `json:"format"`
@@ -336,6 +341,20 @@ func (d Descriptor) Validate(g Grant) error {
 				return fmt.Errorf("%s: default for %q does not fit its schema", a.Operation, in.Name)
 			}
 			named[in.Name] = true
+			if len(in.When) > 8 {
+				return fmt.Errorf("%s: %q has too many conditions", a.Operation, in.Name)
+			}
+			for param, values := range in.When {
+				other, ok := a.Parameters.Properties[param]
+				if !ok || param == in.Name || len(values) == 0 || len(values) > 64 {
+					return fmt.Errorf("%s: %q has an invalid condition on %q", a.Operation, in.Name, param)
+				}
+				for _, v := range values {
+					if v != "" && other.Validate(v) != nil {
+						return fmt.Errorf("%s: %q's condition on %q names a value it cannot take", a.Operation, in.Name, param)
+					}
+				}
+			}
 			if in.Suggest != nil {
 				if _, ok := d.Suggestions[in.Suggest.List]; !ok || prop.Type != "string" {
 					return fmt.Errorf("%s: invalid suggestions for %q", a.Operation, in.Name)

@@ -5,7 +5,9 @@
 // message; a configuration shows what it runs before anything starts, every
 // choice can go back to the default, a model is picked from any provider
 // (picking its provider with it) or typed, and the choices travel with
-// session.start. With a relayed agent they are not offered.
+// session.start. With a relayed agent, its own model and effort are offered
+// instead (inputs whose `when` names that agent), remembered on the device
+// and sent with the relay.
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -24,13 +26,20 @@ const properties={prompt:{type:'string',max_length:32768},cwd:{type:'string',max
 // As eagent declares them: the configuration, then a card per actor whose
 // defaults are the project's own routes.
 const project={orchestrator:['together','zai-org/GLM-5.3','high'],task:['together','zai-org/GLM-5.3-Flash','medium'],narrator:['together','deepseek-ai/DeepSeek-V4.1-Flash','low']};
-const inputs=[{name:'config',label:'Configuration',suggest:{list:'configs'},default:'glm'}];
+const eagentOnly={relay:['']};
+const inputs=[{name:'config',label:'Configuration',suggest:{list:'configs'},default:'glm',when:eagentOnly}];
 for(const a of actors){
  properties[a+'_provider']={type:'string',max_length:120,enum:['together','openrouter','anthropic']};
  properties[a+'_model']={type:'string',max_length:200};
  properties[a+'_effort']={type:'string',max_length:120,enum:efforts};
- inputs.push({name:a+'_provider',label:'Provider',group:cap(a),suggest:{list:'providers'},default:project[a][0]},{name:a+'_model',label:'Model',group:cap(a),suggest:{list:'models',group_by:a+'_provider'},default:project[a][1]},{name:a+'_effort',label:'Reasoning effort',group:cap(a),default:project[a][2]});
+ inputs.push({name:a+'_provider',label:'Provider',group:cap(a),suggest:{list:'providers'},default:project[a][0],when:eagentOnly},{name:a+'_model',label:'Model',group:cap(a),suggest:{list:'models',group_by:a+'_provider'},default:project[a][1],when:eagentOnly},{name:a+'_effort',label:'Reasoning effort',group:cap(a),default:project[a][2],when:eagentOnly});
 }
+// Codex's own model and effort, asked only when Codex does the work; left
+// alone, what its own configuration says.
+properties.relay_codex_model={type:'string',max_length:200};
+properties.relay_codex_effort={type:'string',max_length:120,enum:['low','medium','high','xhigh','max','ultra']};
+inputs.push({name:'relay_codex_model',label:'Model',group:'Codex',suggest:{list:'codex_models'},default:'gpt-6.2-astra',when:{relay:['codex']}},{name:'relay_codex_effort',label:'Reasoning effort',group:'Codex',default:'xhigh',when:{relay:['codex']}});
+const codexModels=[{value:'gpt-6.2-sol',label:'GPT-6.2-Sol',detail:'Fast, go-to model for coding and everyday work.'},{value:'gpt-6.2-astra',label:'GPT-6.2-Astra',detail:'Our most capable model for complex coding and professional work.'},{value:'gpt-6-astra',label:'GPT-6-Astra'}];
 const implies=lineup=>Object.fromEntries(actors.flatMap((a,i)=>[[a+'_provider',lineup[i][0]],[a+'_model',lineup[i][1]],[a+'_effort',lineup[i][2]]]));
 const configs=[
  {value:'glm',group:'Together AI',detail:'GLM-5.3 orchestrating, GLM-5.3 Flash working, DeepSeek V4.1 Flash narrating',implies:implies(actors.map(a=>project[a]))},
@@ -46,8 +55,8 @@ const providers=[{value:'together',label:'Together AI'},{value:'openrouter',labe
 const resource={id:'project',connector_id:'connector',key:'project-x',label:'Development',scope:'project',generation:'',updated_at:new Date().toISOString(),
  descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.project/v1',adapter_version:'1',fields:[],
   actions:[{operation:'session.start',label:'Start a new session',class:'cost',parameters:{type:'object',properties,required:['prompt']},inputs}],
-  suggestions:{configs,models,providers}},
- snapshot:{version:'p1',context:'/home/u/Development',saved:{},effective:{},runtime_known:false,details:{directories:{root:'/home/u/Development',recent:[],children:[],siblings:[]},relay_profiles:[{name:'codex',agent:'codex',label:'Codex · GPT-6 Astra xhigh',model:'gpt-6-astra',effort:'xhigh'}],relays:[]}}};
+  suggestions:{configs,models,providers,codex_models:codexModels}},
+ snapshot:{version:'p1',context:'/home/u/Development',saved:{},effective:{},runtime_known:false,details:{directories:{root:'/home/u/Development',recent:[],children:[],siblings:[]},relay_profiles:[{name:'codex',agent:'codex',label:'Codex · GPT-6.2-Astra xhigh',model:'gpt-6.2-astra',effort:'xhigh'}],relays:[]}}};
 const connector={id:'connector',name:'eagent · llmbox · Development',provider:'eagent',state:'active',grants:[],requested_grants:[],last_seen_at:new Date().toISOString(),expires_at:'2030-01-01T00:00:00Z'};
 
 const server=await createServer({root:path.join(root,'web'),configFile:false,plugins:[react()],server:{host:'127.0.0.1',port:0,strictPort:false},logLevel:'warn'});
@@ -72,9 +81,25 @@ try {
   });
   await page.goto(base+'/tests/artifacts.html?draft');
   await page.evaluate(()=>localStorage.clear()); await page.reload();
-  // A relayed agent brings its own models: no options.
+  // A relayed agent: its own model and effort, not eagent's lineup.
   await page.getByRole('button',{name:'Codex',exact:true}).click();
   assert.equal(await page.getByTitle('Configuration and models for this session').count(),0);
+  const codexChip=page.getByTitle("Codex's model and reasoning effort for this session");
+  await codexChip.getByText('GPT-6.2-Astra · xhigh',{exact:true}).waitFor();
+  await page.getByLabel('What it will run with').getByText('GPT-6.2-Astra · xhigh',{exact:true}).waitFor();
+  await codexChip.click();
+  {
+   const sheet=page.locator('.start-sheet');
+   const codex=sheet.getByRole('region',{name:'Codex',exact:true});
+   await codex.locator('.sf-badge').filter({hasText:/^Default$/}).first().waitFor();
+   assert.equal(await sheet.getByRole('region',{name:'Task',exact:true}).count(),0);
+   await page.getByRole('button',{name:/^Codex model: /}).click();
+   await page.locator('.sf-picker').getByRole('button',{name:/^GPT-6\.2-Sol/}).click();
+   await codex.getByRole('radio',{name:'max',exact:true}).click();
+   await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-codex-options.png`});
+   await page.getByRole('button',{name:'Done',exact:true}).click();
+  }
+  await codexChip.getByText('GPT-6.2-Sol · max',{exact:true}).waitFor();
   await page.getByRole('button',{name:'eagent',exact:true}).click();
   const chip=page.getByTitle('Configuration and models for this session');
   await chip.waitFor();
@@ -161,6 +186,15 @@ try {
   assert.equal(sent.operation,'session.start');
   // The choices, and with each model the provider it was picked at.
   assert.deepEqual({...sent.parameters},{prompt:'do the thing',config:'anthropic-med',task_provider:'openrouter',task_model:'moonshotai/kimi-k3',narrator_model:'some/typed-model',narrator_provider:'anthropic',orchestrator_effort:'xhigh'});
+  // The next new session remembers Codex's model and effort, and sends them
+  // with the relay (and none of eagent's).
+  await page.goto(base+'/tests/artifacts.html?draft');
+  await page.getByRole('button',{name:'Codex',exact:true}).click();
+  await page.getByLabel('What it will run with').getByText('GPT-6.2-Sol · max',{exact:true}).waitFor();
+  await page.getByPlaceholder(/^What should Codex do/).fill('ship it');
+  await page.getByRole('button',{name:'Start the session'}).click();
+  await page.waitForURL(/\/t\/t1/);
+  assert.deepEqual({...commands[commands.length-1].proposal.parameters},{prompt:'ship it',relay:'codex',relay_codex_model:'gpt-6.2-sol',relay_codex_effort:'max'});
   await page.close();
  }
  assert.deepEqual(errors,[]);

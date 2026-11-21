@@ -102,6 +102,14 @@ func TestActionInputs(t *testing.T) {
 	if err := d.Validate(g); err != nil {
 		t.Fatal(err)
 	}
+	// An input may apply only while another parameter holds some values,
+	// "" standing for that parameter left out.
+	when := d
+	when.Actions = []Action{d.Actions[0]}
+	when.Actions[0].Inputs = []Input{{Name: "model", Label: "Model", When: map[string][]any{"provider": {"a", ""}}}}
+	if err := when.Validate(g); err != nil {
+		t.Fatal(err)
+	}
 	for name, in := range map[string][]Input{
 		"unknown parameter": {{Name: "nope", Label: "x"}},
 		"duplicate":         {{Name: "model", Label: "x"}, {Name: "model", Label: "y"}},
@@ -109,6 +117,10 @@ func TestActionInputs(t *testing.T) {
 		"unknown list":      {{Name: "model", Label: "x", Suggest: &Suggest{List: "nope"}}},
 		"non-string":        {{Name: "n", Label: "x", Suggest: &Suggest{List: "models"}}},
 		"unknown group":     {{Name: "model", Label: "x", Suggest: &Suggest{List: "models", GroupBy: "prompt"}}},
+		"when unknown":      {{Name: "model", Label: "x", When: map[string][]any{"nope": {"a"}}}},
+		"when itself":       {{Name: "model", Label: "x", When: map[string][]any{"model": {"m"}}}},
+		"when no values":    {{Name: "model", Label: "x", When: map[string][]any{"provider": {}}}},
+		"when off schema":   {{Name: "model", Label: "x", When: map[string][]any{"provider": {"b"}}}},
 	} {
 		bad := d
 		bad.Actions = []Action{d.Actions[0]}

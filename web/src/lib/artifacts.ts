@@ -11,7 +11,9 @@ export interface Shape { type: "string" | "boolean" | "integer" | "number" | "ar
 export interface Suggest { list: string; group_by?: string }
 export interface Suggestion { value: string; label?: string; group?: string; detail?: string; implies?: Record<string, unknown> }
 export interface SettingField { key: string; label: string; description?: string; schema: Shape; writable: boolean; unset: boolean; locked_reason?: string; class: string; effective_when: string; source?: string; suggest?: Suggest; section?: string; group?: string; advanced?: boolean }
-export interface ActionInput { name: string; label: string; description?: string; suggest?: Suggest; group?: string; default?: unknown }
+/** `when`: the input applies only while each parameter named holds one of
+ * the values listed ("" for a parameter left out). */
+export interface ActionInput { name: string; label: string; description?: string; suggest?: Suggest; group?: string; default?: unknown; when?: Record<string, unknown[]> }
 export interface SettingsAction { operation: string; label: string; class: string; parameters: Shape; inputs?: ActionInput[] }
 export interface SettingsDescriptor { format: string; schema_version: string; adapter_version: string; fields: SettingField[]; actions?: SettingsAction[]; suggestions?: Record<string, Suggestion[]> }
 export interface SettingsSnapshot { version: string; context: string; saved: Record<string, unknown>; effective: Record<string, unknown>; runtime_known: boolean; runtime_version?: string; details?: Record<string, unknown> }

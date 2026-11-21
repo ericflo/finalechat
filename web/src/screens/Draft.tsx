@@ -101,9 +101,10 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
       }),
     [recentKey, profiles],
   );
-  // The options the agent asks for when it starts a session itself (its
-  // configuration and models), remembered per connector. A relayed agent
-  // brings its own models, so they are not offered with one.
+  // The options the agent asks for when it starts a session (its
+  // configuration and models, or the model of the agent it relays to),
+  // remembered per connector. Each input says which agent choice it applies
+  // to; only those are offered.
   const startAction = starter?.resource.descriptor.actions?.find((a) => a.operation === "session.start");
   const optionsKey = starter ? `fc.draft.${starter.connector.id}.options` : "";
   const [options, setOptions] = useState<Record<string, unknown>>({});
@@ -124,8 +125,9 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
     }
   };
   const [optionsOpen, setOptionsOpen] = useState(false);
-  const offerOptions = !relay && !!startAction?.inputs?.length;
-  const form = offerOptions && starter && startAction ? startModel(starter.resource.descriptor, startAction, options, saveOptions) : null;
+  const built = starter && startAction?.inputs?.length ? startModel(starter.resource.descriptor, startAction, options, saveOptions, { relay: relay?.name ?? "" }) : null;
+  const form = built && built.items.length ? built : null;
+  const offerOptions = !!form;
   const summary = form ? formSummary(form) : [];
   const changed = summary.filter((l) => l.changed);
   // A relayed agent may start with nothing to do yet; eagent needs a task.
@@ -211,7 +213,8 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
             <h2>New session</h2>
             {relay ? (
               <p>
-                {relay.label} will work in <code>{home(dir)}</code>. eagent starts it and passes your messages on. Say what to do, or just start it.
+                {who} will work in <code>{home(dir)}</code>
+                {summary.length ? (changed.length ? " with your choices" : " with these defaults") : null}. eagent starts it and passes your messages on. Say what to do, or just start it.
               </p>
             ) : (
               <p>
@@ -219,7 +222,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
                 {summary.length ? (changed.length ? " with your changes" : <> with this project&rsquo;s settings</>) : null}. Say what to do.
               </p>
             )}
-            {!relay && summary.length > 0 && (
+            {summary.length > 0 && (
               <div className="start-summary" aria-label="What it will run with">
                 {summary.map((l) => (
                   <button key={l.title} type="button" className={l.changed ? "changed" : ""} onClick={() => setOptionsOpen(true)} disabled={busy}>
@@ -262,7 +265,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
           )}
           {offerOptions && (
             <div className="folder-row">
-              <button type="button" className={`folder-chip options${changed.length ? " changed" : ""}`} title="Configuration and models for this session" disabled={busy} onClick={() => setOptionsOpen(true)}>
+              <button type="button" className={`folder-chip options${changed.length ? " changed" : ""}`} title={relay ? `${who}'s model and reasoning effort for this session` : "Configuration and models for this session"} disabled={busy} onClick={() => setOptionsOpen(true)}>
                 <IconSettings aria-hidden="true" />
                 <span>{chipText(summary)}</span>
                 <IconChevron aria-hidden="true" className="folder-chip-more" />
@@ -338,7 +341,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
       )}
       {picking && choices && <DirectorySheet choices={choices} current={dir} who={relay ? who : null} onChoose={choose} onClose={() => setPicking(false)} />}
       {settingsOpen && <ResourceSettingsSheet resourceId={resourceId} onClose={() => setSettingsOpen(false)} />}
-      {optionsOpen && form && <StartOptionsSheet form={form} onReset={() => saveOptions({})} onClose={() => setOptionsOpen(false)} />}
+      {optionsOpen && form && <StartOptionsSheet form={form} onReset={() => form.reset(form.items.map((i) => i.key))} onClose={() => setOptionsOpen(false)} />}
     </div>
   );
 }
@@ -428,7 +431,7 @@ function StartOptionsSheet({ form, onReset, onClose }: { form: FormModel; onRese
             {first.title}: <strong>{first.text}</strong>
           </p>
         ) : null}
-        <p>For this new session only. Anything you leave alone comes from the project.</p>
+        <p>This device keeps your choices for the next new session here. Anything you leave alone keeps its default.</p>
       </div>
       <div className="start-sheet-body">
         <SettingsForm model={form} />

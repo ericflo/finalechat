@@ -164,7 +164,9 @@ settings, and nothing is created until the first message is sent. When the
 snapshot also lists `details.relay_profiles` (each `{name, agent, label,
 model, effort}`, such as `codex` labelled "Codex · GPT-6 Astra xhigh"), the
 draft offers one chip per profile beside the default, eagent; the app
-remembers the last choice per connector. That
+remembers the last choice per connector. The **Options** shown are the
+action's inputs that apply to the chip chosen (by their `when` on `relay`),
+so each agent can have its own model and reasoning effort. That
 message is submitted as a trusted command exactly like a settings action:
 the browser session creates the command, the connector claims it, starts the
 session already configured, and the result reports it (`session_id`,
@@ -258,7 +260,7 @@ A descriptor may carry named `suggestions` lists (`{value, label?, group?, detai
 
 Layout is the agent's to declare: a field's `section` is a tab, fields sharing a `group` share a card under that title, and `advanced` fields wait behind a link unless they hold a value of their own. Every field that can be unset offers its default as a choice, so a change can always be taken back.
 
-An action can list `inputs` (`{name, label, description?, suggest?, group?, default?}`): the parameters the app asks the user for, in order, before running it. `default` is what the action uses when the input is left out; it must fit the parameter's schema. New session shows a `session.start` action's inputs as **Options** before the first message, with a summary of what the session will run with.
+An action can list `inputs` (`{name, label, description?, suggest?, group?, default?, when?}`): the parameters the app asks the user for, in order, before running it. `default` is what the action uses when the input is left out; it must fit the parameter's schema. `when` limits an input to some values of other parameters (`{"relay": ["claude"]}`): it applies only while each parameter named holds one of the values listed, a parameter left out holding `""`, and the app asks only for the inputs that apply and sends only theirs. New session shows a `session.start` action's inputs as **Options** before the first message, with a summary of what the session will run with, and remembers the choices on the device for the next new session.
 
 In an agent's own editor opened from the thread, `settings.read` includes `presentation: "thread"`. Custom editors should stage valid changes as the form changes and clear obsolete proposals, leaving the host’s single Save button to submit. Opening and refreshing never submit a command. The host pins an open website while updates are published, and preserves newer drafts through late acknowledgements. Saved defaults are labeled separately from runtime controls.
 
