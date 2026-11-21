@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { navigate } from "../lib/router";
+import { goBack } from "../lib/router";
 import { retryConnection, useStore } from "../lib/store";
 import { IconBack } from "./Icons";
 
@@ -21,7 +21,7 @@ export function TopBar({ title, subtitle, backTo, right, big, below }: { title: 
     <header ref={ref} className="topbar">
       <div className={`topbar-inner ${big ? "topbar-big" : ""}`}>
         {showBack && (
-          <button type="button" className="icon-btn" aria-label="Back" title={backTo === "/settings" ? "Settings" : "Inbox"} onClick={() => navigate(backTo || "/")}>
+          <button type="button" className="icon-btn" aria-label="Back" title={backTo === "/settings" ? "Settings" : "Inbox"} onClick={() => goBack(backTo || "/")}>
             <IconBack />
           </button>
         )}

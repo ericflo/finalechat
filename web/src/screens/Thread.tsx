@@ -8,7 +8,7 @@ import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
 import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
 import { renderMarkdown, renderText } from "../lib/markdown";
-import { navigate } from "../lib/router";
+import { goBack, navigate } from "../lib/router";
 import { AlreadyPostedError, deleteThread, loadOlderMessages, loadThread, markRead, onMessageRemoved, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
 import type { MessageRouting } from "../lib/clientCaps";
@@ -294,7 +294,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
           </div>
           <h2>This thread is gone</h2>
           <p>It was deleted, or the link is wrong.</p>
-          <button type="button" className="btn" style={{ marginTop: 14 }} onClick={() => navigate("/", { replace: true })}>
+          <button type="button" className="btn" style={{ marginTop: 14 }} onClick={() => goBack("/")}>
             Back to the inbox
           </button>
         </div>
@@ -431,7 +431,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
                 .then(() => {
                   if (wasArchived) toast("Thread restored");
                   else {
-                    navigate("/");
+                    goBack("/");
                     toast("Thread archived", "info", { label: "Undo", onClick: () => void updateThread(id, { archived: false }) });
                   }
                 })
@@ -471,7 +471,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
             deleteThread(id)
               .then(() => {
                 toast("Thread deleted");
-                navigate("/", { replace: true });
+                goBack("/");
               })
               .catch((e) => toast(e.message, "error"));
           }}

@@ -90,7 +90,7 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
   const urgent = pending && remaining < 2 * 60 * 1000;
 
   return (
-    <div ref={ref} className={`question ${pending ? "" : "resolved"} ${highlight ? "highlight" : ""}`} data-question-id={q.id}>
+    <div ref={ref} className={`question ${pending ? "" : "resolved"} ${highlight ? "highlight" : ""}`} data-question-id={q.id} data-scroll-anchor={showThread ? `/t/${q.thread_id}?q=${q.id}` : undefined}>
       <div className="q-head">
         {showThread && thread && (
           <Link href={`/t/${thread.id}?q=${q.id}`} className="q-agent" aria-label={`Open thread ${thread.title || thread.agent}`}>
