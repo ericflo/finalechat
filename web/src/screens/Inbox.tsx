@@ -422,10 +422,7 @@ export function Inbox({ filter }: { filter: string | null }) {
         {/* Under the Needs-you shortcut the caught-up card is the whole empty state. */}
         {needsYou && list.length === 0 ? null : (
           <>
-            <div
-              className="section-title"
-              style={{ justifyContent: "space-between" }}
-            >
+            <div className="section-title threads-head">
               <span className="threads-label">
                 {selectMode ? (
                   <label className="select-all">
@@ -456,7 +453,7 @@ export function Inbox({ filter }: { filter: string | null }) {
                 )}
               </span>
               {!needsYou && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div className="threads-tools">
                   <div
                     className="segmented"
                     style={{ textTransform: "none", letterSpacing: 0 }}

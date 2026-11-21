@@ -91,8 +91,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
   overscroll-behavior-y: none;
   -webkit-tap-highlight-color: transparent;
+  /* A long URL or token wraps instead of pushing past the screen edge. */
+  overflow-wrap: break-word;
 }
-#root { min-height: 100dvh; display: flex; flex-direction: column; }
+/* Nothing may ever be wider than the screen. One overflowing line makes a
+   phone lay the page out wider and zoom it out to fit: the sticky header
+   then drifts off the top, and the page can no longer scroll to the true
+   bottom, so "Latest" never clears. clip, not hidden: hidden would make
+   #root a scroll container and unstick the header and composer. */
+#root { min-height: 100dvh; display: flex; flex-direction: column; overflow-x: clip; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 button, input, textarea, select { font: inherit; color: inherit; }
@@ -163,6 +170,16 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .card + .card { margin-top: 12px; }
 .section-title { font-size: 12.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); margin: 22px 4px 8px; display: flex; align-items: center; gap: 8px; }
 .section-title:first-child { margin-top: 6px; }
+/* The inbox's "Threads" row: on the narrowest phones the tabs tighten, and
+   if even that is too wide (select mode) the tools wrap under the label
+   instead of running off the screen. */
+.threads-head { justify-content: space-between; flex-wrap: wrap; row-gap: 6px; }
+.threads-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+@media (max-width: 350px) {
+  .threads-tools { gap: 6px; }
+  .threads-tools .segmented button { padding: 6px 8px; }
+  .threads-tools .btn.small { padding: 0 9px; }
+}
 .section-title .count { background: var(--amber-soft); color: var(--amber-text); border-radius: 999px; padding: 1px 8px; font-size: 12px; letter-spacing: 0; }
 
 .filter-row { display: flex; margin: 4px 0 2px; }
@@ -389,7 +406,7 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 /* Question card ----------------------------------------------------------- */
 .question {
   background: var(--surface); border: 1px solid color-mix(in srgb, var(--amber) 45%, var(--border)); border-left: 3px solid var(--amber); border-radius: var(--radius-lg);
-  padding: 12px 14px 12px; box-shadow: var(--shadow); align-self: stretch; max-width: 100%;
+  padding: 12px 14px 12px; box-shadow: var(--shadow); align-self: stretch; max-width: 100%; min-width: 0; overflow-wrap: anywhere;
 }
 .question.resolved { border-color: var(--border); border-left-color: var(--border-strong); }
 .question.highlight { animation: flash 1.4s var(--ease); }
@@ -527,6 +544,8 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .docs .md pre { font-size: 12.5px; }
 .docs .md h1 { font-size: 1.6em; } .docs .md h2 { font-size: 1.3em; margin-top: 1.6em; } .docs .md h3 { font-size: 1.1em; }
 .docs .md table { display: table; width: 100%; }
+.docs .md .table-scroll { margin: 0.55em 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.docs .md .table-scroll table { margin: 0; }
 
 ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 0.16s; }
 
