@@ -1,4 +1,5 @@
 import { Component, useEffect, useRef, useState, type ErrorInfo, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { linkSegments } from "../lib/links";
 import { onLinkClick } from "../lib/router";
 import { dismissToast, toast, useStore } from "../lib/store";
 import { IconCheck, IconClose, IconCopy } from "./Icons";
@@ -16,6 +17,24 @@ export function Link({ href, children, className, onClick, ...rest }: { href: st
     >
       {children}
     </a>
+  );
+}
+
+/** Plain text whose bare URLs are links that open outside the app, like
+ * links in messages do. A tap on one never also toggles what it sits in. */
+export function Linkified({ text }: { text: string }) {
+  return (
+    <>
+      {linkSegments(text).map((seg, i) =>
+        typeof seg === "string" ? (
+          seg
+        ) : (
+          <a key={i} href={seg.url} target="_blank" rel="noopener noreferrer nofollow" onClick={(e) => e.stopPropagation()}>
+            {seg.url}
+          </a>
+        ),
+      )}
+    </>
   );
 }
 

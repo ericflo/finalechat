@@ -1,5 +1,6 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import { linkSegments } from "./links";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -79,7 +80,8 @@ export function escapeHTML(s: string): string {
 
 export function renderText(source: string): string {
   // Plain text with clickable links and preserved line breaks.
-  const escaped = escapeHTML(stripANSI(source));
-  const linked = escaped.replace(/https?:\/\/[^\s<]+/g, (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer nofollow">${url}</a>`);
+  const linked = linkSegments(stripANSI(source))
+    .map((seg) => (typeof seg === "string" ? escapeHTML(seg) : `<a href="${escapeHTML(seg.url)}" target="_blank" rel="noopener noreferrer nofollow">${escapeHTML(seg.url)}</a>`))
+    .join("");
   return linked.replace(/\n/g, "<br>");
 }

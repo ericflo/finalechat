@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../components/Attachments";
-import { Avatar, ConfirmSheet, CopyButton, Sheet, sheetsOpen } from "../components/Common";
+import { Avatar, ConfirmSheet, CopyButton, Linkified, Sheet, sheetsOpen } from "../components/Common";
 import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBolt, IconBranch, IconChevron, IconClock, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconReply, IconSend, IconServer, IconSettings, IconTerminal, IconTrash } from "../components/Icons";
 import { NotifyBell, RelayBadge, RelaySheet, agentName, relayAgent, relayReceipts, threadRelay } from "../components/Relay";
 import { api } from "../lib/api";
@@ -587,27 +587,36 @@ function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () 
   return (
     <div style={{ padding: "0 12px 8px", maxWidth: 760, margin: "0 auto", display: "flex", alignItems: "center", flexWrap: "nowrap", gap: 4, minWidth: 0 }}>
       {desc ? (
-        <button
-          type="button"
+        // Not a button: the summary can carry links, and a link cannot sit
+        // inside one. A tap anywhere but a link still toggles; "more/less"
+        // is the control for keyboards and screen readers.
+        <div
           onClick={toggle}
           title={overflowing ? (expanded ? "Show less" : "Show more") : undefined}
-          aria-label={overflowing ? (expanded ? "Collapse thread summary" : "Expand thread summary") : "Thread summary"}
-          aria-expanded={overflowing ? expanded : undefined}
-          style={{ flex: 1, minWidth: 0, overflow: "hidden", background: "none", border: "none", padding: 0, textAlign: "left", cursor: overflowing ? "pointer" : "default", fontSize: 13, lineHeight: 1.4, color: "var(--text-2)", display: "flex", alignItems: expanded ? "flex-start" : "center", flexWrap: "nowrap", gap: 6 }}
+          style={{ flex: 1, minWidth: 0, overflow: "hidden", textAlign: "left", cursor: overflowing ? "pointer" : "default", fontSize: 13, lineHeight: 1.4, color: "var(--text-2)", display: "flex", alignItems: expanded ? "flex-start" : "center", flexWrap: "nowrap", gap: 6 }}
         >
           <span
             ref={textRef}
             style={expanded ? { flex: 1, minWidth: 0, whiteSpace: "normal", overflowWrap: "break-word" } : { flex: 1, minWidth: 0, display: "block", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
           >
-            {desc}
+            <Linkified text={desc} />
           </span>
           {overflowing && (
-            <span style={{ flex: "none", color: "var(--text-3)", whiteSpace: "nowrap", lineHeight: 1.4 }}>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggle();
+              }}
+              aria-label={expanded ? "Collapse thread summary" : "Expand thread summary"}
+              aria-expanded={expanded}
+              style={{ flex: "none", color: "var(--text-3)", whiteSpace: "nowrap", lineHeight: 1.4 }}
+            >
               {expanded ? "less " : "more "}
               <IconDown style={{ width: 12, height: 12, verticalAlign: -1, transform: expanded ? "rotate(180deg)" : undefined }} aria-hidden="true" />
-            </span>
+            </button>
           )}
-        </button>
+        </div>
       ) : (
         <button
           type="button"

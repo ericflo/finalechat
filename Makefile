@@ -58,6 +58,7 @@ test-go:
 
 test-web: web/node_modules
 	cd web && $(NPM) run typecheck
+	cd web && node --test tests/links.mjs tests/client-caps.mjs
 
 ## Isolated Chromium fixture checks; install Playwright separately (see docs/integrations.md).
 test-browser: web/node_modules

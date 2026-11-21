@@ -3,7 +3,7 @@ import { answerQuestion, dismissQuestion, toast, useStore } from "../lib/store";
 import type { Question } from "../lib/types";
 import { compactTime, countdown, fullDateTime, useNow } from "../lib/time";
 import { IconCheck } from "./Icons";
-import { Avatar, Link } from "./Common";
+import { Avatar, Link, Linkified } from "./Common";
 
 /** Options shown before an expander; a phone question is a 2-5 way choice. */
 const maxOptions = 5;
@@ -106,7 +106,7 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
           {compactTime(q.created_at, now)}
         </span>
       </div>
-      <div className="q-prompt">{q.prompt}</div>
+      <div className="q-prompt"><Linkified text={q.prompt} /></div>
 
       {pending && (
         <>
@@ -199,8 +199,8 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
       {q.status === "answered" && q.answer && (
         <div className="q-answer">
           <div className="who">You answered</div>
-          {q.answer.selected.length > 0 && <div style={{ fontWeight: 600 }}>{q.answer.selected.join(", ")}</div>}
-          {q.answer.text && <div style={{ whiteSpace: "pre-wrap" }}>{q.answer.text}</div>}
+          {q.answer.selected.length > 0 && <div style={{ fontWeight: 600 }}><Linkified text={q.answer.selected.join(", ")} /></div>}
+          {q.answer.text && <div style={{ whiteSpace: "pre-wrap" }}><Linkified text={q.answer.text} /></div>}
         </div>
       )}
       {(status === "cancelled" || status === "expired" || status === "dismissed") && (
