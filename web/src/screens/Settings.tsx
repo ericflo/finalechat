@@ -102,7 +102,7 @@ export function SettingsScreen() {
           <div className="setting">
             <div>
               <div className="label">Remote mode</div>
-              <div className="desc">When you step away from the terminal: Claude Code waits for your replies here and uses your phone answers to its questions.</div>
+              <div className="desc">Claude Code and Antigravity can wait for your replies here and use your phone answers to their questions.</div>
             </div>
             <Toggle on={settings.remote_mode} onChange={(v) => updateSettings({ remote_mode: v }).catch((e) => toast(e.message, "error"))} label="Remote mode" />
           </div>
@@ -119,7 +119,7 @@ export function SettingsScreen() {
               <div className="label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <IconTerminal style={{ width: 18, height: 18, color: "var(--text-3)" }} /> Connect an agent
               </div>
-              <div className="desc">API tokens, the CLI, Claude Code hooks and MCP.</div>
+              <div className="desc">API tokens, CLI integrations, hooks and MCP.</div>
             </div>
             <IconChevron className="chev" />
           </Link>
@@ -662,6 +662,7 @@ export function AgentsScreen() {
               The token lands in your shell history with this line; on a shared machine run <code>finalechat login</code> and paste it at the prompt instead.
             </p>
           )}
+          <Snippet title="Connect Antigravity (hooks + MCP)" code="finalechat install antigravity" />
           <Snippet title="Then wire up Claude Code (hooks + MCP)" code={`finalechat install claude-code`} />
           <p style={{ fontSize: 13.5, color: "var(--text-2)", marginTop: 10, lineHeight: 1.45 }}>
             After that, every Claude Code session gets its own thread here: its replies, your prompts, and its questions. Turn on <strong>Remote mode</strong> when you leave the desk and Claude will wait for your answers from this app.

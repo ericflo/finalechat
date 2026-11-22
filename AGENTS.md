@@ -339,11 +339,12 @@ Integrations can publish immutable session websites independently of chat mirror
 
 Other integrations can use `finalechat artifact upload ./prepared-website --thread ext:SESSION_ID --source session.jsonl --append-only-sources`. It packages a self-contained HTML entrypoint and declared source files, computes hashes, and journals upload retries. Use `artifact pack ./prepared-website -o ./new-package` to prepare an offline package first. A directory containing `manifest.json` retains its existing metadata and file roles; omit packaging overrides for that directory. Full usage is in [docs/integrations.md](docs/integrations.md).
 
-The CLI supports both native integrations:
+The CLI supports these native integrations:
 
 ```sh
 finalechat install claude-code --artifacts --project .
 finalechat install codex --artifacts --project .
+finalechat install antigravity --artifacts --project .
 finalechat connector pair claude-code --project . --scope project
 finalechat connector pair codex --project .
 finalechat connector run codex --project .

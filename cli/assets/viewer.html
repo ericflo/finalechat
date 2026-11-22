@@ -12,6 +12,13 @@ function restoreInspection(saved){if(saved?.format==="finalechat.native-viewer-s
 window.addEventListener("scroll",saveInspection,{passive:true});
 
 function extract(record){const p=record.payload||record,m=record.message||p;let kind=record.type||"event",role=m.role||"",parts=[],tools=[];
+ if(Number.isSafeInteger(record.step_index)){
+  if(record.type==="USER_INPUT")role="user";
+  if(record.type==="PLANNER_RESPONSE")role="assistant";
+  for(const call of record.tool_calls||[])tools.push({name:call.name,input:call.args});
+  const text=record.content||"",prompt=role==="user"&&text.match(/^<USER_REQUEST>\n([\s\S]*)\n<\/USER_REQUEST>(?:\n|$)/);
+  return{kind,role,text:prompt?prompt[1]:text,tools,id:String(record.step_index),time:record.created_at,record};
+ }
  if(record.type==="response_item")kind=p.type||kind;if(record.type==="event_msg")kind=p.type||kind;
  const content=m.content;if(typeof content==="string")parts.push(content);if(Array.isArray(content))for(const c of content){if(c.text)parts.push(c.text);if(c.type==="tool_use")tools.push({id:c.id,name:c.name,input:c.input});if(c.type==="tool_result")tools.push({id:c.tool_use_id,result:c.content,is_error:c.is_error})}
  if(typeof p.message==="string"&&!parts.length)parts.push(p.message);if(p.type==="function_call"||p.type==="custom_tool_call")tools.push({id:p.call_id,name:p.name,input:p.arguments??p.input});if(p.type==="function_call_output"||p.type==="custom_tool_call_output")tools.push({id:p.call_id,result:p.output});

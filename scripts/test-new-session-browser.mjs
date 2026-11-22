@@ -22,7 +22,7 @@ await mkdir(shots,{recursive:true});
 const actors=['orchestrator','task','narrator'];
 const cap=a=>a[0].toUpperCase()+a.slice(1);
 const efforts=['none','minimal','low','medium','high','xhigh','max'];
-const properties={prompt:{type:'string',max_length:32768},cwd:{type:'string',max_length:4096},relay:{type:'string',max_length:120,enum:['','codex']},config:{type:'string',max_length:120,enum:['glm','anthropic-med','bundle:eric']}};
+const properties={prompt:{type:'string',max_length:32768},cwd:{type:'string',max_length:4096},relay:{type:'string',max_length:120,enum:['','codex','antigravity']},config:{type:'string',max_length:120,enum:['glm','anthropic-med','bundle:eric']}};
 // As eagent declares them: the configuration, then a card per actor whose
 // defaults are the project's own routes.
 const project={orchestrator:['together','zai-org/GLM-5.3','high'],task:['together','zai-org/GLM-5.3-Flash','medium'],narrator:['together','deepseek-ai/DeepSeek-V4.1-Flash','low']};
@@ -39,6 +39,10 @@ for(const a of actors){
 properties.relay_codex_model={type:'string',max_length:200};
 properties.relay_codex_effort={type:'string',max_length:120,enum:['low','medium','high','xhigh','max','ultra']};
 inputs.push({name:'relay_codex_model',label:'Model',group:'Codex',suggest:{list:'codex_models'},default:'gpt-6.2-astra',when:{relay:['codex']}},{name:'relay_codex_effort',label:'Reasoning effort',group:'Codex',default:'xhigh',when:{relay:['codex']}});
+properties.relay_antigravity_model={type:'string',max_length:200};
+properties.relay_antigravity_effort={type:'string',enum:['low','medium','high','xhigh','max']};
+inputs.push({name:'relay_antigravity_model',label:'Model',group:'Antigravity',suggest:{list:'antigravity_models'},when:{relay:['antigravity']}},{name:'relay_antigravity_effort',label:'Reasoning effort',group:'Antigravity',when:{relay:['antigravity']}});
+const agyModels=[{value:'gemini-4-carbon-high',label:'Gemini 4 Carbon (High)'}];
 const codexModels=[{value:'gpt-6.2-sol',label:'GPT-6.2-Sol',detail:'Fast, go-to model for coding and everyday work.'},{value:'gpt-6.2-astra',label:'GPT-6.2-Astra',detail:'Our most capable model for complex coding and professional work.'},{value:'gpt-6-astra',label:'GPT-6-Astra'}];
 const implies=lineup=>Object.fromEntries(actors.flatMap((a,i)=>[[a+'_provider',lineup[i][0]],[a+'_model',lineup[i][1]],[a+'_effort',lineup[i][2]]]));
 const configs=[
@@ -55,8 +59,8 @@ const providers=[{value:'together',label:'Together AI'},{value:'openrouter',labe
 const resource={id:'project',connector_id:'connector',key:'project-x',label:'Development',scope:'project',generation:'',updated_at:new Date().toISOString(),
  descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.project/v1',adapter_version:'1',fields:[],
   actions:[{operation:'session.start',label:'Start a new session',class:'cost',parameters:{type:'object',properties,required:['prompt']},inputs}],
-  suggestions:{configs,models,providers,codex_models:codexModels}},
- snapshot:{version:'p1',context:'/home/u/Development',saved:{},effective:{},runtime_known:false,details:{directories:{root:'/home/u/Development',recent:[],children:[],siblings:[]},relay_profiles:[{name:'codex',agent:'codex',label:'Codex · GPT-6.2-Astra xhigh',model:'gpt-6.2-astra',effort:'xhigh'}],relays:[]}}};
+  suggestions:{configs,models,providers,codex_models:codexModels,antigravity_models:agyModels}},
+ snapshot:{version:'p1',context:'/home/u/Development',saved:{},effective:{},runtime_known:false,details:{directories:{root:'/home/u/Development',recent:[],children:[],siblings:[]},relay_profiles:[{name:'codex',agent:'codex',label:'Codex · GPT-6.2-Astra xhigh',model:'gpt-6.2-astra',effort:'xhigh'},{name:'antigravity',agent:'antigravity',label:'Antigravity',model:'',effort:''}],relays:[]}}};
 const connector={id:'connector',name:'eagent · llmbox · Development',provider:'eagent',state:'active',grants:[],requested_grants:[],last_seen_at:new Date().toISOString(),expires_at:'2030-01-01T00:00:00Z'};
 
 const server=await createServer({root:path.join(root,'web'),configFile:false,plugins:[react()],server:{host:'127.0.0.1',port:0,strictPort:false},logLevel:'warn'});
@@ -195,6 +199,17 @@ try {
   await page.getByRole('button',{name:'Start the session'}).click();
   await page.waitForURL(/\/t\/t1/);
   assert.deepEqual({...commands[commands.length-1].proposal.parameters},{prompt:'ship it',relay:'codex',relay_codex_model:'gpt-6.2-sol',relay_codex_effort:'max'});
+  await page.goto(base+'/tests/artifacts.html?draft');
+  await page.getByRole('button',{name:'Antigravity',exact:true}).click();
+  await page.getByTitle("Antigravity's model and reasoning effort for this session").click();
+  await page.getByRole('button',{name:/^Antigravity model:/}).click();
+  await page.locator('.sf-picker').getByRole('button',{name:/^Gemini 4 Carbon/}).click();
+  await page.getByRole('region',{name:'Antigravity',exact:true}).getByRole('radio',{name:'high',exact:true}).click();
+  await page.getByRole('button',{name:'Done',exact:true}).click();
+  await page.getByPlaceholder(/^What should Antigravity do/).fill('run tests');
+  await page.getByRole('button',{name:'Start the session'}).click();
+  await page.waitForURL(/\/t\/t1/);
+  assert.deepEqual(commands.at(-1).proposal.parameters,{prompt:'run tests',relay:'antigravity',relay_antigravity_model:'gemini-4-carbon-high',relay_antigravity_effort:'high'});
   await page.close();
  }
  assert.deepEqual(errors,[]);

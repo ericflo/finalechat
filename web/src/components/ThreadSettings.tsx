@@ -35,7 +35,7 @@ export function ThreadSettingsPanel({ thread, onClose }: { thread: string; onClo
     {closing && <div className="ts-discard">You have unsaved changes.<button className="btn small" onClick={() => setClosing(false)}>Keep editing</button><button className="btn small" onClick={onClose}>Discard changes</button></div>}
     {error && <p className="ts-message" role="alert">{error}</p>}
     {links === null && !error && <p className="ts-message">Loading your agent’s settings…</p>}
-    {links?.length === 0 && <div className="ts-empty"><h3>Settings will appear here</h3><p>When your agent connects, you can change its models and behavior right here in the conversation.</p><p>Keep eagent’s server or your Claude Code / Codex companion running. This panel updates automatically.</p></div>}
+    {links?.length === 0 && <div className="ts-empty"><h3>Settings will appear here</h3><p>When your agent connects, you can change its models and behavior right here in the conversation.</p><p>Keep eagent’s server or your native CLI companion running. This panel updates automatically.</p></div>}
     {!!links?.length && project && <nav className="ts-scope" aria-label="Which settings">
       <button aria-pressed={scope === "session"} disabled={dirty} onClick={() => setScope("session")}>This session</button>
       <button aria-pressed={scope === "project"} disabled={dirty} onClick={() => setScope("project")}>Project defaults</button>
@@ -143,7 +143,7 @@ function ThreadSummaryBlock({ id }: { id: string }) {
   );
 }
 
-const providerName = (p: string) => p === "eagent" ? "eagent" : p === "claude-code" ? "Claude Code" : p === "codex" ? "Codex" : p;
+const providerName = (p: string) => p === "eagent" ? "eagent" : p === "claude-code" ? "Claude Code" : p === "codex" ? "Codex" : p === "antigravity" ? "Antigravity" : p;
 
 /** One resource's settings in FinaleChat's own form. When the agent also
  * published an editor page for the resource, it can be opened instead; it

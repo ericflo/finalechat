@@ -697,7 +697,39 @@ class SettingsConflict(CLIError):
     pass
 
 
-class ClaudeSettings:
+class JSONFileSettings:
+    def prepare(self, proposal, grant):
+        view = self.snapshot(grant)
+        validate_local_proposal(view, proposal, grant)
+        with contextlib.suppress(FileNotFoundError):
+            if self.path.is_symlink():
+                raise CLIError("Settings symlinks must be managed locally.")
+        before = self.path.read_bytes() if self.path.exists() else b""
+        data = json.loads(before) if before.strip() else {}
+        for edit in proposal.get("edits", []):
+            edit_at(data, edit["key"], edit)
+        desired = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False).encode() + b"\n"
+        if len(desired) > 1 << 20:
+            raise CLIError("Resulting settings document exceeds 1 MiB.")
+        return {"view": view, "before_hash": sha256(before), "desired_hash": sha256(desired),
+                "desired_bytes": base64.b64encode(desired).decode(), "path": str(self.path)}
+
+    def apply_prepared(self, prepared):
+        before = self.path.read_bytes() if self.path.exists() else b""
+        if sha256(before) != prepared["before_hash"]:
+            raise SettingsConflict("Settings file changed immediately before saving.")
+        private_write(self.path.with_name(self.path.name + ".finalechat-backup"), before)
+        private_write(self.path, base64.b64decode(prepared["desired_bytes"]))
+
+    def matches_prepared(self, prepared):
+        raw = self.path.read_bytes() if self.path.exists() else b""
+        return sha256(raw) == prepared["desired_hash"]
+
+    def close(self):
+        pass
+
+
+class ClaudeSettings(JSONFileSettings):
     provider = "claude-code"
 
     def __init__(self, project, scope="project", user_directory=None):
@@ -779,36 +811,6 @@ class ClaudeSettings:
                                  "unsupported_fields": sorted(k for k in saved if k not in known),
                                  "unsupported_values": unsupported_values,
                                  "credential_values": "Excluded; environment values and helper commands are not exported."}}}
-
-    def prepare(self, proposal, grant):
-        view = self.snapshot(grant)
-        validate_local_proposal(view, proposal, grant)
-        with contextlib.suppress(FileNotFoundError):
-            if self.path.is_symlink():
-                raise CLIError("Settings symlinks must be managed locally.")
-        before = self.path.read_bytes() if self.path.exists() else b""
-        data = json.loads(before) if before.strip() else {}
-        for edit in proposal.get("edits", []):
-            edit_at(data, edit["key"], edit)
-        desired = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False).encode() + b"\n"
-        if len(desired) > 1 << 20:
-            raise CLIError("Resulting settings document exceeds 1 MiB.")
-        return {"view": view, "before_hash": sha256(before), "desired_hash": sha256(desired),
-                "desired_bytes": base64.b64encode(desired).decode(), "path": str(self.path)}
-
-    def apply_prepared(self, prepared):
-        before = self.path.read_bytes() if self.path.exists() else b""
-        if sha256(before) != prepared["before_hash"]:
-            raise SettingsConflict("Settings file changed immediately before saving.")
-        private_write(self.path.with_name(self.path.name + ".finalechat-backup"), before)
-        private_write(self.path, base64.b64decode(prepared["desired_bytes"]))
-
-    def matches_prepared(self, prepared):
-        raw = self.path.read_bytes() if self.path.exists() else b""
-        return sha256(raw) == prepared["desired_hash"]
-
-    def close(self):
-        pass
 
 
 def native_version(executable):
@@ -920,7 +922,256 @@ class CodexSettings:
         self.rpc.close()
 
 
+def antigravity_home():
+    return Path.home() / ".gemini" / "antigravity-cli"
+
+
+def antigravity_conversations():
+    index = antigravity_home() / "cache/conversation_metadata.json"
+    return read_object(index, max_bytes=32 << 20).get("conversations", {})
+
+
+def antigravity_workspace_matches(summary, project):
+    return not summary.get("Internal") and Path(project).resolve().as_uri() in (summary.get("WorkspaceURIs") or [])
+
+
+def discover_antigravity_sessions(project, directory):
+    for sid, item in antigravity_conversations().items():
+        summary = item.get("summary", {})
+        if summary.get("ID") != sid or not antigravity_workspace_matches(summary, project):
+            continue
+        if (directory / "sessions" / (sha256(sid.encode()) + ".json")).is_file():
+            continue
+        native = antigravity_transcript(sid)
+        if native.is_file():
+            register_native_session("antigravity", project, sid, native)
+
+
+def antigravity_transcript(session_id, name="transcript_full.jsonl"):
+    if not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", session_id):
+        raise CLIError("Invalid Antigravity conversation ID.")
+    return antigravity_home() / "brain" / session_id / ".system_generated" / "logs" / name
+
+
+class AntigravitySettings(JSONFileSettings):
+    provider = "antigravity"
+    scope = "user"
+
+    def __init__(self, project, scope="user"):
+        if scope != "user":
+            raise CLIError("Antigravity CLI stores its defaults in user settings.")
+        self.path = antigravity_home() / "settings.json"
+        self.key = "antigravity-user-" + sha256(os.fsencode(str(self.path)))[:24]
+        self.native_version = native_version("agy")
+
+    def grant(self):
+        return {"key": self.key, "label": "Antigravity · User settings", "scope": self.scope,
+                "operations": ["settings.apply", "settings.refresh"], "classes": ["preference", "permissions"]}
+
+    def snapshot(self, grant=None):
+        grant = grant or self.grant()
+        data = read_object(self.path)
+        models = antigravity_model_labels()
+        fields = [setting_field("model", label="Model and reasoning effort", choices=models or None,
+                                description="Antigravity saves the selected model variant, including its effort level."),
+                  setting_field("agentMode", choices=["", "auto", "accept-edits", "plan"], category="permissions"),
+                  setting_field("queuedMessages", choices=["queue", "send-immediately"]),
+                  setting_field("notifications", "boolean"), setting_field("showTips", "boolean")]
+        saved = {}
+        for field in fields:
+            key = field["key"]
+            if key[1:] in data:
+                saved[key] = data[key[1:]]
+            if field["class"] not in grant["classes"]:
+                field.update(writable=False, locked_reason="This settings class was not paired.")
+        effective = dict(saved)
+        unsupported = supported_snapshot_values(fields, saved, effective)
+        version = sha256(canonical_bytes([data, models, self.native_version, INTEGRATION_ADAPTER_DIGEST]))
+        return {"key": self.key, "label": self.grant()["label"], "scope": self.scope, "generation": "",
+                "descriptor": {"format": "finalechat.settings/v1", "schema_version": INTEGRATION_SCHEMA + "/antigravity",
+                               "adapter_version": VERSION, "fields": fields},
+                "snapshot": {"version": version, "context": version, "saved": saved, "effective": effective,
+                             "runtime_known": False, "details": {"native_version": self.native_version, "unsupported_values": unsupported}}}
+
+
+_agy_labels = []
+_agy_refresh_at = 0.0
+
+
+def antigravity_model_labels():
+    global _agy_labels, _agy_refresh_at
+    if time.monotonic() >= _agy_refresh_at:
+        _agy_refresh_at = time.monotonic() + 60
+        try:
+            result = subprocess.run(["agy", "models"], capture_output=True, text=True, timeout=8, check=True)
+            labels = [line.split("\t", 1)[1].strip() for line in result.stdout.splitlines() if "\t" in line]
+            if labels:
+                _agy_labels = list(dict.fromkeys(label for label in labels if 0 < len(label) <= 200))[:100]
+                _agy_refresh_at = time.monotonic() + 3600
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return _agy_labels.copy()
+
+
+def install_antigravity(args, remove=False):
+    executable = shutil.which("agy")
+    if not executable and not args.no_mcp:
+        raise CLIError("Install agy before registering its MCP server.")
+    path = Path(args.settings or "~/.gemini/config/hooks.json").expanduser()
+    command = shlex.join([sys.executable, cli_path(), "hook", "antigravity"])
+    events = {}
+    for event in ("SessionStart", "PreInvocation", "PreToolUse", "PostToolUse", "Stop"):
+        handler = {"type": "command", "command": command + " " + event,
+                   "timeout": 1800 if event in ("PreToolUse", "Stop") else 30}
+        events[event] = [{"matcher": "*", "hooks": [handler]}] if "ToolUse" in event else [handler]
+    lock = INTEGRATION_DIR / "locks" / (sha256(os.fsencode(str(path.resolve()))) + ".lock")
+    with integration_lock(lock):
+        hooks = load_settings(path)
+        if remove:
+            if hooks.pop("finalechat", None) is not None:
+                write_settings(path, hooks)
+        else:
+            previous = hooks.get("finalechat", {})
+            if previous.get("enabled") is False:
+                events["enabled"] = False
+            if previous != events:
+                hooks["finalechat"] = events
+                write_settings(path, hooks)
+    if not args.no_mcp:
+        # agy mcp add replaces the entire entry, including disabled tools and
+        # local environment overrides. Update only our stdio launch fields.
+        config_path = Path.home() / ".gemini/config/mcp_config.json"
+        mcp_lock = INTEGRATION_DIR / "locks" / (sha256(os.fsencode(str(config_path))) + ".lock")
+        with integration_lock(mcp_lock):
+            config = load_settings(config_path)
+            servers = config.setdefault("mcpServers", {})
+            entry = servers.get("finalechat", {})
+            if not isinstance(entry, dict) or entry.get("serverUrl") or entry.get("url"):
+                raise CLIError("A different FinaleChat MCP server is already configured in " + str(config_path))
+            if remove:
+                changed = servers.pop("finalechat", None) is not None
+            else:
+                updated = dict(entry, command=sys.executable, args=[cli_path(), "mcp"])
+                changed = updated != entry
+                servers["finalechat"] = updated
+            if changed:
+                write_settings(config_path, config)
+    if remove:
+        configure_integration("antigravity", args.project, enabled=False, artifacts=False)
+        print("Removed Antigravity hooks and stopped this project's companion.")
+    else:
+        changes = {"enabled": True}
+        if args.artifacts:
+            changes["artifacts"] = True
+        configure_integration("antigravity", args.project, **changes)
+        if args.artifacts:
+            start_integration_companion("antigravity", args.project, client_from_args(args))
+        print(f"Installed Antigravity hooks in {path}. Start a new agy session to connect it.")
+    return EXIT_OK
+
+
+def last_antigravity_message(path):
+    """Read the last user or assistant step, skipping tool results and system metadata."""
+    with regular_source(path) as (source, size):
+        offset = max(0, size - (16 << 20))
+        source.seek(offset)
+        lines = source.read(size - offset).split(b"\n")
+        if offset:
+            lines = lines[1:]
+    for raw in reversed(lines[:-1]):
+        if not raw.strip():
+            continue
+        step = json.loads(raw)
+        if step.get("type") in ("USER_INPUT", "PLANNER_RESPONSE"):
+            return step
+    return {}
+
+
+def hook_antigravity(event):
+    # agy requires a decision on each pre-tool hook, including irrelevant
+    # calls and failures. "allow" delegates to the normal permission policy.
+    output = {"decision": "allow"} if event == "PreToolUse" else {}
+    try:
+        payload = json.load(sys.stdin)
+        handle_antigravity_hook(event, payload, output)
+    except Exception:
+        hook_log("Antigravity hook failed:\n" + traceback.format_exc())
+    print(json.dumps(output))
+    return EXIT_OK
+
+
+def handle_antigravity_hook(event, payload, output):
+    sid = str(payload.get("conversationId") or "")
+    native = Path(payload.get("transcriptPath") or "")
+    if native.name not in ("transcript_full.jsonl", "transcript.jsonl") or native != antigravity_transcript(sid, native.name):
+        return  # global hooks are shared with the desktop app and IDE
+    project = Path((payload.get("workspacePaths") or [os.getcwd()])[0]).resolve()
+    directory = integration_path("antigravity", project)
+    token = resolve_token()
+    if event in ("SessionStart", "Stop"):
+        if token and read_object(directory / "integration.json").get("enabled", True):
+            try:
+                if not (directory / "sessions" / (sha256(sid.encode()) + ".json")).is_file():
+                    register_native_session("antigravity", project, sid, native)
+                start_integration_companion("antigravity", project)
+            except (CLIError, OSError, ValueError):
+                hook_log("Antigravity companion registration deferred.")
+    if os.environ.get("FINALECHAT_MIRROR", "on").lower() in ("off", "false", "0") or not token:
+        return
+    client = Client(resolve_base_url(), token)
+    external = "antigravity:" + sid
+    ref, title, agent = "ext:" + external, project.name or "Antigravity", "Antigravity"
+    if event == "SessionStart":
+        client.deadline = time.monotonic() + 20
+        client.create_thread(external, title=title, agent=agent,
+                             meta={"cwd": str(project), "host": hostname(), "model": payload.get("modelName", "")})
+        return
+    if event in ("PreToolUse", "PostToolUse"):
+        tool = payload.get("toolCall") or {}
+        name, args = tool.get("name", ""), tool.get("args") or {}
+        if event == "PreToolUse" and name == "ask_question":
+            reason = phone_question_answer(client, {"questions": args.get("questions", [])}, ref, title, agent)
+            if reason:
+                output.update(decision="deny", reason=reason)
+        elif "finalechat" not in name:
+            if event == "PreToolUse":
+                spawn_status(ref, str(args.get("toolSummary") or ("Using " + name)), "tool", 120, title, agent)
+            else:
+                spawn_status(ref, "Thinking…", "thinking", 120, title, agent)
+        return
+    state_key = "antigravity-" + sid
+    step = last_antigravity_message(native)
+    if "step_index" not in step:
+        return
+    event_id = str(step["step_index"])
+    if event == "PreInvocation":
+        if step.get("type") != "USER_INPUT" or step.get("source") != "USER_EXPLICIT":
+            return
+        prompt = payload.get("lastUserInput")
+        if not prompt:
+            return
+        client.deadline = time.monotonic() + 20
+        state = load_session_state(state_key)
+        if state.get("prompt_step") == event_id:
+            return
+        anchor = {"dataset_format": "antigravity.native-jsonl/v1", "session_id": sid, "event_id": event_id}
+        response = client.post_message(ref, prompt, sender="user", title=title, agent=agent,
+                                       client_key="prompt:" + event_id, meta={"via": "antigravity", "source_anchor": anchor})
+        state.update(prompt_step=event_id, last_prompt_id=response["message"]["id"])
+        save_session_state(state_key, state)
+        spawn_status(ref, "Thinking…", "thinking", 120, title, agent)
+    elif event == "Stop" and payload.get("fullyIdle", True):
+        if step.get("type") == "PLANNER_RESPONSE" and step.get("content") and not step.get("tool_calls"):
+            reason = post_hook_turn(client, sid, ref, title, agent, event_id, step["content"], "antigravity", state_key)
+            if reason:
+                output.update(decision="continue", reason=reason)
+        else:
+            clear_status(client, ref)
+
+
 def make_settings_adapter(provider, project, scope=None):
+    if provider == "antigravity":
+        return AntigravitySettings(project, scope or "user")
     if provider == "claude-code":
         return ClaudeSettings(project, scope or "project")
     if provider == "codex":
@@ -1044,6 +1295,12 @@ def validate_registration(provider, project, session_id, transcript):
         if Path(payload.get("cwd", "")).resolve() != project:
             raise CLIError("Codex rollout belongs to a different project.")
         version = str(payload.get("cli_version") or "unknown")
+    elif provider == "antigravity":
+        if transcript.name not in ("transcript_full.jsonl", "transcript.jsonl") or transcript != antigravity_transcript(session_id, transcript.name):
+            raise CLIError("Antigravity transcript path does not match its conversation ID.")
+        if "step_index" not in record:
+            raise CLIError("Expected a native Antigravity transcript step.")
+        version = "unknown"
     else:
         version = str(record.get("version") or "unknown")
         # Some Claude transcripts start with file-history metadata without a
@@ -1248,6 +1505,11 @@ def publish_integration_pass(provider, project, client, directory):
             hook_log(f"{provider} settings snapshot unavailable; preserving native session sources independently.")
         if provider == "codex":
             discover_codex_sessions(project, directory, native_root)
+        elif provider == "antigravity":
+            try:
+                discover_antigravity_sessions(project, Path(directory))
+            except (CLIError, OSError, ValueError):
+                hook_log("Antigravity discovery deferred; publishing the registered conversations.")
         for path in sorted((Path(directory) / "sessions").glob("*.json")):
             registration = read_object(path)
             try:
@@ -1626,6 +1888,11 @@ def cmd_artifact(args):
                 adapter.close()
         return EXIT_OK
     transcript = args.transcript
+    if provider == "antigravity":
+        summary = (antigravity_conversations().get(args.session) or {}).get("summary", {})
+        if summary.get("WorkspaceURIs") and not antigravity_workspace_matches(summary, project):
+            raise CLIError("Antigravity conversation belongs to a different project.")
+        transcript = transcript or antigravity_transcript(args.session)
     if not transcript and provider == "codex":
         with CodexRPC(project) as rpc:
             thread = rpc.call("thread/read", {"threadId": args.session, "includeTurns": False})["thread"]
@@ -1785,7 +2052,7 @@ def install_codex_integration(args, remove=False):
 
 def add_integration_parsers(sub):
     def provider_project(parser):
-        parser.add_argument("provider", choices=["claude-code", "codex"])
+        parser.add_argument("provider", choices=["claude-code", "codex", "antigravity"])
         parser.add_argument("--project", default=".", help="canonical project scope (default current directory)")
 
     root = sub.add_parser("artifact", help="export, verify, recover and publish permanent session websites")
@@ -1815,7 +2082,7 @@ def add_integration_parsers(sub):
         provider_project(parser)
         if name in ("track", "export"):
             parser.add_argument("session", help="native session ID")
-            parser.add_argument("--transcript", help="native JSONL path; Codex can resolve its own thread ID")
+            parser.add_argument("--transcript", help="native JSONL path; Codex and Antigravity can resolve a native session ID")
         if name == "publish":
             parser.add_argument("session", nargs="?", help="tracked native session; omit for all tracked sessions here")
             parser.add_argument("--recreate", action="store_true", help="explicitly create a new remote record after deletion; requires a session ID")

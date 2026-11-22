@@ -318,7 +318,7 @@ export function Inbox({ filter }: { filter: string | null }) {
         toast(
           settings.remote_mode
             ? "Remote mode off · agents use the terminal again"
-            : "Remote mode on · Claude Code waits for your replies here",
+            : "Remote mode on · Connected agents can wait for replies here",
           "success",
         ),
       )

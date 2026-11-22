@@ -984,6 +984,9 @@ def resolve_target(explicit: str | None = None, title: str | None = None, agent:
     env = os.environ.get("FINALECHAT_THREAD")
     if env:
         return ThreadTarget(env, title or "", agent or "", desc)
+    agy_id = os.environ.get("ANTIGRAVITY_CONVERSATION_ID", "")
+    if re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", agy_id):
+        return ThreadTarget("ext:antigravity:" + agy_id, title or "", agent or "Antigravity", desc)
     session = os.environ.get("CLAUDE_CODE_SESSION_ID", "").strip()
     if session:
         return ThreadTarget("ext:claude-code:" + session, title or "", agent or "", desc)
@@ -1604,16 +1607,18 @@ def hook_command() -> str:
 
 
 def cmd_install(args) -> int:
+    if args.target == "antigravity":
+        return install_antigravity(args)
     if args.target == "codex":
         return install_codex_integration(args)
-    path = Path(args.settings).expanduser().resolve()
+    path = Path(args.settings or "~/.claude/settings.json").expanduser().resolve()
     lock = INTEGRATION_DIR / "locks" / (sha256(os.fsencode(str(path))) + ".lock")
     with integration_lock(lock):
         return install_claude_hooks(args)
 
 
 def install_claude_hooks(args) -> int:
-    settings_path = Path(args.settings).expanduser()
+    settings_path = Path(args.settings or "~/.claude/settings.json").expanduser()
     command = hook_command()
     data = load_settings(settings_path)
     hooks = data.get("hooks")
@@ -1673,16 +1678,18 @@ def install_mcp(cli: str) -> None:
 
 
 def cmd_uninstall(args) -> int:
+    if args.target == "antigravity":
+        return install_antigravity(args, remove=True)
     if args.target == "codex":
         return install_codex_integration(args, remove=True)
-    path = Path(args.settings).expanduser().resolve()
+    path = Path(args.settings or "~/.claude/settings.json").expanduser().resolve()
     lock = INTEGRATION_DIR / "locks" / (sha256(os.fsencode(str(path))) + ".lock")
     with integration_lock(lock):
         return uninstall_claude_hooks(args)
 
 
 def uninstall_claude_hooks(args) -> int:
-    settings_path = Path(args.settings).expanduser()
+    settings_path = Path(args.settings or "~/.claude/settings.json").expanduser()
     data = load_settings(settings_path)
     hooks = data.get("hooks")
     removed = 0
@@ -2164,13 +2171,20 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
         clear_status(client, ref)
         return EXIT_OK
     uuid, text = last_assistant_text(transcript)
+    reason = post_hook_turn(client, session_id, ref, title, agent, uuid, text, "claude-code", session_id)
+    if reason:
+        print(json.dumps({"decision": "block", "reason": reason}), flush=True)
+    return EXIT_OK
+
+
+def post_hook_turn(client, session_id, ref, title, agent, uuid, text, provider, state_key):
     if not text:
         clear_status(client, ref)
-        return EXIT_OK
-    state = load_session_state(session_id)
+        return None
+    state = load_session_state(state_key)
     if uuid and state.get("last_posted_uuid") == uuid:
         clear_status(client, ref)
-        return EXIT_OK
+        return None
     # The last message Claude has heard from the user through this thread:
     # anything sent after it, while Claude was still working, is owed to
     # Claude now rather than lost.
@@ -2179,9 +2193,11 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
     # Posting the reply clears the status line on the server (with a
     # sequence, so a status still in flight cannot bring it back). The key
     # makes a retry (or a re-run after a lost cache) return the same message.
-    meta = {"via": "claude-code", "transcript_uuid": uuid or ""}
+    meta = {"via": provider}
+    if provider == "claude-code":
+        meta["transcript_uuid"] = uuid or ""
     if uuid:
-        meta["source_anchor"] = {"dataset_format": "claude-code.native-jsonl/v1", "session_id": session_id, "event_id": uuid}
+        meta["source_anchor"] = {"dataset_format": provider + ".native-jsonl/v1", "session_id": session_id, "event_id": uuid}
     resp = client.post_message(ref, text, meta=meta,
                                title=title, agent=agent,
                                client_key=f"stop:{session_id}:{uuid}" if uuid else None,
@@ -2189,30 +2205,27 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
     message = resp.get("message") or {}
     thread = resp.get("thread") or {}
     state.update({"last_posted_uuid": uuid, "thread_id": thread.get("id"), "last_message_id": message.get("id")})
-    save_session_state(session_id, state)
+    save_session_state(state_key, state)
 
     if not remote:
-        return EXIT_OK
+        return None
     total = env_seconds("FINALECHAT_REPLY_WAIT", 1500)
     if total <= 0:
-        return EXIT_OK
+        return None
 
-    def deliver(replies: list) -> int:
+    def deliver(replies: list) -> str | None:
         body = join_replies(replies)
         if not body:
-            return EXIT_OK
+            return None
         state["last_reply_id"] = replies[-1].get("id")
-        save_session_state(session_id, state)
+        save_session_state(state_key, state)
         # Claude picks the reply up and starts working again.
         if status_enabled():
             try:
                 client.set_activity(ref, "Thinking…", kind="thinking", ttl=120, seq=time.time_ns())
             except CLIError:
                 pass
-        reason = "The user replied from their phone via Finalechat: " + body
-        sys.stdout.write(json.dumps({"decision": "block", "reason": reason}) + "\n")
-        sys.stdout.flush()
-        return EXIT_OK
+        return "The user replied from their phone via Finalechat: " + body
 
     if anchor:
         try:
@@ -2245,7 +2258,7 @@ def hook_stop(client: Client, payload: dict, session_id: str, ref: str, title: s
     replies = wait_for_replies(client, ref, message.get("id") or anchor, total, keep_going=keep_going)
     if not replies:
         clear_status(client, ref)
-        return EXIT_OK
+        return None
     return deliver(replies)
 
 
@@ -2266,9 +2279,20 @@ def answer_attachment_hints(client: Client, ref: str, created: list) -> str:
 
 def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, agent: str) -> int:
     tool_input = payload.get("tool_input") or {}
+    reason = phone_question_answer(client, tool_input, ref, title, agent)
+    if not reason:
+        return EXIT_OK
+    output = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                     "permissionDecisionReason": reason}}
+    sys.stdout.write(json.dumps(output) + "\n")
+    sys.stdout.flush()
+    return EXIT_OK
+
+
+def phone_question_answer(client, tool_input, ref, title, agent):
     questions = tool_input.get("questions") if isinstance(tool_input, dict) else None
     if not isinstance(questions, list) or not questions:
-        return EXIT_OK
+        return None
     items = []
     for q in questions:
         if not isinstance(q, dict):
@@ -2279,6 +2303,8 @@ def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, 
         header = str(q.get("header") or "").strip()
         options = []
         for opt in q.get("options") or []:
+            if isinstance(opt, str):
+                opt = {"label": opt}
             if not isinstance(opt, dict):
                 continue
             label = str(opt.get("label") or "").strip()
@@ -2290,13 +2316,13 @@ def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, 
                 option["description"] = desc
             options.append(option)
         items.append({"header": header, "question": text, "options": options,
-                      "multi": bool(q.get("multiSelect"))})
+                      "multi": bool(q.get("multiSelect") or q.get("is_multi_select"))})
     if not items:
-        return EXIT_OK
+        return None
 
     if not client.remote_mode():
         for item in items:
-            lines = [f"**Claude Code is asking in the terminal:** {item['question']}"]
+            lines = [f"**{agent} is asking in the terminal:** {item['question']}"]
             for opt in item["options"]:
                 line = f"- {opt['label']}"
                 if opt.get("description"):
@@ -2305,7 +2331,7 @@ def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, 
             client.post_message(ref, "\n".join(lines), important=True, notify=True,
                                 meta={"kind": "terminal_question", "header": item["header"]},
                                 title=title, agent=agent)
-        return EXIT_OK
+        return None
 
     total = env_seconds("FINALECHAT_ASK_WAIT", 1500)
     created = []
@@ -2319,7 +2345,7 @@ def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, 
         if question.get("id"):
             created.append((item, question))
     if not created:
-        return EXIT_OK
+        return None
 
     deadline = time.monotonic() + total
     answers = []
@@ -2344,7 +2370,7 @@ def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, 
             except CLIError:
                 pass
     if not answers:
-        return EXIT_OK
+        return None
 
     parts = []
     for item, question in answers:
@@ -2356,14 +2382,12 @@ def hook_ask_user_question(client: Client, payload: dict, ref: str, title: str, 
         missing = ", ".join((item["header"] or item["question"]) for item, _ in unanswered)
         reason += f" The user did not answer: {missing}; decide those yourself or ask again later."
     reason += answer_attachment_hints(client, ref, created)
-    output = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                     "permissionDecisionReason": reason}}
-    sys.stdout.write(json.dumps(output) + "\n")
-    sys.stdout.flush()
-    return EXIT_OK
+    return reason
 
 
 def cmd_hook(args) -> int:
+    if args.target == "antigravity":
+        return hook_antigravity(args.event)
     if args.target != "claude-code":
         return EXIT_OK
     try:
@@ -2616,6 +2640,10 @@ def mcp_target(arguments: dict, metadata=None) -> ThreadTarget:
     # metadata, never a process-wide "most recent Codex session" pointer.
     # Explicit caller/environment targets keep their existing precedence.
     if not explicit and not os.environ.get("FINALECHAT_THREAD") and isinstance(metadata, dict):
+        agy_id = metadata.get("antigravity.google/conversation_id")
+        if isinstance(agy_id, str) and re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", agy_id):
+            return ThreadTarget("ext:antigravity:" + agy_id, title or os.path.basename(os.getcwd()), "Antigravity",
+                                resolve_description(description, summary))
         native = metadata.get("x-codex-turn-metadata")
         thread = native.get("thread_id") if isinstance(native, dict) else None
         if isinstance(thread, str) and re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", thread) and metadata.get("threadId", thread) == thread:
@@ -2939,9 +2967,9 @@ def cmd_mcp(args) -> int:
 
 
 # BEGIN GENERATED INTEGRATIONS (scripts/build-cli-integrations.py)
-INTEGRATION_ASSETS = {'sdk': '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', 'viewer': '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', 'settings': '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'}
-INTEGRATION_ASSETS_DIGEST = '7168456fe09bb94680fcdc19d1fefcff73d11e22933dc2e7321cdd31f33de14f'
-INTEGRATION_ADAPTER_DIGEST = 'd5e2d23859dd1baf2e86a46bbdb5acafb819621034a948d65aa36c9efce7ce2a'
+INTEGRATION_ASSETS = {'sdk': 'H4sIAAAAAAAC/7VZbXPbuBH+fr8C4XSuZEzDdiZxrvIpmZyTTNPmbeKkN9PUnYFJ0EJCEjoAsuLz6b93dwGQFMX4cp02HxwJWCwW+/Lsiw7usueqFbU8XQjHhHGqEoVjZ0//zq6OOHvWXMiSuYWyrFK1ZKqtVYv/McGsrKv9QrdOwFLJluJS8u/YXfYC+NRWs7U2n+GY0Q0TLZNfnAHOQPjPF29nrFhobYGRs6xURhZOm2umDbN6ZQpJl1lktlZuAd9QQq6Xsn2pC1E/x9004+w13CIvQBJzJU3OTp++Rh6tdHg3A6GN/GUF7EvO7h58l6YZmz9iN98xlqzgcuuMKlxyAt9r6dhSG5ezVreFzIHlL2zODnMGD2wlyT1nFbwL9hrRqkpaN9h81S3VnYBwoJVr9kos0yxnIKCqFLHB1TPpcJWo/6Hk+swJJ3FvVdcoEHC2IJJsS9VebnOqlXWylWbrgvgII0V5/U5aXV/Jng+tBvK3YBBlZZoaT+V1snUQKMPmCdsQ62rVFk5pMGOjXNqKBtRQSrB8ncHZCpSe+puqlumqF5FfSk+esd9+Yx/PMyBIw0HgDZzXqi31mouyfHYlW/cynEyTRloLLpXkLJW409kuPqoBMWmHl8KJE9pRVaDmwZHuzOfxiqUwsIFybC/MOxLc6+0NX+40+Lfh7nrpWSXeFQsIFh6DhYcjiacFQ1vUFJIf4RIeBp00nFzLs0HXay/phBcXnc/yWraX4O90NAMbuJVp/cNwv3svEX88PD/x3grrgfnJlrs6s5L9aa7boFLY2lHpbUr1ao266F9Bn7bF9KQND+xvvL+E7xA5vLN9OEU+0F8P0VCDBMHvyXsarkqgJxFwe3xhpC0l+L+M5EUthXmvGqlXLsVj3MEXk43ENEabjG7lRn4CxaUYIs9wudsGbhLiPlJRXMAmfFrVLjDcDPRsHXhGSk/sQypFYyAn1EfSWQm8uyEWPsyEvW6LPtjMskgb6Ra6zAFejWhsFszltRG5ZIDQBty3lz15A2rxuI24jIA9gHmM195RrHQOFGh5Eh7jTaHQhc7IT9O9PcDDsOu1PwklOfNKnPAr0j4whMuiVQIajw1I5tsxRjIQvwTRWo2oZpe6BWx/J7V/rmRXgKXSwFMQXnJ2/8Hh4WE2dhUQAq7JCfW2BM+DnGANb8ultu6Vj5r0JuYGPLptlmC+aMbNEDF1G/CyajEgyHI9Pi6E9fiYDUDTyoixXaoAgSZAFWEzBb4xnJjX6RRl0C4Ro3wHB+w96AuQDPygZhey1uADzGkQGPylaVZOXEDGN/JKIZ5xdiqKhc/YMQFCtvacAM6kaDBTUeJmpYY/aCKLKoda4cKo8lJSOsZzmEgAJ6/h+lX7+c8W1SkQcPhuEMATYnZNowIHnn+zm4QBp+YUO0kH0VHiJOOFcMUipdD2/rd7fs5WbSkrLGtOQmgRPWXDqGp486qAT7I8BdXJVKyFcrvMUN0ebeJCZBAXTnaj99RXR+jQfd0kTLFQkJz7eqlSxjoMW7LoGDwAfdKlcIuc6SWuYL1ws8l2cqgXfEvNua/2MK+QQeFvW6ZpRd5VceRKaRM/ZH3mvYPEE2D0nEpH7xEqwFJ4zQh0dFWB88PFQWQeFiDzQC0W0mO/GxfmA4uxxyQ8t+pXyfYjx9nozEDo1ysocg1X9kxU8kXr5CWUH/4YVS3TBJ4NEYQrfmSH+C3IFL6Fvb24/KgXbkJRL9orUQO6kfaNaC97/YzcPvjQtpejyROEtWB2urtT22ZL01R5gir7epXAwls0oBRuTUj5SlmLse5ZoKwzlsATx95wWesLUb8Ha/PCXC+dfszt6sJNughSAUroNdTykGlbdBUqma/DNcFfLGcfIDJER0sNws/QBJzSFVj/h3O0gyE0SB2nL190GvU1v1UULVDr+9VBLUvghOUsmYy+2VjG3gwro0kHIfpgaKwru6/gGkejlUfs6PD+Dw8eHpO/Hfz7o9ivDvf/cn5zfH/zpwPuMCgD+ULce3Cc3eI7ESY8fdIlP/8mhON5/+y9gRQ5+yyxSaDo3mPJjGwaKId1E/J4FD37++97bj/uuDvs3omdD+U6uCLrtdf1J2LdARGZm9taFTKNnHOUG7KdMeL6p1VVgXq7d0UewB2h4SPnHLXyQbXuhyd4ICIz+UfwQF6qS1RqcvbXJ/ugUIgakCHLziFTLNMvCHNfuNOh/Dk6zgDzyjMq7O7lLDmE+oJ/0qpNk2QgCCqHxMDqeMteExCvjVktXWeuyTDCf536MNej+uJWrJwHPgxaCnVIF4XdLsr0Ldiz5T/Bjn1tGHBnaKQIMyPbT5hrN0vd9ddYjzs+Gf+v0tKtKSli2FjtPv4RGrpUdHjSI3ynwG5tbx5jN2PXStYlm/S+QTa+GQHzDDp4t+BQPqWBUz6RwTLA7+lE76BEiPr7/6Z2RKdeMgCt44cPH947mnJvBGkcFVmo2VClvi4UFxo86+iYvVI/jTJ/KQtdUouAXN7Dm576FeykyB4rNEaS9DDtXxfAGgpxtNmWP2V0CCwUmHP/f4q0aAdfts6oUe7SY/BwOjk++FUv9k/dNcLvvgq74T/+rIifdPrb30c3qogf6wWaNE0VjgqAEQdHkF/eVGnyrxbwjT0C18eQ9F5NFD7goRJTwCyIPthQoLGjrO/p0XFouyt+bvGYv529ef0StF9oU0LVW0hZ2rGreMZfeXWIeD+U2mH/JMAa4DOOI1Vb6GaJLZGfLrLh9eG+iVgbjyC3jK3aJfloqYtVgyOUAtTv5LNa4rc0oX2s1umDHyrRSKmWSVxsVrVTSwpQGt+E5bW8+KxcX/kPhzt/tCH3HKGVFdDNogV907jbcr/WXTKw0D1i4UmN9ZjPAgtVRBvSVbp1GVgLxO2/RV35OQ8ma8+G8OEc+uoKGdX1CJawhyVYSmLXxD9Z3SYR5Zsq+6+7qDDCxmywxZwPU3uYGFWjeu0WR+uaZIVdtWa1MINyfqiLpYHO5QtCchUM/U7WwgGTt5gYuqDbHz0+hBXooOk7V/RjnGza2JECU8oQ2e5rIjdAnQaK4/GAE2SB2kEeXB3RoPIO5TOocn1e60+j6aYq0g+tXS1xjDJQu79qpIbJmbl3gtoBVnZuMKUdLMrsz1Drp16PUJlhDRfOfLxFpZ4+ahES4zlm2KlB/VDY4bAbkXmkh66G+UqD5VPsVotFXaMvqNC5qFD7WpUW6xYQYgBhu0Vkd81mIPrWQJJ+zOgmknR/0v+2QXOOMOrsljpWG0ZTFGgFMhqiEXLIwW2bbZAoQN+f050ZWZjDe5cDVb25QEa8MlL+ivO2MEqfsaPcy55jLdPPWFJ/O8Fft0hzP2wZotyzYQHkGeVUNOU+bechueYjdM9J2jgdne1Ih4xmETyxD+8GqdSHg0MtjYbyGyyS+k/YTe8QB6IkkgNR7sfX08x7evytKMO3vqNRNJDjiBEO6HZLGNxM/Pxxk/lXXcWfnG5/Vj8kfjwaNSCDfYscwmvZLGafbka+/eMWSLo2Cm9ModFYxd+dvmWuMbiMWMBjPIuT3R/QaKMb0o1FomlcVIKRV1LUIA8kwgX+DhB1DVEHb+J+Hy4L+/6U//L7GvJ0k4rxhgtT/02GgfEfq/qut4gdAAA=', 'viewer': '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', 'settings': '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'}
+INTEGRATION_ASSETS_DIGEST = 'b72a9aac76f20f5f46659c4729a3b5f7cf0afaa9092e801c1d332d014ffce791'
+INTEGRATION_ADAPTER_DIGEST = 'c8b3f2e620acd62a097c6c066496851f67e9c183211189c4a8a7794f5926ab73'
 """Source for the integrations embedded in the single-file CLI.
 
 Run scripts/build-cli-integrations.py after editing this file or cli/assets.
@@ -3641,7 +3669,39 @@ class SettingsConflict(CLIError):
     pass
 
 
-class ClaudeSettings:
+class JSONFileSettings:
+    def prepare(self, proposal, grant):
+        view = self.snapshot(grant)
+        validate_local_proposal(view, proposal, grant)
+        with contextlib.suppress(FileNotFoundError):
+            if self.path.is_symlink():
+                raise CLIError("Settings symlinks must be managed locally.")
+        before = self.path.read_bytes() if self.path.exists() else b""
+        data = json.loads(before) if before.strip() else {}
+        for edit in proposal.get("edits", []):
+            edit_at(data, edit["key"], edit)
+        desired = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False).encode() + b"\n"
+        if len(desired) > 1 << 20:
+            raise CLIError("Resulting settings document exceeds 1 MiB.")
+        return {"view": view, "before_hash": sha256(before), "desired_hash": sha256(desired),
+                "desired_bytes": base64.b64encode(desired).decode(), "path": str(self.path)}
+
+    def apply_prepared(self, prepared):
+        before = self.path.read_bytes() if self.path.exists() else b""
+        if sha256(before) != prepared["before_hash"]:
+            raise SettingsConflict("Settings file changed immediately before saving.")
+        private_write(self.path.with_name(self.path.name + ".finalechat-backup"), before)
+        private_write(self.path, base64.b64decode(prepared["desired_bytes"]))
+
+    def matches_prepared(self, prepared):
+        raw = self.path.read_bytes() if self.path.exists() else b""
+        return sha256(raw) == prepared["desired_hash"]
+
+    def close(self):
+        pass
+
+
+class ClaudeSettings(JSONFileSettings):
     provider = "claude-code"
 
     def __init__(self, project, scope="project", user_directory=None):
@@ -3723,36 +3783,6 @@ class ClaudeSettings:
                                  "unsupported_fields": sorted(k for k in saved if k not in known),
                                  "unsupported_values": unsupported_values,
                                  "credential_values": "Excluded; environment values and helper commands are not exported."}}}
-
-    def prepare(self, proposal, grant):
-        view = self.snapshot(grant)
-        validate_local_proposal(view, proposal, grant)
-        with contextlib.suppress(FileNotFoundError):
-            if self.path.is_symlink():
-                raise CLIError("Settings symlinks must be managed locally.")
-        before = self.path.read_bytes() if self.path.exists() else b""
-        data = json.loads(before) if before.strip() else {}
-        for edit in proposal.get("edits", []):
-            edit_at(data, edit["key"], edit)
-        desired = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False).encode() + b"\n"
-        if len(desired) > 1 << 20:
-            raise CLIError("Resulting settings document exceeds 1 MiB.")
-        return {"view": view, "before_hash": sha256(before), "desired_hash": sha256(desired),
-                "desired_bytes": base64.b64encode(desired).decode(), "path": str(self.path)}
-
-    def apply_prepared(self, prepared):
-        before = self.path.read_bytes() if self.path.exists() else b""
-        if sha256(before) != prepared["before_hash"]:
-            raise SettingsConflict("Settings file changed immediately before saving.")
-        private_write(self.path.with_name(self.path.name + ".finalechat-backup"), before)
-        private_write(self.path, base64.b64decode(prepared["desired_bytes"]))
-
-    def matches_prepared(self, prepared):
-        raw = self.path.read_bytes() if self.path.exists() else b""
-        return sha256(raw) == prepared["desired_hash"]
-
-    def close(self):
-        pass
 
 
 def native_version(executable):
@@ -3864,7 +3894,256 @@ class CodexSettings:
         self.rpc.close()
 
 
+def antigravity_home():
+    return Path.home() / ".gemini" / "antigravity-cli"
+
+
+def antigravity_conversations():
+    index = antigravity_home() / "cache/conversation_metadata.json"
+    return read_object(index, max_bytes=32 << 20).get("conversations", {})
+
+
+def antigravity_workspace_matches(summary, project):
+    return not summary.get("Internal") and Path(project).resolve().as_uri() in (summary.get("WorkspaceURIs") or [])
+
+
+def discover_antigravity_sessions(project, directory):
+    for sid, item in antigravity_conversations().items():
+        summary = item.get("summary", {})
+        if summary.get("ID") != sid or not antigravity_workspace_matches(summary, project):
+            continue
+        if (directory / "sessions" / (sha256(sid.encode()) + ".json")).is_file():
+            continue
+        native = antigravity_transcript(sid)
+        if native.is_file():
+            register_native_session("antigravity", project, sid, native)
+
+
+def antigravity_transcript(session_id, name="transcript_full.jsonl"):
+    if not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", session_id):
+        raise CLIError("Invalid Antigravity conversation ID.")
+    return antigravity_home() / "brain" / session_id / ".system_generated" / "logs" / name
+
+
+class AntigravitySettings(JSONFileSettings):
+    provider = "antigravity"
+    scope = "user"
+
+    def __init__(self, project, scope="user"):
+        if scope != "user":
+            raise CLIError("Antigravity CLI stores its defaults in user settings.")
+        self.path = antigravity_home() / "settings.json"
+        self.key = "antigravity-user-" + sha256(os.fsencode(str(self.path)))[:24]
+        self.native_version = native_version("agy")
+
+    def grant(self):
+        return {"key": self.key, "label": "Antigravity · User settings", "scope": self.scope,
+                "operations": ["settings.apply", "settings.refresh"], "classes": ["preference", "permissions"]}
+
+    def snapshot(self, grant=None):
+        grant = grant or self.grant()
+        data = read_object(self.path)
+        models = antigravity_model_labels()
+        fields = [setting_field("model", label="Model and reasoning effort", choices=models or None,
+                                description="Antigravity saves the selected model variant, including its effort level."),
+                  setting_field("agentMode", choices=["", "auto", "accept-edits", "plan"], category="permissions"),
+                  setting_field("queuedMessages", choices=["queue", "send-immediately"]),
+                  setting_field("notifications", "boolean"), setting_field("showTips", "boolean")]
+        saved = {}
+        for field in fields:
+            key = field["key"]
+            if key[1:] in data:
+                saved[key] = data[key[1:]]
+            if field["class"] not in grant["classes"]:
+                field.update(writable=False, locked_reason="This settings class was not paired.")
+        effective = dict(saved)
+        unsupported = supported_snapshot_values(fields, saved, effective)
+        version = sha256(canonical_bytes([data, models, self.native_version, INTEGRATION_ADAPTER_DIGEST]))
+        return {"key": self.key, "label": self.grant()["label"], "scope": self.scope, "generation": "",
+                "descriptor": {"format": "finalechat.settings/v1", "schema_version": INTEGRATION_SCHEMA + "/antigravity",
+                               "adapter_version": VERSION, "fields": fields},
+                "snapshot": {"version": version, "context": version, "saved": saved, "effective": effective,
+                             "runtime_known": False, "details": {"native_version": self.native_version, "unsupported_values": unsupported}}}
+
+
+_agy_labels = []
+_agy_refresh_at = 0.0
+
+
+def antigravity_model_labels():
+    global _agy_labels, _agy_refresh_at
+    if time.monotonic() >= _agy_refresh_at:
+        _agy_refresh_at = time.monotonic() + 60
+        try:
+            result = subprocess.run(["agy", "models"], capture_output=True, text=True, timeout=8, check=True)
+            labels = [line.split("\t", 1)[1].strip() for line in result.stdout.splitlines() if "\t" in line]
+            if labels:
+                _agy_labels = list(dict.fromkeys(label for label in labels if 0 < len(label) <= 200))[:100]
+                _agy_refresh_at = time.monotonic() + 3600
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return _agy_labels.copy()
+
+
+def install_antigravity(args, remove=False):
+    executable = shutil.which("agy")
+    if not executable and not args.no_mcp:
+        raise CLIError("Install agy before registering its MCP server.")
+    path = Path(args.settings or "~/.gemini/config/hooks.json").expanduser()
+    command = shlex.join([sys.executable, cli_path(), "hook", "antigravity"])
+    events = {}
+    for event in ("SessionStart", "PreInvocation", "PreToolUse", "PostToolUse", "Stop"):
+        handler = {"type": "command", "command": command + " " + event,
+                   "timeout": 1800 if event in ("PreToolUse", "Stop") else 30}
+        events[event] = [{"matcher": "*", "hooks": [handler]}] if "ToolUse" in event else [handler]
+    lock = INTEGRATION_DIR / "locks" / (sha256(os.fsencode(str(path.resolve()))) + ".lock")
+    with integration_lock(lock):
+        hooks = load_settings(path)
+        if remove:
+            if hooks.pop("finalechat", None) is not None:
+                write_settings(path, hooks)
+        else:
+            previous = hooks.get("finalechat", {})
+            if previous.get("enabled") is False:
+                events["enabled"] = False
+            if previous != events:
+                hooks["finalechat"] = events
+                write_settings(path, hooks)
+    if not args.no_mcp:
+        # agy mcp add replaces the entire entry, including disabled tools and
+        # local environment overrides. Update only our stdio launch fields.
+        config_path = Path.home() / ".gemini/config/mcp_config.json"
+        mcp_lock = INTEGRATION_DIR / "locks" / (sha256(os.fsencode(str(config_path))) + ".lock")
+        with integration_lock(mcp_lock):
+            config = load_settings(config_path)
+            servers = config.setdefault("mcpServers", {})
+            entry = servers.get("finalechat", {})
+            if not isinstance(entry, dict) or entry.get("serverUrl") or entry.get("url"):
+                raise CLIError("A different FinaleChat MCP server is already configured in " + str(config_path))
+            if remove:
+                changed = servers.pop("finalechat", None) is not None
+            else:
+                updated = dict(entry, command=sys.executable, args=[cli_path(), "mcp"])
+                changed = updated != entry
+                servers["finalechat"] = updated
+            if changed:
+                write_settings(config_path, config)
+    if remove:
+        configure_integration("antigravity", args.project, enabled=False, artifacts=False)
+        print("Removed Antigravity hooks and stopped this project's companion.")
+    else:
+        changes = {"enabled": True}
+        if args.artifacts:
+            changes["artifacts"] = True
+        configure_integration("antigravity", args.project, **changes)
+        if args.artifacts:
+            start_integration_companion("antigravity", args.project, client_from_args(args))
+        print(f"Installed Antigravity hooks in {path}. Start a new agy session to connect it.")
+    return EXIT_OK
+
+
+def last_antigravity_message(path):
+    """Read the last user or assistant step, skipping tool results and system metadata."""
+    with regular_source(path) as (source, size):
+        offset = max(0, size - (16 << 20))
+        source.seek(offset)
+        lines = source.read(size - offset).split(b"\n")
+        if offset:
+            lines = lines[1:]
+    for raw in reversed(lines[:-1]):
+        if not raw.strip():
+            continue
+        step = json.loads(raw)
+        if step.get("type") in ("USER_INPUT", "PLANNER_RESPONSE"):
+            return step
+    return {}
+
+
+def hook_antigravity(event):
+    # agy requires a decision on each pre-tool hook, including irrelevant
+    # calls and failures. "allow" delegates to the normal permission policy.
+    output = {"decision": "allow"} if event == "PreToolUse" else {}
+    try:
+        payload = json.load(sys.stdin)
+        handle_antigravity_hook(event, payload, output)
+    except Exception:
+        hook_log("Antigravity hook failed:\n" + traceback.format_exc())
+    print(json.dumps(output))
+    return EXIT_OK
+
+
+def handle_antigravity_hook(event, payload, output):
+    sid = str(payload.get("conversationId") or "")
+    native = Path(payload.get("transcriptPath") or "")
+    if native.name not in ("transcript_full.jsonl", "transcript.jsonl") or native != antigravity_transcript(sid, native.name):
+        return  # global hooks are shared with the desktop app and IDE
+    project = Path((payload.get("workspacePaths") or [os.getcwd()])[0]).resolve()
+    directory = integration_path("antigravity", project)
+    token = resolve_token()
+    if event in ("SessionStart", "Stop"):
+        if token and read_object(directory / "integration.json").get("enabled", True):
+            try:
+                if not (directory / "sessions" / (sha256(sid.encode()) + ".json")).is_file():
+                    register_native_session("antigravity", project, sid, native)
+                start_integration_companion("antigravity", project)
+            except (CLIError, OSError, ValueError):
+                hook_log("Antigravity companion registration deferred.")
+    if os.environ.get("FINALECHAT_MIRROR", "on").lower() in ("off", "false", "0") or not token:
+        return
+    client = Client(resolve_base_url(), token)
+    external = "antigravity:" + sid
+    ref, title, agent = "ext:" + external, project.name or "Antigravity", "Antigravity"
+    if event == "SessionStart":
+        client.deadline = time.monotonic() + 20
+        client.create_thread(external, title=title, agent=agent,
+                             meta={"cwd": str(project), "host": hostname(), "model": payload.get("modelName", "")})
+        return
+    if event in ("PreToolUse", "PostToolUse"):
+        tool = payload.get("toolCall") or {}
+        name, args = tool.get("name", ""), tool.get("args") or {}
+        if event == "PreToolUse" and name == "ask_question":
+            reason = phone_question_answer(client, {"questions": args.get("questions", [])}, ref, title, agent)
+            if reason:
+                output.update(decision="deny", reason=reason)
+        elif "finalechat" not in name:
+            if event == "PreToolUse":
+                spawn_status(ref, str(args.get("toolSummary") or ("Using " + name)), "tool", 120, title, agent)
+            else:
+                spawn_status(ref, "Thinking…", "thinking", 120, title, agent)
+        return
+    state_key = "antigravity-" + sid
+    step = last_antigravity_message(native)
+    if "step_index" not in step:
+        return
+    event_id = str(step["step_index"])
+    if event == "PreInvocation":
+        if step.get("type") != "USER_INPUT" or step.get("source") != "USER_EXPLICIT":
+            return
+        prompt = payload.get("lastUserInput")
+        if not prompt:
+            return
+        client.deadline = time.monotonic() + 20
+        state = load_session_state(state_key)
+        if state.get("prompt_step") == event_id:
+            return
+        anchor = {"dataset_format": "antigravity.native-jsonl/v1", "session_id": sid, "event_id": event_id}
+        response = client.post_message(ref, prompt, sender="user", title=title, agent=agent,
+                                       client_key="prompt:" + event_id, meta={"via": "antigravity", "source_anchor": anchor})
+        state.update(prompt_step=event_id, last_prompt_id=response["message"]["id"])
+        save_session_state(state_key, state)
+        spawn_status(ref, "Thinking…", "thinking", 120, title, agent)
+    elif event == "Stop" and payload.get("fullyIdle", True):
+        if step.get("type") == "PLANNER_RESPONSE" and step.get("content") and not step.get("tool_calls"):
+            reason = post_hook_turn(client, sid, ref, title, agent, event_id, step["content"], "antigravity", state_key)
+            if reason:
+                output.update(decision="continue", reason=reason)
+        else:
+            clear_status(client, ref)
+
+
 def make_settings_adapter(provider, project, scope=None):
+    if provider == "antigravity":
+        return AntigravitySettings(project, scope or "user")
     if provider == "claude-code":
         return ClaudeSettings(project, scope or "project")
     if provider == "codex":
@@ -3988,6 +4267,12 @@ def validate_registration(provider, project, session_id, transcript):
         if Path(payload.get("cwd", "")).resolve() != project:
             raise CLIError("Codex rollout belongs to a different project.")
         version = str(payload.get("cli_version") or "unknown")
+    elif provider == "antigravity":
+        if transcript.name not in ("transcript_full.jsonl", "transcript.jsonl") or transcript != antigravity_transcript(session_id, transcript.name):
+            raise CLIError("Antigravity transcript path does not match its conversation ID.")
+        if "step_index" not in record:
+            raise CLIError("Expected a native Antigravity transcript step.")
+        version = "unknown"
     else:
         version = str(record.get("version") or "unknown")
         # Some Claude transcripts start with file-history metadata without a
@@ -4192,6 +4477,11 @@ def publish_integration_pass(provider, project, client, directory):
             hook_log(f"{provider} settings snapshot unavailable; preserving native session sources independently.")
         if provider == "codex":
             discover_codex_sessions(project, directory, native_root)
+        elif provider == "antigravity":
+            try:
+                discover_antigravity_sessions(project, Path(directory))
+            except (CLIError, OSError, ValueError):
+                hook_log("Antigravity discovery deferred; publishing the registered conversations.")
         for path in sorted((Path(directory) / "sessions").glob("*.json")):
             registration = read_object(path)
             try:
@@ -4570,6 +4860,11 @@ def cmd_artifact(args):
                 adapter.close()
         return EXIT_OK
     transcript = args.transcript
+    if provider == "antigravity":
+        summary = (antigravity_conversations().get(args.session) or {}).get("summary", {})
+        if summary.get("WorkspaceURIs") and not antigravity_workspace_matches(summary, project):
+            raise CLIError("Antigravity conversation belongs to a different project.")
+        transcript = transcript or antigravity_transcript(args.session)
     if not transcript and provider == "codex":
         with CodexRPC(project) as rpc:
             thread = rpc.call("thread/read", {"threadId": args.session, "includeTurns": False})["thread"]
@@ -4729,7 +5024,7 @@ def install_codex_integration(args, remove=False):
 
 def add_integration_parsers(sub):
     def provider_project(parser):
-        parser.add_argument("provider", choices=["claude-code", "codex"])
+        parser.add_argument("provider", choices=["claude-code", "codex", "antigravity"])
         parser.add_argument("--project", default=".", help="canonical project scope (default current directory)")
 
     root = sub.add_parser("artifact", help="export, verify, recover and publish permanent session websites")
@@ -4759,7 +5054,7 @@ def add_integration_parsers(sub):
         provider_project(parser)
         if name in ("track", "export"):
             parser.add_argument("session", help="native session ID")
-            parser.add_argument("--transcript", help="native JSONL path; Codex can resolve its own thread ID")
+            parser.add_argument("--transcript", help="native JSONL path; Codex and Antigravity can resolve a native session ID")
         if name == "publish":
             parser.add_argument("session", nargs="?", help="tracked native session; omit for all tracked sessions here")
             parser.add_argument("--recreate", action="store_true", help="explicitly create a new remote record after deletion; requires a session ID")
@@ -5006,25 +5301,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("action", nargs="?", choices=["on", "off", "status"], help="default: status")
     p.set_defaults(func=cmd_remote)
 
-    p = sub.add_parser("install", help="integrate with Claude Code or Codex", formatter_class=Formatter,
-                       description="Install Claude Code hooks or Codex MCP, with optional native session artifacts.")
-    p.add_argument("target", choices=["claude-code", "codex"])
+    p = sub.add_parser("install", help="integrate with Claude Code, Codex or Antigravity", formatter_class=Formatter,
+                       description="Install native CLI integrations with optional session archives.")
+    p.add_argument("target", choices=["claude-code", "codex", "antigravity"])
     p.add_argument("--no-mcp", action="store_true", help="skip registering the MCP server")
-    p.add_argument("--settings", default="~/.claude/settings.json", metavar="PATH",
-                   help="Claude Code settings file (default ~/.claude/settings.json)")
+    p.add_argument("--settings", metavar="PATH",
+                   help="hook configuration file (defaults to the selected CLI’s global hook configuration)")
     p.add_argument("--project", default=".", help="project for optional artifact publication")
     p.add_argument("--artifacts", action="store_true", help="opt this project into proactive native session archives")
     p.set_defaults(func=cmd_install)
 
     p = sub.add_parser("uninstall", help="remove the integration", formatter_class=Formatter)
-    p.add_argument("target", choices=["claude-code", "codex"])
+    p.add_argument("target", choices=["claude-code", "codex", "antigravity"])
     p.add_argument("--no-mcp", action="store_true", help="leave the MCP server registered")
-    p.add_argument("--settings", default="~/.claude/settings.json", metavar="PATH")
+    p.add_argument("--settings", metavar="PATH")
     p.add_argument("--project", default=".", help="project whose companion should stop")
     p.set_defaults(func=cmd_uninstall)
 
     p = sub.add_parser("hook", help="handle a harness hook event (reads JSON on stdin)", formatter_class=Formatter)
-    p.add_argument("target", choices=["claude-code"])
+    p.add_argument("target", choices=["claude-code", "antigravity"])
+    p.add_argument("event", nargs="?", choices=["SessionStart", "PreInvocation", "PreToolUse", "PostToolUse", "Stop"])
     p.set_defaults(func=cmd_hook)
 
     p = sub.add_parser("selftest", help=argparse.SUPPRESS, formatter_class=Formatter)

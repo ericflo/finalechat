@@ -33,6 +33,7 @@ export function threadRelay(t: Thread | undefined): ThreadRelay | null {
     target: text(r.target),
     attach: text(r.attach),
     notify_done: r.notify_done === true,
+    switch_profiles: Array.isArray(r.switch_profiles) ? r.switch_profiles.filter((p): p is string => typeof p === "string" && /^[\w-]+$/.test(p)) : undefined,
   };
 }
 
@@ -63,12 +64,12 @@ export function relayAgent(r: ThreadRelay): string {
   return agentName(r.agent || r.name, r.label.split(" · ")[0] || r.name);
 }
 
-/** The agent a /switch hands the work to: the other of Codex and Claude. */
-function otherAgent(r: ThreadRelay): { profile: string; name: string } | null {
-  const a = (r.agent || r.name).toLowerCase();
-  if (a.startsWith("codex")) return { profile: "claude", name: "Claude" };
-  if (a.startsWith("claude")) return { profile: "codex", name: "Codex" };
-  return null;
+/** Older hosts offered one switch destination for each built-in relay. */
+function switchProfiles(r: ThreadRelay): string[] {
+  if (r.switch_profiles) return r.switch_profiles;
+  if (r.agent === "codex") return ["claude"];
+  if (r.agent === "claude") return ["codex"];
+  return [];
 }
 
 /** "10:00 AM", or "Thu 10:00 AM" when it is not today. */
@@ -156,7 +157,6 @@ const cadences = [
 export function RelaySheet({ relay, onClose, onSend }: { relay: ThreadRelay; onClose: () => void; onSend: (command: string) => void }) {
   const [view, setView] = useState<"menu" | "autopilot" | "stop">("menu");
   const name = relayAgent(relay);
-  const other = otherAgent(relay);
   const stopped = relay.state === "stopped";
   const send = (command: string) => {
     onClose();
@@ -189,7 +189,7 @@ export function RelaySheet({ relay, onClose, onSend }: { relay: ThreadRelay; onC
       {!stopped && <Item icon={IconTerminal} label="Screen" onClick={() => send("/screen")} />}
       {!stopped && <Item icon={IconRefresh} label="Restart" onClick={() => send("/restart")} />}
       {!stopped && <Item icon={IconUpgrade} label="Upgrade" hint={`Update ${name}, then restart`} onClick={() => send("/upgrade")} />}
-      {!stopped && other && <Item icon={IconSwap} label={`Switch to ${other.name}`} hint="Hands the work over with a brief" onClick={() => send(`/switch ${other.profile}`)} />}
+      {!stopped && switchProfiles(relay).map(profile => <Item key={profile} icon={IconSwap} label={`Switch to ${agentName(profile)}`} hint="Hands the work over with a brief" onClick={() => send(`/switch ${profile}`)} />)}
       {!ended(relay) && <Item icon={IconRepeat} label="Autopilot…" hint={relay.autopilot ? `On: ${relayStatus(relay)}` : "Keep it working on its own"} onClick={() => setView("autopilot")} />}
       {!stopped && (
         <div className="relay-updates">

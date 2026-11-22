@@ -307,13 +307,13 @@ const messengerHelp = `Commands:
 /where — current thread, status, open question
 /read 3 — recent messages in #3
 /new — start an eagent session
-/new codex … — the same, with Codex doing the work (if set up)
+/new antigravity … — start a relay (also codex or claude, if set up)
 /skip — decline the open question
 /more — rest of a long message
 /quiet, /loud — only questions and important messages, or everything
 /pause, /resume — stop or restart the relay (keeps the link)
-/remote on|off — Claude Code waits for your replies
-/interrupt, /autopilot, /relay … — control the Codex or Claude eagent runs
+/remote on|off — Claude Code or Antigravity waits for your replies
+/interrupt, /autopilot, /relay … — control the agent eagent runs
 /unlink — disconnect this chat
 Swipe-reply to a message to answer its thread. Anything else starting with / goes to the agent.`
 

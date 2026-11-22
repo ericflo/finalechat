@@ -369,7 +369,7 @@ func (c *mchat) remote(arg string) error {
 		if settings.RemoteMode {
 			state = "on"
 		}
-		c.say("Remote mode is "+state+". /remote on makes Claude Code wait for your replies here; /remote off hands it back to the terminal.", nil)
+		c.say("Remote mode is "+state+". /remote on makes Claude Code or Antigravity wait for your replies here; /remote off hands it back to the terminal.", nil)
 		return nil
 	}
 	if _, err := c.s.store.UpdateUserSettings(c.ctx, c.user.ID, settings); err != nil {

@@ -2,7 +2,7 @@
 
 FinaleChat stores integration websites as immutable artifacts beside a conversation. An artifact contains a self-contained HTML viewer, native source files, and a manifest with SHA-256 hashes and bounded content-addressed chunks. Repeated publication preserves history and reuses unchanged bytes. Downloaded archives remain usable after the original process or machine disappears.
 
-Open **Settings in the conversation header** to change an agent’s models and behavior without leaving the thread. Your account’s integration connects automatically; there is no second pairing approval. Eagent opens its compact Models / Behavior / Prompts / Advanced editor. Claude Code and Codex use focused controls for their declared native settings. Edit a value and tap **Save** once. A local companion publishes typed snapshots and receives durable commands over outbound HTTPS. A publisher token cannot submit human settings commands, and the iframe receives neither token nor general API access.
+Open **Settings in the conversation header** to change an agent’s models and behavior without leaving the thread. Your account’s integration connects automatically; there is no second pairing approval. Eagent opens its compact Models / Behavior / Prompts / Advanced editor. Antigravity, Claude Code and Codex use focused controls for their declared native settings. Edit a value and tap **Save** once. A local companion publishes typed snapshots and receives durable commands over outbound HTTPS. A publisher token cannot submit human settings commands, and the iframe receives neither token nor general API access.
 
 Custom editors use `finale.settings.read()` for their bounded resource view and `finale.settings.propose(proposal)` to stage a versioned, typed change. Call `finale.settings.clear()` when subsequent form edits invalidate that proposal; this clears the host draft without submitting a command. `finale.settings.onResult(callback)` receives durable command outcomes. Match each result to its proposal and preserve newer local edits when acknowledgements arrive late. Eagent's archive embeds its actual local configuration editor through this transport, including model pickers, prompt and named-configuration controls, and reviewed route tests.
 
@@ -63,6 +63,14 @@ The adapter distinguishes saved values from defaults resolved through observed u
 `FINALECHAT_MIRROR=off` disables hook chat mirroring independently of archive registration and the settings companion. Existing remote-mode behavior remains controlled by FinaleChat's remote-mode setting.
 
 Keep the thread titled and summarized: the hooks name a new thread from the project directory, then periodically refresh it with `finalechat retitle` (or `PATCH /threads/{ref}`) carrying an LLM-written 1–2 sentence `description` of where the session stands. Never overwrite a user's manual title with a generic one — only make it more specific.
+
+## Google Antigravity
+
+Run `finalechat install antigravity` to register the FinaleChat MCP server with `agy` and add the chat hooks to `~/.gemini/config/hooks.json`. Start a new CLI session to load them. Your prompts, replies, tool activity and questions go to the conversation's own thread. With remote mode enabled, phone answers and replies return through the active tool or stop hook. [Google’s hook reference](https://antigravity.google/docs/hooks)
+
+In thread settings, select a model variant to set the model and reasoning effort for future sessions. The choices come from `agy models`. To archive a project's native transcript as well, run `finalechat install antigravity --artifacts --project .` in the project. Use `finalechat artifact export antigravity CONVERSATION_ID -o ./archive` for an offline copy.
+
+For an eagent-hosted session, pick **Antigravity** under **New session** or run `eagent relay antigravity`. The relay starts `agy --dangerously-skip-permissions`. Model and effort changes in the relay's thread settings resume the same Antigravity conversation after its current turn.
 
 ## Codex
 

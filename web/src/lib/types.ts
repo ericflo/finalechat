@@ -77,6 +77,7 @@ export interface ThreadRelay {
   attach: string;
   /** A one-time buzz is armed for the end of the current turn. */
   notify_done: boolean;
+  switch_profiles?: string[];
 }
 
 /** What eagent knows about one of the user's messages in a relay thread

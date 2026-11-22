@@ -119,9 +119,7 @@ finalechat fetch <id> -o /tmp/IMG_0421.png
 
 ## Native session artifacts and settings
 
-For a project the user wants to archive, `finalechat install claude-code
---artifacts --project .` or `finalechat install codex --artifacts --project .`
-enables proactive native transcript websites. Settings control is paired
+For a project the user wants to archive, run `finalechat install PROVIDER --artifacts --project .` with `antigravity`, `claude-code` or `codex`. Settings control is paired
 separately with `finalechat connector pair claude-code --project .` or
 `finalechat connector pair codex --project .`; the user approves exact scopes
 in FinaleChat. Keep general API tokens out of artifacts. Settings changes are

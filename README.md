@@ -17,12 +17,12 @@ Questions and important messages arrive as push notifications.
   message, 10 MiB each), stored in a private Backblaze B2 bucket with
   metadata in PostgreSQL; agents can fetch what you send and MCP tools hand
   images to the model directly.
-- **Remote mode**: a switch on your phone that makes Claude Code wait for your
-  phone replies instead of the terminal.
+- **Remote mode**: a switch on your phone that lets Claude Code and Antigravity wait for your
+  replies from the phone.
 - **New session from your phone**: when an eagent is running in a project
   (`eagent serve`, a session, or `eagent connector run`), the inbox offers
   **New session**; type the first message and the session starts on that
-  machine and opens as a thread. eagent can also start Codex or Claude Code
+  machine and opens as a thread. eagent can also start Antigravity, Codex or Claude Code
   to do the work and pass your messages on.
 - Real-time updates over server-sent events; Web Push with VAPID; installable
   PWA with app badge.
@@ -31,8 +31,8 @@ Questions and important messages arrive as push notifications.
   messages, question buttons, replies, and `/new` sessions
   ([setup](docs/messenger.md)).
 - Agent integrations: raw HTTPS (`/AGENTS.md`), a zero-dependency Python CLI
-  (`curl -fsSL https://www.finalechat.com/install.sh | sh`), Claude Code hooks
-  and an MCP server (`finalechat install claude-code`), and an Agent Skill.
+  (`curl -fsSL https://www.finalechat.com/install.sh | sh`), native hooks for Claude Code
+  and Antigravity (`finalechat install antigravity`), MCP and an Agent Skill.
 
 Production: <https://www.finalechat.com>. Agents start at
 <https://www.finalechat.com/AGENTS.md>; the API reference is
@@ -105,7 +105,7 @@ own public instance.
 
 ## Native session archives and settings
 
-Eagent, Claude Code and Codex can publish permanent native-session websites and expose
+Eagent, Antigravity, Claude Code and Codex can publish permanent native-session websites and expose
 scoped settings controls in FinaleChat. Archives preserve immutable revisions and
 downloadable original JSONL files. Settings use a separately paired outbound
 connector, a durable command queue, and FinaleChat's own Save button.
