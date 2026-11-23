@@ -197,18 +197,32 @@ again. A stale `expected_version` is not a reason to refuse it, since
 starting a session reads the configuration without changing it.
 
 While a relay runs, eagent keeps thread meta `relay` current (`{name,
-agent, label, state, autopilot, autopilot_until}`; `state` is `starting`,
-`working`, `idle`, `blocked`, `exited` or `stopped`, `autopilot_until` is
-RFC 3339 or empty) and sets it to `null` when none is left. The app shows it
-as a header badge ("Codex · working", "Codex · autopilot until 10:00 AM")
-whose menu sends eagent's slash commands as ordinary user messages, so they
-appear in the conversation: `/interrupt` (stop the current step),
-`/restart`, `/upgrade` (update the CLI, then restart), `/switch claude` or
-`/switch codex` (hand the work over with a brief), `/autopilot`,
-`/autopilot until 10:00` (optionally followed by an instruction),
-`/autopilot off`, `/updates off|5m|15m|1h` (progress lines while it works;
-turn reports always come), `/stop-relay` (end the agent for good) and
-`/relay` (a status report). Messenger passes them to the thread unchanged.
+agent, profile, label, model, effort, pending, state, autopilot,
+autopilot_until}`; `state` is `starting`, `working`, `idle`, `blocked`,
+`exited` or `stopped`, `autopilot_until` is RFC 3339 or empty, `model` and
+`effort` are what it runs, and `pending` says in words a model or effort
+change that waits for its turn to end) and sets it to `null` when none is
+left. The app shows it as a header badge ("Codex · working", "Codex ·
+autopilot until 10:00 AM") whose menu sends eagent's slash commands as
+ordinary user messages, so they appear in the conversation:
+
+- **Model** shows what it runs and sends `/model <model> <effort>`.
+- **Switch agent…** is one row for every other agent (`switch_profiles`)
+  and sends `/switch <profile>`, or `/switch <profile> <model> <effort>`
+  when a model or an effort was chosen (`default` stands for the agent's
+  own; a model name with a space is quoted). Both sheets offer the choices
+  the project's `session.start` action declares for that agent, its
+  `relay_<profile>_model` and `relay_<profile>_effort` inputs.
+- `/screen`, `/notify-done`, `/autopilot`, `/autopilot until 10:00`
+  (optionally followed by an instruction) and `/autopilot off`.
+- At the bottom, each after a confirmation: `/upgrade` (update the CLI,
+  then restart), `/restart` and `/stop-relay` (end the agent for good).
+
+`/interrupt` (stop the current step) is not in the menu: while `state` is
+`working`, a small stop button sits in the message field, and typing a
+message stays possible beside it. There is no update frequency to set:
+eagent's narrator says what the agent is doing as it goes. Messenger passes
+the commands to the thread unchanged.
 In a relay thread the composer can also say who a message is for and when:
 `meta["eagent.route"]` is `agent` or `eagent`, and `meta["eagent.delivery"]`
 is `queue`, `interrupt` or `after_turn` (a long press on send offers the

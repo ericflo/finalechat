@@ -79,7 +79,7 @@ You already quote by hand with `>`.
 
 ## 7. "Tell me when it's done" (S)
 
-A bell on the "Codex · working" badge buzzes you once when the current turn ends, even if updates are off.
+A bell on the "Codex · working" badge buzzes you once when the current turn ends.
 
 **Why.** "Let me know when there's a new release apk to install", and long builds you would otherwise poll.
 
@@ -115,6 +115,7 @@ Built in Finalechat (relay threads only, phone first, light and dark):
 - **7. Tell me when it's done**: done as a bell beside the badge and an item in the controls, both sending `/notify-done`. They show as armed while `meta.relay.notify_done` is true.
 - **8. Recent relays**: done, kept on the device: the last five agent and folder pairs started from this device, per connector.
 - **Copy attach command**: done, from `meta.relay.attach`.
+- **Controls, reworked (2026-11-23)**: the sheet opens with **Model** (what it runs, and a sheet to change it), and **Switch agent…** is one row with a sheet for the other agent, its model and its effort. Upgrade and Restart moved to the bottom beside the stops, and each asks first. Interrupt left the sheet for a small stop button in the message field, shown while the agent works. Status and Updates are gone: eagent's narrator now says what the agent is doing as it goes, so there is no frequency to set.
 - **Where it works**: the folder sits right under the agent chips on New session (`~/Development/snowdown ⌄`), not only in the header. Its sheet finds folders as you type ("snow") and takes `~/…` paths.
 
 Not built: 4 (Claude's suggested reply) and "→ Codex can see this" on images.

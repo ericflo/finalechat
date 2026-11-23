@@ -75,18 +75,24 @@ export interface LiveSession {
 /** What eagent publishes as thread meta `relay` while an agent it started
  * (Codex, Claude Code) does the session's work. */
 export interface ThreadRelay {
-  /** The relay profile, e.g. "codex". */
+  /** The relay's name in its session, e.g. "codex". */
   name: string;
-  /** "codex" or "claude". */
+  /** "codex", "claude" or "antigravity". */
   agent: string;
+  /** The profile it was started from, e.g. "codex"; "" from older hosts. */
+  profile: string;
   /** e.g. "Codex · GPT-6 Astra xhigh". */
   label: string;
+  /** The model and reasoning effort it runs, as its agent names them; ""
+   * when the host does not say. */
+  model: string;
+  effort: string;
+  /** A model or effort change that waits for its turn to end, in words. */
+  pending: string;
   state: "starting" | "working" | "idle" | "blocked" | "exited" | "stopped" | (string & {});
   autopilot: boolean;
   /** RFC 3339, or empty when autopilot runs until told to stop. */
   autopilot_until: string;
-  /** The progress cadence set with /updates ("off", "15m", ...); "" is eagent's default. */
-  updates: string;
   /** The terminal it runs in, e.g. "eagent-relay-1793…-codex". */
   target: string;
   /** The command that watches it at the desk. */

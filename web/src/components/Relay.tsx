@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
-import type { SettingsResource } from "../lib/artifacts";
+import { controlAPI, type SettingsResource } from "../lib/artifacts";
 import { navigate } from "../lib/router";
 import { toast, useStore } from "../lib/store";
 import { sameDay, shortTime, useNow } from "../lib/time";
 import type { RelayReceipt, Thread, ThreadRelay } from "../lib/types";
 import { Avatar, ConfirmSheet, Sheet } from "./Common";
-import { IconBell, IconChevron, IconClock, IconCopy, IconExpand, IconInfo, IconPause, IconRefresh, IconRepeat, IconStop, IconSwap, IconTerminal, IconUpgrade } from "./Icons";
+import { IconBell, IconChevron, IconClock, IconCopy, IconCpu, IconExpand, IconRefresh, IconRepeat, IconStop, IconSwap, IconTerminal, IconUpgrade } from "./Icons";
+import { relayName, relayProfiles } from "./NewSession";
+import { SettingsForm, startModel, type FormModel } from "./SettingsForm";
 
 // eagent can start Codex or Claude Code in a terminal it owns and pass the
 // user's messages on (a relay). While one runs, eagent keeps thread meta
@@ -25,11 +27,14 @@ export function threadRelay(t: Thread | undefined): ThreadRelay | null {
   return {
     name: name || agent,
     agent,
+    profile: text(r.profile),
     label: text(r.label),
+    model: text(r.model),
+    effort: text(r.effort),
+    pending: text(r.pending),
     state: (text(r.state) || "starting") as ThreadRelay["state"],
     autopilot: r.autopilot === true,
     autopilot_until: text(r.autopilot_until),
-    updates: text(r.updates),
     target: text(r.target),
     attach: text(r.attach),
     notify_done: r.notify_done === true,
@@ -145,17 +150,19 @@ function Item({ icon: Icon, label, hint, danger, disabled, onClick }: { icon: (p
   );
 }
 
-const cadences = [
-  { value: "off", label: "Off", aria: "No progress updates" },
-  { value: "5m", label: "5m", aria: "Updates every 5 minutes" },
-  { value: "15m", label: "15m", aria: "Updates every 15 minutes" },
-  { value: "1h", label: "1h", aria: "Updates every hour" },
-];
+/** What it runs, as its label says after the agent's name: "Fable 5.2 xhigh". */
+function relayRuns(r: ThreadRelay): string {
+  return r.label.split(" · ").slice(1).join(" · ").trim() || [r.model, r.effort].filter(Boolean).join(" ");
+}
+
+type RelayView = "menu" | "model" | "switch" | "autopilot" | "upgrade" | "restart" | "stop";
 
 /** The relay's controls. Each one sends eagent a slash command through
- * `onSend`, the same way a typed message goes. */
-export function RelaySheet({ relay, onClose, onSend, stopSession }: { relay: ThreadRelay; onClose: () => void; onSend: (command: string) => void; stopSession?: { label: string; onClick: () => void } }) {
-  const [view, setView] = useState<"menu" | "autopilot" | "stop">("menu");
+ * `onSend`, the same way a typed message goes. What interrupts the agent
+ * mid-step is not here: that is the stop button in the composer. The ones
+ * that end or restart it sit at the bottom, and ask first. */
+export function RelaySheet({ thread, relay, onClose, onSend, stopSession }: { thread: string; relay: ThreadRelay; onClose: () => void; onSend: (command: string) => void; stopSession?: { label: string; onClick: () => void } }) {
+  const [view, setView] = useState<RelayView>("menu");
   const name = relayAgent(relay);
   const stopped = relay.state === "stopped";
   const send = (command: string) => {
@@ -172,9 +179,18 @@ export function RelaySheet({ relay, onClose, onSend, stopSession }: { relay: Thr
     }
   };
   if (view === "stop") {
-    return <ConfirmSheet title={`Stop ${name}?`} body={`${name} ends for good, not just this step. To stop only what it is doing now, use Interrupt.`} confirmLabel={`Stop ${name}`} danger onClose={onClose} onConfirm={() => onSend("/stop-relay")} />;
+    return <ConfirmSheet title={`Stop ${name}?`} body={`${name} ends for good, not just this step. To stop only what it is doing now, use the stop button beside your message.`} confirmLabel={`Stop ${name}`} danger onClose={onClose} onConfirm={() => onSend("/stop-relay")} />;
+  }
+  if (view === "restart") {
+    return <ConfirmSheet title={`Restart ${name}?`} body={`${name} stops what it is doing and starts again on the same conversation.`} confirmLabel="Restart" onClose={onClose} onConfirm={() => onSend("/restart")} />;
+  }
+  if (view === "upgrade") {
+    return <ConfirmSheet title={`Upgrade ${name}?`} body={`${name} stops what it is doing, updates to its latest version, and starts again on the same conversation.`} confirmLabel="Upgrade" onClose={onClose} onConfirm={() => onSend("/upgrade")} />;
   }
   if (view === "autopilot") return <AutopilotSheet relay={relay} onClose={onClose} onSend={send} />;
+  if (view === "model" || view === "switch") return <AgentOptionsSheet thread={thread} relay={relay} mode={view} onClose={onClose} onSend={send} />;
+  const runs = relayRuns(relay);
+  const others = switchProfiles(relay);
   return (
     <Sheet onClose={onClose} label={`${name} controls`} className="relay-sheet">
       <div className="sheet-title">
@@ -184,32 +200,128 @@ export function RelaySheet({ relay, onClose, onSend, stopSession }: { relay: Thr
           <small>{relayStatus(relay)}</small>
         </span>
       </div>
-      {!ended(relay) && <Item icon={IconPause} label="Interrupt" hint="Stop its current step" onClick={() => send("/interrupt")} />}
+      {!stopped && <Item icon={IconCpu} label="Model" hint={relay.pending ? `${runs ? `${runs}. ` : ""}Next: ${relay.pending}, when this turn ends` : runs || "Its model and reasoning effort"} onClick={() => setView("model")} />}
       {relay.state === "working" && <Item icon={IconBell} label="Tell me when it's done" hint={relay.notify_done ? "You'll get a buzz" : "One buzz when this turn ends"} disabled={relay.notify_done} onClick={() => send("/notify-done")} />}
-      {!stopped && <Item icon={IconTerminal} label="Screen" onClick={() => send("/screen")} />}
-      {!stopped && <Item icon={IconRefresh} label="Restart" onClick={() => send("/restart")} />}
-      {!stopped && <Item icon={IconUpgrade} label="Upgrade" hint={`Update ${name}, then restart`} onClick={() => send("/upgrade")} />}
-      {!stopped && switchProfiles(relay).map(profile => <Item key={profile} icon={IconSwap} label={`Switch to ${agentName(profile)}`} hint="Hands the work over with a brief" onClick={() => send(`/switch ${profile}`)} />)}
+      {!stopped && <Item icon={IconTerminal} label="Screen" hint="Show its terminal here" onClick={() => send("/screen")} />}
+      {!stopped && others.length > 0 && <Item icon={IconSwap} label="Switch agent…" hint={`Hand the work to ${others.map((p) => agentName(p)).join(" or ")}`} onClick={() => setView("switch")} />}
       {!ended(relay) && <Item icon={IconRepeat} label="Autopilot…" hint={relay.autopilot ? `On: ${relayStatus(relay)}` : "Keep it working on its own"} onClick={() => setView("autopilot")} />}
-      {!stopped && (
-        <div className="relay-updates">
-          <span className="relay-updates-label">
-            <IconBell aria-hidden="true" /> Updates
-          </span>
-          <div className="segmented" role="group" aria-label="Progress updates while it works">
-            {cadences.map((c) => (
-              <button key={c.value} type="button" aria-label={c.aria} aria-pressed={relay.updates === c.value} className={relay.updates === c.value ? "active" : ""} onClick={() => send(`/updates ${c.value}`)}>
-                {c.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      <Item icon={IconInfo} label="Status" onClick={() => send("/relay")} />
       {relay.attach && <Item icon={IconCopy} label="Copy attach command" onClick={() => void copyAttach()} />}
+      {(!stopped || stopSession) && <div className="sheet-sep" role="separator" />}
+      {!stopped && <Item icon={IconUpgrade} label="Upgrade…" hint={`Update ${name}, then restart`} onClick={() => setView("upgrade")} />}
+      {!stopped && <Item icon={IconRefresh} label="Restart…" hint="Start it again on the same conversation" onClick={() => setView("restart")} />}
       {!stopped && <Item icon={IconStop} label={`Stop ${name}`} danger onClick={() => setView("stop")} />}
       {/* The whole session behind the relay, when its agent offers a stop. */}
       {stopSession && <Item icon={IconStop} label={stopSession.label} hint="The session behind this thread" danger onClick={stopSession.onClick} />}
+    </Sheet>
+  );
+}
+
+/** A command argument: quoted when it holds a space (some model names do). */
+const arg = (v: string) => (/\s/.test(v) ? `"${v.replace(/"/g, "")}"` : v);
+
+/** The model and reasoning effort for the running agent ("model"), or for
+ * another agent taking the work over ("switch"). The choices are the ones
+ * the project's session.start action offers for that agent: its inputs
+ * `relay_<profile>_model` and `relay_<profile>_effort`, the same two the
+ * new-session form asks for. The result goes as `/model` or `/switch`.
+ * Without those choices (eagent away, an older host) a switch still
+ * works, with the other agent's own model and effort. */
+function AgentOptionsSheet({ thread, relay, mode, onClose, onSend }: { thread: string; relay: ThreadRelay; mode: "model" | "switch"; onClose: () => void; onSend: (command: string) => void }) {
+  const name = relayAgent(relay);
+  const others = useMemo(() => switchProfiles(relay), [relay]);
+  const [picked, setPicked] = useState(others[0] ?? "");
+  // undefined while loading; null when the project's settings cannot be read.
+  const [resource, setResource] = useState<SettingsResource | null | undefined>(undefined);
+  // What was chosen here; null until something is.
+  const [values, setValues] = useState<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const { resources } = await controlAPI.threadSettings(thread);
+        const link = resources.find((r) => r.scope !== "session");
+        if (!link) throw new Error("no project settings");
+        const view = await controlAPI.resource(link.id);
+        if (alive) setResource(view.resource);
+      } catch {
+        if (alive) setResource(null);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [thread]);
+  const profiles = useMemo(() => (resource ? relayProfiles(resource) : []), [resource]);
+  const nameOf = (profile: string) => {
+    const p = profiles.find((x) => x.name === profile);
+    return p ? relayName(p) : agentName(profile);
+  };
+  const target = mode === "switch" ? picked : relay.profile || profiles.find((p) => p.agent === relay.agent)?.name || relay.name;
+  const modelKey = `relay_${target}_model`;
+  const effortKey = `relay_${target}_effort`;
+  const action = resource?.descriptor.actions?.find((a) => a.operation === "session.start");
+  // The running agent's sheet opens on what it runs now; another agent's on its own defaults.
+  const running: Record<string, unknown> = mode === "model" ? { [modelKey]: relay.model || undefined, [effortKey]: relay.effort || undefined } : {};
+  const built = resource && action ? startModel(resource.descriptor, action, values ?? running, (next) => setValues(next), { relay: target }) : null;
+  const mine = (key: string) => key === modelKey || key === effortKey;
+  let form: FormModel | null = built ? { ...built, items: built.items.filter((i) => mine(i.key)) } : null;
+  if (form && built && mode === "model") {
+    // Here a choice is a change to what runs, undone back to that, rather
+    // than a departure from a default.
+    const differs = (key: string) => String(built.state(key).value ?? "") !== String(running[key] ?? "");
+    form = {
+      ...form,
+      items: form.items.map((i) => ({ ...i, resettable: false })),
+      state: (key) => ({ ...built.state(key), pending: differs(key) }),
+      revert: (keys) =>
+        setValues((prev) => {
+          const next = { ...(prev ?? running) };
+          for (const k of keys) {
+            if (running[k] === undefined) delete next[k];
+            else next[k] = running[k];
+          }
+          return next;
+        }),
+    };
+  }
+  const has = (key: string) => !!form?.items.some((i) => i.key === key);
+  const chosen = (key: string) => has(key) && form!.state(key).set;
+  // What a field comes to (the choice, or what leaving it alone gives), as the command takes it.
+  const value = (key: string) => (has(key) && form!.state(key).value !== undefined && form!.state(key).value !== "" ? arg(String(form!.state(key).value)) : "default");
+  let command = "";
+  if (mode === "switch") {
+    // Left alone, the other agent starts with its own model and effort.
+    command = !target ? "" : chosen(modelKey) || chosen(effortKey) ? `/switch ${target} ${chosen(modelKey) ? value(modelKey) : "default"} ${chosen(effortKey) ? value(effortKey) : "default"}` : `/switch ${target}`;
+  } else if (form && form.items.some((i) => form!.state(i.key).pending)) {
+    command = `/model ${value(modelKey)} ${value(effortKey)}`;
+  }
+  const title = mode === "model" ? `${name}'s model` : others.length === 1 ? `Switch to ${nameOf(target)}` : "Switch agent";
+  return (
+    <Sheet onClose={onClose} label={title} className="start-sheet agent-sheet">
+      <div className="start-sheet-head">
+        <h2>{title}</h2>
+        <p>{mode === "model" ? `${name} starts again on the same conversation with what you choose, once the turn it is on ends.` : `${nameOf(target)} takes over in the same folder, with a brief of your instructions and ${name}'s last report. ${name} stops.`}</p>
+        {mode === "switch" && others.length > 1 && (
+          <div className="segmented agent-pick" role="radiogroup" aria-label="Agent to switch to">
+            {others.map((p) => (
+              <button key={p} type="button" role="radio" aria-checked={p === picked} className={p === picked ? "active" : ""} onClick={() => setPicked(p)}>
+                {nameOf(p)}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="start-sheet-body">
+        {resource === undefined ? <p className="agent-note">Loading its choices…</p> : form && form.items.length > 0 ? <SettingsForm model={form} /> : <p className="agent-note">{mode === "switch" ? `${nameOf(target)} will start with its own model and reasoning effort.` : `${name}'s choices are not available right now. You can still type /model with a model and an effort.`}</p>}
+      </div>
+      <div className="start-sheet-foot">
+        <button type="button" className="btn" onClick={onClose}>
+          Cancel
+        </button>
+        <button type="button" className="btn primary" disabled={!command} onClick={() => onSend(command)}>
+          {mode === "model" ? "Change" : `Switch to ${nameOf(target)}`}
+        </button>
+      </div>
     </Sheet>
   );
 }

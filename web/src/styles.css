@@ -409,6 +409,13 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .route-pip { position: absolute; left: 7px; bottom: 8px; z-index: 1; display: flex; border-radius: 9px; }
 .route-pip .avatar { width: 28px; height: 28px; font-size: 11.5px; border-radius: 8px; }
 .route-pip:active { transform: scale(0.94); }
+/* Stops the agent's current step. Small, inside the field, out of the way of typing. */
+.composer-field.with-stop textarea { padding-right: 44px; }
+.stop-btn { position: absolute; right: 8px; bottom: 8px; z-index: 1; width: 28px; height: 28px; border-radius: 9px; display: flex; align-items: center; justify-content: center; background: var(--red-soft); color: var(--red); transition: transform 0.12s var(--ease), opacity 0.15s, background 0.15s; }
+.stop-btn svg { width: 12px; height: 12px; fill: currentColor; stroke: currentColor; }
+.stop-btn:hover { background: color-mix(in srgb, var(--red) 20%, transparent); }
+.stop-btn:active { transform: scale(0.92); }
+.stop-btn:disabled { opacity: 0.45; }
 .route-pop { position: absolute; left: 0; bottom: calc(100% + 8px); z-index: 20; min-width: 250px; max-width: calc(100vw - 32px); padding: 6px; border-radius: 16px; background: var(--elevated); border: 1px solid var(--border); box-shadow: var(--shadow-lg); animation: fade-in 0.12s; }
 .route-pop button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border-radius: 11px; text-align: left; }
 .route-pop button:hover { background: var(--surface-2); }
@@ -725,10 +732,10 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .relay-badge.exited { background: var(--red-soft); color: var(--red); }
 .relay-badge.exited .relay-dot { background: var(--red); }
 .relay-badge.idle, .relay-badge.stopped { background: var(--surface); border-color: var(--border); color: var(--text-2); }
-.relay-updates { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 12px; }
-.relay-updates-label { display: inline-flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 500; }
-.relay-updates-label svg { width: 20px; height: 20px; color: var(--text-2); }
-.relay-updates .segmented button { min-width: 44px; min-height: 36px; }
+.sheet-sep { height: 1px; background: var(--border); margin: 6px 12px; }
+.agent-sheet .agent-pick { display: flex; margin-top: 12px; }
+.agent-sheet .agent-pick button { flex: 1; min-height: 38px; }
+.agent-sheet .agent-note { font-size: 14px; color: var(--text-2); line-height: 1.45; padding: 6px 4px 10px; margin: 0; }
 .autopilot-until { display: flex; align-items: center; gap: 10px; padding: 6px 12px; }
 .autopilot-until label { display: inline-flex; align-items: center; gap: 12px; font-size: 16px; font-weight: 500; flex: none; }
 .autopilot-until label svg { width: 20px; height: 20px; color: var(--text-2); }

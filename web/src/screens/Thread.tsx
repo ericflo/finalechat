@@ -434,9 +434,10 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
         ended={sessionEnded(messages, questions, thread)}
         relay={relay}
         onSending={handleSending}
+        onCommand={sendCommand}
         handle={composer}
       />
-      {relayMenu && relay && <RelaySheet relay={relay} onClose={() => setRelayMenu(false)} onSend={sendCommand} stopSession={stoppable ? { label: stoppable.stop?.label || "Stop session", onClick: () => { setRelayMenu(false); setStopOpen(true); } } : undefined} />}
+      {relayMenu && relay && <RelaySheet thread={id} relay={relay} onClose={() => setRelayMenu(false)} onSend={sendCommand} stopSession={stoppable ? { label: stoppable.stop?.label || "Stop session", onClick: () => { setRelayMenu(false); setStopOpen(true); } } : undefined} />}
       {stopOpen && stoppable && <StopSessionSheet session={stoppable} onClose={() => setStopOpen(false)} />}
       {viewing && <ImageViewer items={viewing.items} index={viewing.index} onClose={() => setViewing(null)} />}
 
@@ -1069,7 +1070,7 @@ function ActivityBubble({ a }: { a: Activity }) {
 /** What the thread can ask of its composer. */
 type ComposerHandle = { quote: (line: string) => void };
 
-function Composer({ threadId, ended, relay, onSending, handle }: { threadId: string; ended: boolean; relay: ThreadRelay | null; onSending: (sending: boolean) => void; handle: React.MutableRefObject<ComposerHandle | null> }) {
+function Composer({ threadId, ended, relay, onSending, onCommand, handle }: { threadId: string; ended: boolean; relay: ThreadRelay | null; onSending: (sending: boolean) => void; onCommand: (command: string) => void; handle: React.MutableRefObject<ComposerHandle | null> }) {
   const attachmentsEnabled = useStore((s) => s.attachmentsEnabled);
   const connection = useStore((s) => s.connection);
   const draft = useStore((s) => s.drafts[threadId] ?? "");
@@ -1092,6 +1093,11 @@ function Composer({ threadId, ended, relay, onSending, handle }: { threadId: str
   // and a long press on send for when the agent gets it.
   const live = !!relay && relay.state !== "stopped";
   const agent = relay ? relayAgent(relay) : "";
+  // While the agent is in a turn, a stop button sits in the field: it
+  // interrupts the step it is on and leaves the field free for a message.
+  const working = relay?.state === "working";
+  const [stopping, setStopping] = useState(false);
+  useEffect(() => setStopping(false), [relay?.state, threadId]);
   const [route, setRoute] = useState<EagentRoute | null>(null);
   const toAgent = live && route !== "eagent";
   const [sendMenu, setSendMenu] = useState(false);
@@ -1337,7 +1343,7 @@ function Composer({ threadId, ended, relay, onSending, handle }: { threadId: str
             </button>
           </>
         )}
-        <div className={`composer-field${live ? " with-route" : ""}`} ref={routeRef}>
+        <div className={`composer-field${live ? " with-route" : ""}${working ? " with-stop" : ""}`} ref={routeRef}>
           {live && (
             <button type="button" className="route-pip" aria-label={`To ${toAgent ? agent : "eagent"}. Change who gets it`} aria-haspopup="menu" aria-expanded={routeOpen} title={`To ${toAgent ? agent : "eagent"}`} onClick={() => setRouteOpen((o) => !o)}>
               <Avatar name={toAgent ? agent : "eagent"} small />
@@ -1382,6 +1388,21 @@ function Composer({ threadId, ended, relay, onSending, handle }: { threadId: str
               }
             }}
           />
+          {working && (
+            <button
+              type="button"
+              className="stop-btn"
+              aria-label={`Stop what ${agent} is doing`}
+              title={`Stop what ${agent} is doing`}
+              disabled={stopping}
+              onClick={() => {
+                setStopping(true);
+                onCommand("/interrupt");
+              }}
+            >
+              <IconStop aria-hidden="true" />
+            </button>
+          )}
         </div>
         <button
           type="submit"
