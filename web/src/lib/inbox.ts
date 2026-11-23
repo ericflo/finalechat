@@ -83,7 +83,7 @@ export function busyFor(since: string, now: number): string {
 export const orderHoldMs = 3 * 60 * 1000;
 
 export interface OrderHold {
-  /** Which list this is (view, filter, search); another list starts over. */
+  /** Which list this is (view, filter, search); another list starts from the latest order. */
   view: string;
   ids: string[];
   /** When the reader last touched the list, or 0 if they have not. */
@@ -97,7 +97,9 @@ export interface OrderHold {
  * hold has not seen go on top; otherwise `latest` is taken as it is.
  */
 export function heldOrder(hold: OrderHold | null, view: string, latest: string[], now: number): OrderHold {
-  if (!hold || hold.view !== view) return { view, ids: latest, touchedAt: 0 };
+  // Another list starts from the latest order. The reader is still the same
+  // reader, so the time they last touched the screen carries over.
+  if (!hold || hold.view !== view) return { view, ids: latest, touchedAt: hold?.touchedAt ?? 0 };
   if (!hold.touchedAt || now - hold.touchedAt >= orderHoldMs) return { view, ids: latest, touchedAt: hold.touchedAt };
   const present = new Set(latest);
   const known = new Set(hold.ids);

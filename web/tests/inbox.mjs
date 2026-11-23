@@ -101,11 +101,15 @@ describe("order", () => {
     assert.deepEqual(heldOrder(held, "all", ["b", "a", "c"], now + orderHoldMs).ids, ["b", "a", "c"]);
   });
 
-  it("starts over for another view, filter or search", () => {
+  it("starts another view, filter or search from the latest order, still held", () => {
     const held = { ...heldOrder(null, "all", ["a", "b", "c"], now), touchedAt: now };
     const next = heldOrder(held, "unread", ["c", "a"], now + 1000);
     assert.deepEqual(next.ids, ["c", "a"]);
-    assert.equal(next.touchedAt, 0);
+    assert.equal(next.touchedAt, now);
+    // Back on the first list it is the latest order again, and it holds.
+    const back = heldOrder(next, "all", ["b", "a", "c"], now + 2000);
+    assert.deepEqual(back.ids, ["b", "a", "c"]);
+    assert.deepEqual(heldOrder(back, "all", ["c", "b", "a", "d"], now + 3000).ids, ["d", "b", "a", "c"]);
   });
 
   it("compares orders", () => {
