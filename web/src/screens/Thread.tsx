@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../components/Attachments";
 import { Avatar, ConfirmSheet, CopyButton, Linkified, Sheet, sheetsOpen } from "../components/Common";
-import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBolt, IconBranch, IconChevron, IconClock, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconReply, IconSend, IconServer, IconSettings, IconTerminal, IconTrash } from "../components/Icons";
+import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBolt, IconBranch, IconChevron, IconClock, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconReply, IconSend, IconServer, IconSettings, IconStop, IconTerminal, IconTrash } from "../components/Icons";
 import { NotifyBell, RelayBadge, RelaySheet, agentName, relayAgent, relayReceipts, threadRelay } from "../components/Relay";
 import { api } from "../lib/api";
 import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
@@ -14,6 +14,7 @@ import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
 import type { MessageRouting } from "../lib/clientCaps";
 import type { Activity, Attachment, EagentDelivery, EagentRoute, Message, Question, RelayReceipt, Thread, ThreadRelay } from "../lib/types";
 import { ThreadSettingsPanel } from "../components/ThreadSettings";
+import { SessionMark, StopSessionSheet } from "../components/Session";
 import { ThreadArtifacts } from "./Artifacts";
 import { InspectMessage } from "../components/InspectMessage";
 
@@ -40,6 +41,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   const [load, setLoad] = useState<ThreadLoad | null>(null);
   const [menu, setMenu] = useState(false);
   const [relayMenu, setRelayMenu] = useState(false);
+  const [stopOpen, setStopOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [viewing, setViewing] = useState<{ items: Attachment[]; index: number } | null>(null);
@@ -65,6 +67,10 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   const initialised = useRef<string | null>(null);
   const activity = useLiveActivity(thread?.activity);
   const relay = threadRelay(thread);
+  // The agent session behind this thread, while it runs, and its stop when
+  // the agent offers one.
+  const session = useStore((s) => s.live[id]);
+  const stoppable = session?.stop ? session : null;
   const receipts = relayReceipts(thread);
   const relayName = relay ? relayAgent(relay) : "";
   // Lets a report's Reply quote it into the composer.
@@ -326,7 +332,16 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   }
 
   const title = thread?.title || thread?.agent || "Thread";
-  const subtitle = thread?.title && thread.agent ? thread.agent : thread?.external_id ? <span style={{ fontFamily: "var(--mono)" }}>{thread.external_id}</span> : undefined;
+  const who = thread?.title && thread.agent ? thread.agent : thread?.external_id ? <span style={{ fontFamily: "var(--mono)" }}>{thread.external_id}</span> : undefined;
+  // The relay badge below names a relayed agent; this says the session runs.
+  const subtitle = session ? (
+    <span className="sub-session">
+      {who}
+      <SessionMark relay={null} />
+    </span>
+  ) : (
+    who
+  );
 
   return (
     <div className="page thread-page">
@@ -421,7 +436,8 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
         onSending={handleSending}
         handle={composer}
       />
-      {relayMenu && relay && <RelaySheet relay={relay} onClose={() => setRelayMenu(false)} onSend={sendCommand} />}
+      {relayMenu && relay && <RelaySheet relay={relay} onClose={() => setRelayMenu(false)} onSend={sendCommand} stopSession={stoppable ? { label: stoppable.stop?.label || "Stop session", onClick: () => { setRelayMenu(false); setStopOpen(true); } } : undefined} />}
+      {stopOpen && stoppable && <StopSessionSheet session={stoppable} onClose={() => setStopOpen(false)} />}
       {viewing && <ImageViewer items={viewing.items} index={viewing.index} onClose={() => setViewing(null)} />}
 
       {menu && thread && (
@@ -478,6 +494,11 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
           >
             <IconCopy /> Copy thread id
           </button>
+          {stoppable && (
+            <button type="button" className="item danger" onClick={() => { setMenu(false); setStopOpen(true); }}>
+              <IconStop /> {stoppable.stop?.label || "Stop session"}
+            </button>
+          )}
           <button type="button" className="item danger" onClick={() => { setMenu(false); setConfirmDelete(true); }}>
             <IconTrash /> Delete thread
           </button>

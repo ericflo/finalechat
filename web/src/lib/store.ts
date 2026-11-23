@@ -3,7 +3,7 @@ import { api, APIError } from "./api";
 import type { MessageRouting } from "./clientCaps";
 import { forgetPushSubscription, resyncPushSubscription, setBadge } from "./push";
 import { serverNow, syncServerTime } from "./time";
-import type { Activity, Counts, Message, Question, Settings, SignupMode, Thread, User } from "./types";
+import type { Activity, Counts, LiveSession, Message, Question, Settings, SignupMode, Thread, User } from "./types";
 
 export type Connection = "idle" | "connecting" | "online" | "offline";
 
@@ -48,6 +48,8 @@ export interface State {
   drafts: Record<string, string>;
   /** Thread ids the server returned for the last search, or null when not searching. */
   searchHits: { query: string; ids: string[] } | null;
+  /** Conversations whose agent session is running now, by thread id. */
+  live: Record<string, LiveSession>;
 }
 
 const defaultSettings: Settings = { notify_all_messages: false, remote_mode: false };
@@ -121,6 +123,7 @@ let state: State = {
   toasts: [],
   drafts: typeof localStorage !== "undefined" ? readDrafts() : {},
   searchHits: null,
+  live: {},
 };
 
 const listeners = new Set<() => void>();
@@ -224,7 +227,7 @@ function isTransport(err: unknown): boolean {
 /** The server said the session is gone: paint the login form and forget the device's copy. */
 function markSignedOut() {
   signedOut = true;
-  set({ user: false, fromSnapshot: false, threads: {}, inboxLoaded: false, inboxExhausted: false });
+  set({ user: false, fromSnapshot: false, threads: {}, live: {}, inboxLoaded: false, inboxExhausted: false });
 }
 
 export async function bootstrap(): Promise<void> {
@@ -317,6 +320,7 @@ async function forgetAccount(): Promise<void> {
     inboxExhausted: false,
     archivedLoaded: false,
     searchHits: null,
+    live: {},
     counts: emptyCounts,
   });
   setBadge(0);
@@ -858,6 +862,7 @@ export function connect() {
   wantConnection = true;
   if (source) return;
   set({ connection: "connecting" });
+  void refreshLive();
   const es = new EventSource("/api/v1/events");
   source = es;
   lastEventAt = Date.now();
@@ -875,6 +880,7 @@ export function connect() {
     }
     // Catch up on anything that happened while disconnected.
     void loadInbox();
+    void refreshLive();
     const openThread = currentThreadId();
     if (openThread) void refreshThread(openThread);
   });
@@ -922,6 +928,9 @@ export function connect() {
     });
   }
   withPayload("settings.updated", (d) => d.settings && set({ settings: d.settings }));
+  // A session starting or stopping republishes its resource or changes its
+  // connector's grants; either may change which sessions are running.
+  for (const name of ["settings-resource.updated", "connector.updated"]) withPayload(name, () => scheduleLiveRefresh());
   es.addEventListener("reconnect", () => {
     scheduleReconnect(500);
   });
@@ -995,7 +1004,62 @@ function currentThreadId() {
   return currentThread;
 }
 
+// ---------------------------------------------------------------------------
+// Running sessions. Starting or stopping one arrives as an event; an agent
+// that simply goes away (its connector lapses) does not, so the list is also
+// read again every so often while the app is on screen.
+
+let liveInFlight: Promise<void> | null = null;
+let liveAgain = false;
+let liveTimer: number | undefined;
+const liveEvery = 30000;
+
+export function refreshLive(): Promise<void> {
+  if (liveInFlight) {
+    liveAgain = true;
+    return liveInFlight;
+  }
+  liveInFlight = (async () => {
+    try {
+      const { sessions } = await api.liveSessions();
+      const live: Record<string, LiveSession> = {};
+      for (const l of sessions ?? []) live[l.thread_id] = l;
+      const same = Object.keys(live).length === Object.keys(state.live).length && Object.entries(live).every(([id, l]) => JSON.stringify(state.live[id]) === JSON.stringify(l));
+      if (!same) set({ live });
+    } catch (e) {
+      // A server without the endpoint has no running sessions to show.
+      if (e instanceof APIError && e.status === 404) set({ live: {} });
+    } finally {
+      liveInFlight = null;
+      if (liveAgain) {
+        liveAgain = false;
+        void refreshLive();
+      }
+    }
+  })();
+  return liveInFlight;
+}
+
+function scheduleLiveRefresh() {
+  window.clearTimeout(liveTimer);
+  liveTimer = window.setTimeout(() => void refreshLive(), 400);
+}
+
+/** Drops a session from the running list at once (it was just stopped). */
+export function forgetLive(threadId: string) {
+  if (!state.live[threadId]) return;
+  set((s) => {
+    const live = { ...s.live };
+    delete live[threadId];
+    return { live };
+  });
+}
+
 if (typeof document !== "undefined") {
+  window.setInterval(() => {
+    if (source && wantConnection && document.visibilityState === "visible") void refreshLive();
+  }, liveEvery);
+
   // A socket can sit open but dead after the phone sleeps; watch for silence.
   window.setInterval(() => {
     if (source && wantConnection && document.visibilityState === "visible" && Date.now() - lastEventAt > staleAfter) {
@@ -1017,6 +1081,7 @@ if (typeof document !== "undefined") {
       scheduleReconnect(0);
     } else {
       void loadInbox();
+      void refreshLive();
       const openThread = currentThreadId();
       if (openThread) void refreshThread(openThread);
     }

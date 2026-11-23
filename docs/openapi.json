@@ -6511,6 +6511,49 @@
         ]
       }
     },
+    "/live-sessions": {
+      "get": {
+        "tags": [
+          "Integration settings"
+        ],
+        "summary": "List conversations whose agent session is running",
+        "description": "One entry per conversation whose session is running now, newest publication first per conversation, with the stop the agent offers (session-stop.v1). Session controls are queued with POST /settings-resources/{resource}/commands.",
+        "responses": {
+          "200": {
+            "description": "Running sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessions": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LiveSession"
+                      }
+                    }
+                  },
+                  "required": [
+                    "sessions"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication required"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
     "/connectors/{connector}/release": {
       "post": {
         "tags": [
@@ -8539,7 +8582,8 @@
                 "credential_reference",
                 "permissions",
                 "executable",
-                "cost"
+                "cost",
+                "route"
               ]
             }
           }
@@ -8698,6 +8742,11 @@
                 },
                 "label": {
                   "type": "string"
+                },
+                "description": {
+                  "type": "string",
+                  "maxLength": 4000,
+                  "description": "What the action does, in the integration's words; shown before the user confirms."
                 },
                 "class": {
                   "type": "string"
@@ -8979,6 +9028,51 @@
         ],
         "additionalProperties": false,
         "description": "Where a field or input groups its suggestions by another (suggest.group_by), a suggestion's group is the value that other one takes with it: picking a model from a provider's group picks that provider too."
+      },
+      "LiveSession": {
+        "type": "object",
+        "description": "A conversation whose agent session is running: its connector is connected and publishes a session-scoped resource naming the thread (snapshot.details.thread_external_id) with runtime_known true under a held grant.",
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The session's settings resource; queue session.stop here."
+          },
+          "connector_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "stop": {
+            "type": "object",
+            "description": "Present when the resource offers session.stop under a grant that allows it.",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "thread_id",
+          "resource_id",
+          "connector_id",
+          "label"
+        ],
+        "additionalProperties": false
       }
     }
   }

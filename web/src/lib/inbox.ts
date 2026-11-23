@@ -7,7 +7,7 @@ import type { Thread } from "./types";
 /** The one thing a row's marker says: amber, green, accent, or nothing. */
 export type RowState = "needs-you" | "working" | "unread" | "idle";
 
-export type InboxView = "all" | "unread" | "working" | "archived";
+export type InboxView = "all" | "unread" | "working" | "live" | "archived";
 
 /** An agent is working when it says so and the status has not lapsed. An
  * agent waiting on the user is not working. */
@@ -32,9 +32,11 @@ export function threadTitle(t: Thread): string {
   return t.title || t.agent || "Untitled thread";
 }
 
-export function inView(t: Thread, view: InboxView, now: number): boolean {
+/** `live` holds the threads whose agent session is running, by id. */
+export function inView(t: Thread, view: InboxView, now: number, live: Record<string, unknown> = {}): boolean {
   if (view === "archived") return !!t.archived_at;
   if (t.archived_at) return false;
+  if (view === "live") return !!live[t.id];
   if (view === "unread") return t.unread_count > 0 || t.pending_questions > 0;
   if (view === "working") return isWorking(t, now);
   return true;

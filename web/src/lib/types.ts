@@ -60,6 +60,18 @@ export interface Thread {
   activity: Activity | null;
 }
 
+/** A conversation whose agent session is running now (GET /live-sessions):
+ * its agent publishes a live session resource that names the thread. */
+export interface LiveSession {
+  thread_id: string;
+  /** The session's settings resource, where its controls are queued. */
+  resource_id: string;
+  connector_id: string;
+  label: string;
+  /** Present when the agent offers to stop the session, in its words. */
+  stop?: { label: string; description?: string };
+}
+
 /** What eagent publishes as thread meta `relay` while an agent it started
  * (Codex, Claude Code) does the session's work. */
 export interface ThreadRelay {

@@ -86,3 +86,55 @@ func (s *Store) ThreadSettings(ctx context.Context, thread *Thread) ([]ThreadSet
 	}
 	return out, rows.Err()
 }
+
+// LiveSession is a conversation whose agent session is running right now:
+// its connector is connected and publishes a session-scoped resource that
+// names the conversation and reports a known runtime. Stop is set when that
+// resource offers session.stop under a grant that still allows it.
+type LiveSession struct {
+	ThreadID    uuid.UUID   `json:"thread_id"`
+	ResourceID  uuid.UUID   `json:"resource_id"`
+	ConnectorID uuid.UUID   `json:"connector_id"`
+	Label       string      `json:"label"`
+	Stop        *LiveAction `json:"stop,omitempty"`
+}
+
+// LiveAction is how the agent names and describes an action it offers.
+type LiveAction struct {
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
+// LiveSessions lists the account's conversations whose session is running,
+// one entry per conversation (its most recently published session).
+func (s *Store) LiveSessions(ctx context.Context, userID uuid.UUID) ([]LiveSession, error) {
+	rows, err := s.pool.Query(ctx, `SELECT DISTINCT ON (t.id) t.id,r.id,r.connector_id,r.label,
+		CASE WHEN c.grants @> jsonb_build_array(jsonb_build_object('key',r.resource_key,'operations',jsonb_build_array('session.stop'))) THEN
+		(SELECT a FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.descriptor->'actions')='array' THEN r.descriptor->'actions' ELSE '[]'::jsonb END) a
+		WHERE a->>'operation'='session.stop' LIMIT 1) END
+		FROM settings_resources r JOIN connectors c ON c.id=r.connector_id AND c.user_id=r.user_id
+		JOIN threads t ON t.user_id=r.user_id AND t.external_id=r.snapshot->'details'->>'thread_external_id'
+		WHERE r.user_id=$1 AND r.scope='session' AND c.state='active' AND `+grantHeld+`
+		AND c.last_seen_at>now()-interval '90 seconds' AND r.snapshot->>'runtime_known'='true'
+		ORDER BY t.id,r.updated_at DESC,r.id LIMIT 1000`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []LiveSession{}
+	for rows.Next() {
+		var l LiveSession
+		var action []byte
+		if err := rows.Scan(&l.ThreadID, &l.ResourceID, &l.ConnectorID, &l.Label, &action); err != nil {
+			return nil, err
+		}
+		if len(action) > 0 {
+			var a control.Action
+			if json.Unmarshal(action, &a) == nil && a.Label != "" {
+				l.Stop = &LiveAction{Label: a.Label, Description: a.Description}
+			}
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}

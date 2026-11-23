@@ -154,7 +154,7 @@ const cadences = [
 
 /** The relay's controls. Each one sends eagent a slash command through
  * `onSend`, the same way a typed message goes. */
-export function RelaySheet({ relay, onClose, onSend }: { relay: ThreadRelay; onClose: () => void; onSend: (command: string) => void }) {
+export function RelaySheet({ relay, onClose, onSend, stopSession }: { relay: ThreadRelay; onClose: () => void; onSend: (command: string) => void; stopSession?: { label: string; onClick: () => void } }) {
   const [view, setView] = useState<"menu" | "autopilot" | "stop">("menu");
   const name = relayAgent(relay);
   const stopped = relay.state === "stopped";
@@ -208,6 +208,8 @@ export function RelaySheet({ relay, onClose, onSend }: { relay: ThreadRelay; onC
       <Item icon={IconInfo} label="Status" onClick={() => send("/relay")} />
       {relay.attach && <Item icon={IconCopy} label="Copy attach command" onClick={() => void copyAttach()} />}
       {!stopped && <Item icon={IconStop} label={`Stop ${name}`} danger onClick={() => setView("stop")} />}
+      {/* The whole session behind the relay, when its agent offers a stop. */}
+      {stopSession && <Item icon={IconStop} label={stopSession.label} hint="The session behind this thread" danger onClick={stopSession.onClick} />}
     </Sheet>
   );
 }

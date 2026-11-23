@@ -69,6 +69,14 @@ describe("views", () => {
     assert.equal(inView(thread({ activity: busy() }), "working", now), true);
     assert.equal(inView(thread({ activity: busy("working", -1) }), "working", now), false);
   });
+
+  it("lists threads whose session is running under Active, archived ones aside", () => {
+    const t = thread();
+    assert.equal(inView(t, "live", now, { [t.id]: {} }), true);
+    assert.equal(inView(t, "live", now, {}), false);
+    assert.equal(inView(t, "live", now), false);
+    assert.equal(inView(archived, "live", now, { [archived.id]: {} }), false);
+  });
 });
 
 describe("order", () => {

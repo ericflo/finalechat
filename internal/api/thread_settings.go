@@ -72,3 +72,16 @@ func (s *Server) handleThreadSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, 200, map[string]any{"resources": items})
 }
+
+// GET /api/v1/live-sessions: the conversations whose agent session is
+// running now (see store.LiveSessions), so a client can mark them and offer
+// to stop them.
+func (s *Server) handleLiveSessions(w http.ResponseWriter, r *http.Request) {
+	p := principalFrom(r.Context())
+	items, err := s.store.LiveSessions(r.Context(), p.user.ID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, 200, map[string]any{"sessions": items})
+}

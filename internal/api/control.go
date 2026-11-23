@@ -21,6 +21,7 @@ import (
 func (s *Server) controlRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /api/v1/threads/{thread}/settings-resources", s.handleThreadSessionSettings)
 	m.HandleFunc("GET /api/v1/threads/{thread}/settings", s.handleThreadSettings)
+	m.HandleFunc("GET /api/v1/live-sessions", s.handleLiveSessions)
 	m.HandleFunc("POST /api/v1/connectors", s.handleCreateConnector)
 	m.HandleFunc("POST /api/v1/connectors/{connector}/connect", s.handleConnectOwnAgent)
 	m.HandleFunc("GET /api/v1/connectors", s.sessionOnly(s.handleListConnectors))
@@ -269,6 +270,8 @@ func (s *Server) handleConnectorRelease(w http.ResponseWriter, r *http.Request) 
 		writeError(w, err)
 		return
 	}
+	// Its sessions stop counting as running now, not when the lease lapses.
+	s.controlEvent(r.Context(), c.UserID, c.ID, uuid.Nil, uuid.Nil, bus.ConnectorUpdated)
 	writeJSON(w, 200, map[string]any{"ok": true})
 }
 

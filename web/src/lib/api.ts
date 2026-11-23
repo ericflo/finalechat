@@ -3,6 +3,7 @@ import type {
   Attachment,
   AuthStatus,
   Counts,
+  LiveSession,
   Me,
   Message,
   MessengerStatus,
@@ -61,6 +62,7 @@ const base = "/api/v1";
 
 export const api = {
   authStatus: () => request<AuthStatus>("GET", `${base}/auth/status`),
+  liveSessions: () => request<{ sessions: LiveSession[] }>("GET", `${base}/live-sessions`),
   register: (input: { email: string; password: string; display_name?: string; invite_code?: string }) =>
     request<{ user: User }>("POST", `${base}/auth/register`, input),
   login: (input: { email: string; password: string }) => request<{ user: User }>("POST", `${base}/auth/login`, input),

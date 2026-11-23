@@ -124,7 +124,8 @@ problem.
 ### Features
 
 `GET /auth/status` and `GET /me` list optional capabilities in `features`:
-`activity`, `idempotency`, `dismiss`, and `push` / `attachments` /
+`activity`, `idempotency`, `dismiss`, `settings-control.v1`,
+`settings-connect.v1`, `session-stop.v1`, and `push` / `attachments` /
 `messenger` when those are configured. Clients that must work against older deployments can
 feature-detect with it.
 
@@ -1220,6 +1221,21 @@ an append-only audit and explicit expired/conflicted/unknown outcomes. Adapters
 must journal intent and reconcile save-before-ack crashes. No automatic retry
 may repeat an uncertain paid action. A saved file does not prove runtime adoption.
 
+Actions may carry a `description` (at most 4,000 characters) saying what they
+do in the integration's words; the app shows it before the user confirms.
+
+A conversation's session is **running** while its connector is connected and
+publishes a session-scoped resource that names the conversation
+(`snapshot.details.thread_external_id`), still holds that resource's grant and
+reports `runtime_known: true`. `GET /live-sessions` lists those conversations,
+one entry each, so a client can mark them: `{"sessions": [{"thread_id",
+"resource_id", "connector_id", "label", "stop"?}]}`. `stop` (`{label,
+description?}`) is present when the resource offers a `session.stop` action
+under a grant that allows it; queue it like any session control, with no
+parameters (`session-stop.v1`). The integration ends the session, publishes the
+resource with `runtime_known: false` and drops its grant; the app takes the
+conversation off the running list when either arrives.
+
 Deleting an artifact, directly or through thread deletion, cancels its queued
 settings commands and fences claimed commands with an `unknown` result. This
 does not undo a local write that may already have started. Completed results
@@ -1231,6 +1247,7 @@ remain authorized. Account deletion removes the related audit along with the acc
 | `PUT /threads/{thread}/artifacts/{key}` | Register or rename a session artifact |
 | `GET /threads/{thread}/artifacts` | List a thread’s artifacts |
 | `GET /threads/{thread}/settings-resources` | Discover live settings for a thread |
+| `GET /live-sessions` | Conversations whose session is running now, with the stop each offers |
 | `GET /artifacts/{id}` | Artifact metadata, current manifest and limits |
 | `DELETE /artifacts/{id}` | Delete artifact and all revisions |
 | `POST /artifacts/{id}/blobs/check` | Check which chunk hashes are absent |

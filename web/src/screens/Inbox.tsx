@@ -41,6 +41,7 @@ import {
 } from "../lib/store";
 import { compactTime, fullDateTime, serverNow, useNow } from "../lib/time";
 import type { Thread } from "../lib/types";
+import { liveRelay, SessionMark } from "../components/Session";
 import { api } from "../lib/api";
 import { useLiveActivity } from "../lib/activity";
 import {
@@ -75,6 +76,7 @@ export function Inbox({ filter }: { filter: string | null }) {
   const cursor = useStore((s) => s.inboxCursor);
   const settings = useStore((s) => s.settings);
   const searchHits = useStore((s) => s.searchHits);
+  const live = useStore((s) => s.live);
   const [view, setView] = useState<InboxView>("all");
   const tab = view === "archived" ? "archived" : "active";
   const [query, setQuery] = useState("");
@@ -197,13 +199,15 @@ export function Inbox({ filter }: { filter: string | null }) {
   const viewCounts = useMemo(() => {
     let unread = 0;
     let working = 0;
+    let active = 0;
     for (const t of all) {
       if (t.archived_at) continue;
       if (inView(t, "unread", now)) unread++;
       if (isWorking(t, now)) working++;
+      if (live[t.id]) active++;
     }
-    return { unread, working };
-  }, [all, now]);
+    return { unread, working, active };
+  }, [all, now, live]);
 
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -213,7 +217,7 @@ export function Inbox({ filter }: { filter: string | null }) {
         : null;
     const latest = all
       // A search looks everywhere, archived threads included.
-      .filter((t) => (q ? true : inView(t, view, now)))
+      .filter((t) => (q ? true : inView(t, view, now, live)))
       .filter((t) => !needsYou || t.pending_questions > 0)
       .filter(
         (t) =>
@@ -234,7 +238,7 @@ export function Inbox({ filter }: { filter: string | null }) {
     );
     const byId = new Map(latest.map((t) => [t.id, t]));
     return orderHold.ids.flatMap((id) => byId.get(id) ?? []);
-  }, [all, view, query, searchHits, needsYou, now]);
+  }, [all, view, query, searchHits, needsYou, now, live]);
 
   const selectedIds = useMemo(() => [...selected], [selected]);
   // Indeterminate state for the header select-all checkbox.
@@ -517,6 +521,7 @@ export function Inbox({ filter }: { filter: string | null }) {
                       ["all", "All", 0],
                       ["unread", "Unread", viewCounts.unread],
                       ["working", "Working", viewCounts.working],
+                      ["live", "Active", viewCounts.active],
                       ["archived", "Archived", 0],
                     ] as const
                   ).map(([key, label, n]) => (
@@ -750,6 +755,8 @@ function ThreadRow({
 }) {
   const unread = t.unread_count > 0;
   const needs = t.pending_questions > 0;
+  const session = useStore((s) => s.live[t.id]);
+  const relayed = session ? liveRelay(t) : null;
   const liveActivity = useLiveActivity(t.activity);
   // An agent waiting on the user is not working, and never looks like it.
   const activity = liveActivity?.kind === "waiting" ? null : liveActivity;
@@ -892,6 +899,7 @@ function ThreadRow({
             <span className="thread-agent">{t.agent}</span>
           )}
           <span className="thread-side">
+            {session && <SessionMark relay={relayed} />}
             {showArchived && t.archived_at && (
               <span className="pill muted">Archived</span>
             )}
@@ -1013,7 +1021,9 @@ function EmptyThreads({
         ? ["Nothing unread", "You have read everything your agents sent."]
         : view === "working"
           ? ["Nothing working", "No agent is in the middle of something right now."]
-          : [
+          : view === "live"
+            ? ["No active sessions", "Sessions your agents are running right now show up here."]
+            : [
               "No threads yet",
               "When an agent posts its first message, a thread appears here and your phone can buzz.",
             ];

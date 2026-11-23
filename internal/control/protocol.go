@@ -35,7 +35,7 @@ func (g Grant) Validate() error {
 		return fmt.Errorf("invalid grant")
 	}
 	for _, op := range g.Operations {
-		if !slices.Contains([]string{"settings.apply", "settings.refresh", "settings.undo", "route.test", "bundle.save", "bundle.delete", "prompt.set", "prompt.reset", "connector.disable", "session.start"}, op) {
+		if !slices.Contains([]string{"settings.apply", "settings.refresh", "settings.undo", "route.test", "bundle.save", "bundle.delete", "prompt.set", "prompt.reset", "connector.disable", "session.start", "session.stop"}, op) {
 			return fmt.Errorf("unsupported operation %q", op)
 		}
 	}
@@ -224,10 +224,13 @@ type Suggestion struct {
 	Implies map[string]any `json:"implies,omitempty"`
 }
 type Action struct {
-	Operation  string `json:"operation"`
-	Label      string `json:"label"`
-	Class      string `json:"class"`
-	Parameters Shape  `json:"parameters"`
+	Operation string `json:"operation"`
+	Label     string `json:"label"`
+	// Description says what the action does, in the agent's words; a client
+	// shows it before the user confirms.
+	Description string `json:"description,omitempty"`
+	Class       string `json:"class"`
+	Parameters  Shape  `json:"parameters"`
 	// Inputs are the parameters a client may ask the user for, in order,
 	// with labels and suggestions; parameters not listed are set by the
 	// client itself or left out.
@@ -318,7 +321,7 @@ func (d Descriptor) Validate(g Grant) error {
 	}
 	seen = map[string]bool{}
 	for _, a := range d.Actions {
-		if seen[a.Operation] || a.Label == "" || !slices.Contains(g.Operations, a.Operation) || !slices.Contains(g.Classes, a.Class) {
+		if seen[a.Operation] || a.Label == "" || len(a.Label) > 300 || len(a.Description) > 4000 || !slices.Contains(g.Operations, a.Operation) || !slices.Contains(g.Classes, a.Class) {
 			return fmt.Errorf("invalid or ungranted action")
 		}
 		seen[a.Operation] = true
