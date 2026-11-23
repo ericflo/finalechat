@@ -1,14 +1,14 @@
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { answerQuestion, dismissQuestion, toast, useStore } from "../lib/store";
 import type { Question } from "../lib/types";
 import { compactTime, countdown, fullDateTime, useNow } from "../lib/time";
 import { IconCheck } from "./Icons";
-import { Avatar, Link, Linkified } from "./Common";
+import { Link, Linkified } from "./Common";
 
 /** Options shown before an expander; a phone question is a 2-5 way choice. */
 const maxOptions = 5;
 
-export const QuestionCard = memo(function QuestionCard({ q, showThread, highlight }: { q: Question; showThread?: boolean; highlight?: boolean }) {
+export const QuestionCard = memo(function QuestionCard({ q, showThread, showAgent, highlight }: { q: Question; showThread?: boolean; showAgent?: boolean; highlight?: boolean }) {
   const thread = useStore((s) => s.threads[q.thread_id]);
   const [selected, setSelected] = useState<string[]>([]);
   const [text, setText] = useState("");
@@ -16,6 +16,18 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
   const [confirmDismiss, setConfirmDismiss] = useState(false);
   const [allOptions, setAllOptions] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // In the inbox the card sits above the thread list, so it stays small: a
+  // long prompt is cut to a few lines until asked for, and the send button
+  // appears once there is an answer to send.
+  const compact = !!showThread;
+  const promptRef = useRef<HTMLDivElement>(null);
+  const [wholePrompt, setWholePrompt] = useState(false);
+  const [promptCut, setPromptCut] = useState(false);
+  useLayoutEffect(() => {
+    const el = promptRef.current;
+    if (!el || !compact || wholePrompt) return;
+    setPromptCut(el.scrollHeight > el.clientHeight + 1);
+  }, [compact, wholePrompt, q.prompt]);
   const dismissRef = useRef<HTMLButtonElement>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
   // Focus follows the confirmation in and back out, so a keyboard or screen
@@ -86,7 +98,6 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
   const status = localExpired ? "expired" : q.status;
   const statusLabel = { pending: "Needs you", answered: "Answered", cancelled: "Withdrawn", expired: "Expired", dismissed: "Dismissed" }[status];
   const header = typeof q.meta.header === "string" && q.meta.header.trim() ? q.meta.header.trim().slice(0, 48) : "";
-  const agentName = thread?.agent || thread?.title || "Agent";
   const urgent = pending && remaining < 2 * 60 * 1000;
 
   return (
@@ -94,10 +105,9 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
       <div className="q-head">
         {showThread && thread && (
           <Link href={`/t/${thread.id}?q=${q.id}`} className="q-agent" aria-label={`Open thread ${thread.title || thread.agent}`}>
-            <Avatar name={agentName} small />
             <span className="q-agent-name">
               {thread.title || thread.agent || "Thread"}
-              {thread.title && thread.agent && <span className="q-agent-sub"> · {thread.agent}</span>}
+              {showAgent && thread.title && thread.agent && <span className="q-agent-sub"> · {thread.agent}</span>}
             </span>
           </Link>
         )}
@@ -106,7 +116,14 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
           {compactTime(q.created_at, now)}
         </span>
       </div>
-      <div className="q-prompt"><Linkified text={q.prompt} /></div>
+      {/* In the inbox the prompt is a preview: paragraphs run on consecutive
+          lines, so the cut never lands on an empty one. */}
+      <div ref={promptRef} className={`q-prompt ${compact && !wholePrompt ? "cut" : ""}`}><Linkified text={compact && !wholePrompt ? q.prompt.replace(/\n\s*\n+/g, "\n") : q.prompt} /></div>
+      {compact && promptCut && !wholePrompt && (
+        <button type="button" className="q-more" onClick={() => setWholePrompt(true)}>
+          Show all
+        </button>
+      )}
 
       {pending && (
         <>
@@ -157,9 +174,11 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, highligh
             </div>
           )}
           <div className="q-actions">
-            <button type="button" className="btn primary q-send" disabled={!canSubmit} onClick={submit}>
-              {busy ? "Sending…" : selected.length > 0 && !q.multi_select && !text.trim() ? `Send · ${selected[0]}` : "Send answer"}
-            </button>
+            {(!compact || canSubmit || busy) && (
+              <button type="button" className="btn primary q-send" disabled={!canSubmit} onClick={submit}>
+                {busy ? "Sending…" : selected.length > 0 && !q.multi_select && !text.trim() ? `Send · ${selected[0]}` : "Send answer"}
+              </button>
+            )}
             <div className="q-foot">
               {q.expires_at && (
                 <span className={`q-expires ${urgent ? "urgent" : ""}`} title={fullDateTime(q.expires_at)}>

@@ -11,24 +11,28 @@ import (
 
 // Thread is a conversation between one agent session and the user.
 type Thread struct {
-	ID               uuid.UUID  `json:"id"`
-	UserID           uuid.UUID  `json:"-"`
-	ExternalID       *string    `json:"external_id"`
-	Title            string     `json:"title"`
-	Agent            string     `json:"agent"`
-	Description      string     `json:"description"`
-	Summary          string     `json:"summary"`
-	Meta             JSON       `json:"meta"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	LastActivityAt   time.Time  `json:"last_activity_at"`
-	LastReadAt       time.Time  `json:"last_read_at"`
-	ArchivedAt       *time.Time `json:"archived_at"`
-	Muted            bool       `json:"muted"`
-	Preview          string     `json:"preview"`
-	PreviewSender    string     `json:"preview_sender"`
-	UnreadCount      int        `json:"unread_count"`
-	PendingQuestions int        `json:"pending_questions"`
+	ID          uuid.UUID `json:"id"`
+	UserID      uuid.UUID `json:"-"`
+	ExternalID  *string   `json:"external_id"`
+	Title       string    `json:"title"`
+	Agent       string    `json:"agent"`
+	Description string    `json:"description"`
+	Summary     string    `json:"summary"`
+	// TitlePinned and DescriptionPinned say the user wrote that field in the
+	// app. An agent's value for a pinned field is ignored (see UpdateThread).
+	TitlePinned       bool       `json:"title_pinned"`
+	DescriptionPinned bool       `json:"description_pinned"`
+	Meta              JSON       `json:"meta"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	LastActivityAt    time.Time  `json:"last_activity_at"`
+	LastReadAt        time.Time  `json:"last_read_at"`
+	ArchivedAt        *time.Time `json:"archived_at"`
+	Muted             bool       `json:"muted"`
+	Preview           string     `json:"preview"`
+	PreviewSender     string     `json:"preview_sender"`
+	UnreadCount       int        `json:"unread_count"`
+	PendingQuestions  int        `json:"pending_questions"`
 	// Activity is what the agent says it is doing right now, or nil when it
 	// has said nothing or the last status has expired.
 	Activity *Activity `json:"activity"`
@@ -69,7 +73,7 @@ const MaxDescriptionRunes = 2000
 // Archived reports whether the thread is archived.
 func (t *Thread) Archived() bool { return t.ArchivedAt != nil }
 
-const threadColumns = `t.id, t.user_id, t.external_id, t.title, t.agent, t.description, t.meta, t.created_at, t.updated_at,
+const threadColumns = `t.id, t.user_id, t.external_id, t.title, t.agent, t.description, t.title_pinned, t.description_pinned, t.meta, t.created_at, t.updated_at,
 	t.last_activity_at, t.last_read_at, t.archived_at, t.muted, t.preview, t.preview_sender,
 	(SELECT count(*) FROM messages m WHERE m.thread_id = t.id AND m.sender <> 'user' AND m.deleted_at IS NULL AND m.created_at > t.last_read_at)::int,
 	(SELECT count(*) FROM questions q WHERE q.thread_id = t.id AND q.status = 'pending')::int,
@@ -100,7 +104,7 @@ func scanThread(row pgx.Row) (*Thread, error) {
 	var a Activity
 	var at, since, expires *time.Time
 	var live bool
-	if err := row.Scan(&t.ID, &t.UserID, &t.ExternalID, &t.Title, &t.Agent, &t.Description, &meta, &t.CreatedAt, &t.UpdatedAt,
+	if err := row.Scan(&t.ID, &t.UserID, &t.ExternalID, &t.Title, &t.Agent, &t.Description, &t.TitlePinned, &t.DescriptionPinned, &meta, &t.CreatedAt, &t.UpdatedAt,
 		&t.LastActivityAt, &t.LastReadAt, &t.ArchivedAt, &t.Muted, &t.Preview, &t.PreviewSender,
 		&t.UnreadCount, &t.PendingQuestions,
 		&a.Text, &a.Kind, &at, &since, &expires, &live); err != nil {
@@ -251,6 +255,11 @@ type ThreadPatch struct {
 	Archived    *bool
 	Muted       *bool
 	Meta        JSON
+	// ByUser marks a change the account holder made in the app, not one an
+	// agent's token made. A title or description the user writes is pinned:
+	// an agent's later value for that field is ignored. Clearing the field
+	// unpins it and hands it back to the agent.
+	ByUser bool
 }
 
 // UpdateThread applies a patch.
@@ -261,14 +270,24 @@ func (s *Store) UpdateThread(ctx context.Context, userID, id uuid.UUID, p Thread
 		args = append(args, v)
 		sets = append(sets, strings.Replace(expr, "?", "$"+itoa(len(args)), 1))
 	}
+	// The right-hand sides read the row as it was, so an agent's value is
+	// weighed against the pin that stood before this patch.
+	pinnable := func(column string, v string) {
+		if p.ByUser {
+			add(column+" = ?", v)
+			add(column+"_pinned = ?", v != "")
+			return
+		}
+		add(column+" = CASE WHEN t."+column+"_pinned THEN t."+column+" ELSE ? END", v)
+	}
 	if p.Title != nil {
-		add("title = ?", truncate(strings.TrimSpace(*p.Title), 300))
+		pinnable("title", truncate(strings.TrimSpace(*p.Title), 300))
 	}
 	if p.Agent != nil {
 		add("agent = ?", truncate(strings.TrimSpace(*p.Agent), 120))
 	}
 	if p.Description != nil {
-		add("description = ?", truncate(strings.TrimSpace(*p.Description), MaxDescriptionRunes))
+		pinnable("description", truncate(strings.TrimSpace(*p.Description), MaxDescriptionRunes))
 	}
 	if p.Archived != nil {
 		if *p.Archived {

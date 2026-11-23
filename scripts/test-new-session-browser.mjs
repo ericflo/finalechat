@@ -105,7 +105,8 @@ try {
   }
   await codexChip.getByText('GPT-6.2-Sol · max',{exact:true}).waitFor();
   await page.getByRole('button',{name:'eagent',exact:true}).click();
-  const chip=page.getByTitle('Configuration and models for this session');
+  // The rows of what it will run with: the configuration first.
+  const chip=page.getByTitle('Configuration and models for this session').first();
   await chip.waitFor();
   // Before anything is chosen, the draft says what it will run with.
   const summary=page.getByLabel('What it will run with');
@@ -179,7 +180,8 @@ try {
   await page.waitForTimeout(500); await page.screenshot({path:`${shots}/${name}-options.png`});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'overflow');
   await page.getByRole('button',{name:'Done',exact:true}).click();
-  await chip.getByText('Custom (anthropic-med) · Orchestrator, Task +1 changed',{exact:true}).waitFor();
+  await chip.getByText('Custom (anthropic-med)',{exact:true}).waitFor();
+  assert.equal(await page.locator('.setup-row.changed').count(),4);
   await summary.getByText('Custom (anthropic-med)',{exact:true}).waitFor();
   await summary.getByText('Kimi K3 · medium',{exact:true}).waitFor();
   await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-draft.png`});
@@ -195,7 +197,7 @@ try {
   await page.goto(base+'/tests/artifacts.html?draft');
   await page.getByRole('button',{name:'Codex',exact:true}).click();
   await page.getByLabel('What it will run with').getByText('GPT-6.2-Sol · max',{exact:true}).waitFor();
-  await page.getByPlaceholder(/^What should Codex do/).fill('ship it');
+  await page.getByPlaceholder(/^Message Codex/).fill('ship it');
   await page.getByRole('button',{name:'Start the session'}).click();
   await page.waitForURL(/\/t\/t1/);
   assert.deepEqual({...commands[commands.length-1].proposal.parameters},{prompt:'ship it',relay:'codex',relay_codex_model:'gpt-6.2-sol',relay_codex_effort:'max'});
@@ -206,7 +208,7 @@ try {
   await page.locator('.sf-picker').getByRole('button',{name:/^Gemini 4 Carbon/}).click();
   await page.getByRole('region',{name:'Antigravity',exact:true}).getByRole('radio',{name:'high',exact:true}).click();
   await page.getByRole('button',{name:'Done',exact:true}).click();
-  await page.getByPlaceholder(/^What should Antigravity do/).fill('run tests');
+  await page.getByPlaceholder(/^Message Antigravity/).fill('run tests');
   await page.getByRole('button',{name:'Start the session'}).click();
   await page.waitForURL(/\/t\/t1/);
   assert.deepEqual(commands.at(-1).proposal.parameters,{prompt:'run tests',relay:'antigravity',relay_antigravity_model:'gemini-4-carbon-high',relay_antigravity_effort:'high'});

@@ -7177,7 +7177,9 @@
           "pending_questions",
           "activity",
           "description",
-          "summary"
+          "summary",
+          "title_pinned",
+          "description_pinned"
         ],
         "properties": {
           "id": {
@@ -7270,12 +7272,20 @@
           "description": {
             "type": "string",
             "maxLength": 2000,
-            "description": "LLM-derived summary shown under the title in the archive."
+            "description": "1-2 sentence summary of the whole session and where it stands, shown under the title in the inbox."
           },
           "summary": {
             "type": "string",
             "maxLength": 2000,
             "description": "Alias of description; always identical in responses."
+          },
+          "title_pinned": {
+            "type": "boolean",
+            "description": "The user wrote the title in the app; a token's PATCH to title is ignored until the user clears it."
+          },
+          "description_pinned": {
+            "type": "boolean",
+            "description": "The user wrote the description in the app; a token's PATCH to description or summary is ignored until the user clears it."
           }
         },
         "example": {

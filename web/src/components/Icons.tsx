@@ -18,6 +18,9 @@ export const IconSend = (p: P) => (
 export const IconCheck = (p: P) => (
   <svg {...base} strokeWidth={3} {...p}><path d="M20 6L9 17l-5-5" /></svg>
 );
+export const IconSelect = (p: P) => (
+  <svg {...base} {...p}><rect x="3" y="3" width="18" height="18" rx="5" /><path d="M8 12.5l2.8 2.8L16 9.5" /></svg>
+);
 export const IconSearch = (p: P) => (
   <svg {...base} {...p}><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" /></svg>
 );

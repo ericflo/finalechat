@@ -193,18 +193,28 @@ timed-out question wait returns the question with `"status": "pending"`.
   "pending_questions": 1,
   "description": "Staging deploy thread; promote only after checks pass.",
   "summary": "Staging deploy thread; promote only after checks pass.",
+  "title_pinned": false,
+  "description_pinned": false,
   "activity": {"text": "Running the test suite…", "kind": "tool",
                "at": "2026-09-07T05:40:02.114532Z", "since": "2026-09-07T05:38:57.301176Z",
                "expires_at": "2026-09-07T05:40:47.114532Z"}
 }
 ```
 
-`description` is a 1–2 sentence summary of where the thread stands, kept
-fresh by the agent as the work evolves and shown under the title (at most
-2000 characters). `summary` is an accepted write alias of `description`:
-send either one (`description` wins when both are given) and every thread
+`title` names the session's subject and is what the inbox lists the thread
+by; it should stay put once set. `description` is a 1–2 sentence summary of
+the whole session and where it stands, kept fresh by the agent as the work
+evolves and shown under the title (at most 2000 characters; the list shows
+about 170). `summary` is an accepted write alias of `description`: send
+either one (`description` wins when both are given) and every thread
 response includes both with identical values. Sending an empty
 `description` clears it.
+
+`title_pinned` and `description_pinned` are true when the user wrote that
+field in the app. A token's PATCH to a pinned field is accepted and
+ignored: the request succeeds, the other fields apply, and the response
+carries the user's text. The pin lifts when the user clears the field in
+the app.
 
 `preview` is a plain-text excerpt of the latest message or question;
 `preview_sender` is `agent`, `user`, `system` or `question`. `unread_count`
@@ -588,6 +598,11 @@ Threads are ordered by `last_activity_at`, newest first.
 Any subset of `title`, `agent`, `description` (alias `summary`, at most 2000
 characters each; `description` wins when both are given), `archived`
 (boolean), `muted` (boolean), `meta` (merged). Emits `thread.updated`.
+
+From the app (a signed-in session), setting `title` or `description` pins
+it and clearing it unpins it. From a token, a pinned `title` or
+`description` keeps the user's text; see `title_pinned` and
+`description_pinned` on the thread.
 
 ```bash
 curl -sS -X PATCH https://www.finalechat.com/api/v1/threads/ext:claude-code:7f3a9c2e \

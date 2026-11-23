@@ -334,7 +334,6 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
       <TopBar
         title={
           <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, maxWidth: "100%" }}>
-            {thread && <Avatar name={thread.agent || thread.title || "?"} small />}
             <span style={{ minWidth: 0, flex: "0 1 auto", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
             {thread?.muted && <IconBellOff style={{ width: 14, height: 14, color: "var(--text-3)", flex: "none" }} />}
           </span>
@@ -503,12 +502,12 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
       )}
       {renaming && thread && (
         <RenameSheet
-          initialTitle={thread.title}
-          initialDescription={thread.description || thread.summary || ""}
+          thread={thread}
           onClose={() => setRenaming(false)}
-          onSave={(title, description) => {
+          onSave={(patch) => {
             setRenaming(false);
-            updateThread(id, { title, description }).catch((e) => toast(e.message, "error"));
+            if (Object.keys(patch).length === 0) return;
+            updateThread(id, patch).catch((e) => toast(e.message, "error"));
           }}
         />
       )}
@@ -664,21 +663,34 @@ function ThreadDescription({ thread, onRename }: { thread: Thread; onRename: () 
   );
 }
 
-function RenameSheet({ initialTitle, initialDescription, onClose, onSave }: { initialTitle: string; initialDescription: string; onClose: () => void; onSave: (title: string, description: string) => void }) {
+/** Title and summary. Agents keep both current as the work moves; anything
+ * the user writes here is theirs and stays (the server pins it) until they
+ * clear the field. Only a field the user changed is sent, so saving a new
+ * title does not also freeze the summary. */
+function RenameSheet({ thread, onClose, onSave }: { thread: Thread; onClose: () => void; onSave: (patch: { title?: string; description?: string }) => void }) {
+  const initialTitle = thread.title;
+  const initialDescription = thread.description || thread.summary || "";
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState(initialDescription);
+  const titleMine = title.trim() !== initialTitle.trim() ? title.trim() !== "" : !!thread.title_pinned;
+  const descriptionMine = description.trim() !== initialDescription.trim() ? description.trim() !== "" : !!thread.description_pinned;
+  const note = (mine: boolean, what: string) => (mine ? `Yours: the agent leaves this ${what} alone. Clear it to hand it back.` : `The agent keeps this ${what} current. Write your own and it stays.`);
   return (
     <Sheet onClose={onClose} label="Rename thread">
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          onSave(title.trim(), description.trim());
+          const patch: { title?: string; description?: string } = {};
+          if (title.trim() !== initialTitle.trim()) patch.title = title.trim();
+          if (description.trim() !== initialDescription.trim()) patch.description = description.trim();
+          onSave(patch);
         }}
         style={{ padding: "4px 6px" }}
       >
         <div className="field">
           <label htmlFor="rename">Thread title</label>
           <input id="rename" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} maxLength={300} />
+          <div className="help">{note(titleMine, "title")}</div>
         </div>
         <div className="field">
           <label htmlFor="rename-desc">Summary</label>
@@ -690,7 +702,7 @@ function RenameSheet({ initialTitle, initialDescription, onClose, onSave }: { in
             maxLength={2000}
             placeholder="What is this thread about?"
           />
-          <div className="hint">1–2 sentences, so the inbox stays scannable. {description.length}/2000</div>
+          <div className="help">{note(descriptionMine, "summary")}</div>
         </div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           <button type="button" className="btn" onClick={onClose}>

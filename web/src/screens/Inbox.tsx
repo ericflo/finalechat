@@ -10,6 +10,7 @@ import {
   IconPhone,
   IconPlus,
   IconSearch,
+  IconSelect,
   IconSettings,
   IconTerminal,
   IconTrash,
@@ -38,10 +39,31 @@ import {
   updateThread,
   useStore,
 } from "../lib/store";
-import { compactTime, fullDateTime, useNow } from "../lib/time";
+import { compactTime, fullDateTime, serverNow, useNow } from "../lib/time";
 import type { Thread } from "../lib/types";
 import { api } from "../lib/api";
 import { useLiveActivity } from "../lib/activity";
+import {
+  agentsDiffer,
+  busyFor,
+  byAttentionThenActivity,
+  heldOrder,
+  inView,
+  isWorking,
+  threadSummary,
+  threadTitle,
+  type InboxView,
+  type OrderHold,
+} from "../lib/inbox";
+
+// The inbox unmounts while a thread is open, so what it remembers across
+// that round trip lives here: the order it was showing, and the thread the
+// reader just opened (its row is marked for a moment when they come back).
+let orderHold: OrderHold | null = null;
+let lastOpened = "";
+function touchOrder() {
+  if (orderHold) orderHold = { ...orderHold, touchedAt: serverNow() };
+}
 
 export function Inbox({ filter }: { filter: string | null }) {
   const threads = useStore((s) => s.threads);
@@ -53,7 +75,8 @@ export function Inbox({ filter }: { filter: string | null }) {
   const cursor = useStore((s) => s.inboxCursor);
   const settings = useStore((s) => s.settings);
   const searchHits = useStore((s) => s.searchHits);
-  const [tab, setTab] = useState<"active" | "archived">("active");
+  const [view, setView] = useState<InboxView>("all");
+  const tab = view === "archived" ? "archived" : "active";
   const [query, setQuery] = useState("");
   const [showAllPending, setShowAllPending] = useState(false);
   const [rowMenu, setRowMenu] = useState<Thread | null>(null);
@@ -89,8 +112,8 @@ export function Inbox({ filter }: { filter: string | null }) {
   const searching = query.trim().length > 0;
   // Bulk selection lives here (not in the store): it clears whenever the
   // visible set changes meaning — tab switch, new search — or after delete.
-  const switchTab = (next: "active" | "archived") => {
-    setTab(next);
+  const switchView = (next: InboxView) => {
+    setView(next);
     setSelected(new Set());
   };
   useEffect(() => {
@@ -146,16 +169,51 @@ export function Inbox({ filter }: { filter: string | null }) {
       if (v) setSelected(new Set());
       return !v;
     });
-  };  const list = useMemo(() => {
+  };
+
+  const now = useNow(15000);
+  // Using the list holds its order (see lib/inbox.ts). Coming back from a
+  // thread and leaving for one both count, so the order survives a round trip.
+  useEffect(() => {
+    touchOrder();
+    const events = ["pointerdown", "keydown", "wheel", "touchmove"] as const;
+    events.forEach((e) => window.addEventListener(e, touchOrder, { capture: true, passive: true }));
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, touchOrder, true));
+      touchOrder();
+    };
+  }, []);
+  // The row of the thread the reader just came back from, marked briefly.
+  const [returned, setReturned] = useState(() => lastOpened);
+  useEffect(() => {
+    lastOpened = "";
+    if (!returned) return;
+    const t = window.setTimeout(() => setReturned(""), 2200);
+    return () => window.clearTimeout(t);
+  }, [returned]);
+
+  const all = useMemo(() => Object.values(threads), [threads]);
+  const showAgent = useMemo(() => agentsDiffer(all), [all]);
+  const viewCounts = useMemo(() => {
+    let unread = 0;
+    let working = 0;
+    for (const t of all) {
+      if (t.archived_at) continue;
+      if (inView(t, "unread", now)) unread++;
+      if (isWorking(t, now)) working++;
+    }
+    return { unread, working };
+  }, [all, now]);
+
+  const list = useMemo(() => {
     const q = query.trim().toLowerCase();
     const hits =
       searchHits && searchHits.query === query.trim()
         ? new Set(searchHits.ids)
         : null;
-    return Object.values(threads)
-      .filter((t) =>
-        q ? true : tab === "archived" ? !!t.archived_at : !t.archived_at,
-      )
+    const latest = all
+      // A search looks everywhere, archived threads included.
+      .filter((t) => (q ? true : inView(t, view, now)))
       .filter((t) => !needsYou || t.pending_questions > 0)
       .filter(
         (t) =>
@@ -164,18 +222,19 @@ export function Inbox({ filter }: { filter: string | null }) {
           t.title.toLowerCase().includes(q) ||
           t.agent.toLowerCase().includes(q) ||
           t.preview.toLowerCase().includes(q) ||
-          (t.description || "").toLowerCase().includes(q) ||
-          (t.summary || "").toLowerCase().includes(q) ||
+          threadSummary(t).toLowerCase().includes(q) ||
           (t.external_id ?? "").toLowerCase().includes(q),
       )
-      .sort((a, b) => {
-        // Threads with a question waiting come first; then by activity.
-        const na = a.pending_questions > 0 ? 1 : 0;
-        const nb = b.pending_questions > 0 ? 1 : 0;
-        if (na !== nb) return nb - na;
-        return a.last_activity_at < b.last_activity_at ? 1 : -1;
-      });
-  }, [threads, tab, query, searchHits, needsYou]);
+      .sort(byAttentionThenActivity);
+    orderHold = heldOrder(
+      orderHold,
+      `${view}|${needsYou ? "needs" : ""}|${q}`,
+      latest.map((t) => t.id),
+      serverNow(),
+    );
+    const byId = new Map(latest.map((t) => [t.id, t]));
+    return orderHold.ids.flatMap((id) => byId.get(id) ?? []);
+  }, [all, view, query, searchHits, needsYou, now]);
 
   const selectedIds = useMemo(() => [...selected], [selected]);
   // Indeterminate state for the header select-all checkbox.
@@ -290,7 +349,6 @@ export function Inbox({ filter }: { filter: string | null }) {
     }
   };
 
-  const now = useNow(15000);
   const summary = useMemo(() => {
     const parts: string[] = [];
     // The same source as the "Needs you" section below, so the two agree.
@@ -301,16 +359,9 @@ export function Inbox({ filter }: { filter: string | null }) {
     if (counts.unread_threads > 0)
       parts.push(`${counts.unread_threads} unread`);
     // Working means working: an agent waiting on the user is not counted.
-    const live = Object.values(threads).filter(
-      (t) =>
-        !t.archived_at &&
-        t.activity &&
-        t.activity.kind !== "waiting" &&
-        new Date(t.activity.expires_at).getTime() > now,
-    ).length;
-    if (live > 0) parts.push(`${live} working`);
+    if (viewCounts.working > 0) parts.push(`${viewCounts.working} working`);
     return parts.join(" · ");
-  }, [counts, threads, pending, now]);
+  }, [counts, pending, viewCounts]);
 
   const toggleRemote = () =>
     updateSettings({ remote_mode: !settings.remote_mode })
@@ -392,7 +443,7 @@ export function Inbox({ filter }: { filter: string | null }) {
             </div>
             <div className="thread-list cards">
               {visiblePending.map((q) => (
-                <QuestionCard key={q.id} q={q} showThread />
+                <QuestionCard key={q.id} q={q} showThread showAgent={showAgent} />
               ))}
               {pending.length > 2 && (
                 <button
@@ -422,69 +473,7 @@ export function Inbox({ filter }: { filter: string | null }) {
         {/* Under the Needs-you shortcut the caught-up card is the whole empty state. */}
         {needsYou && list.length === 0 ? null : (
           <>
-            <div className="section-title threads-head">
-              <span className="threads-label">
-                {selectMode ? (
-                  <label className="select-all">
-                    <input
-                      ref={selectAllRef}
-                      type="checkbox"
-                      className="select-box"
-                      aria-label="Select all visible threads"
-                      checked={
-                        list.length > 0 && selectedIds.length === list.length
-                      }
-                      onChange={() =>
-                        setSelected((prev) =>
-                          prev.size === list.length
-                            ? new Set()
-                            : new Set(list.map((t) => t.id)),
-                        )
-                      }
-                    />
-                    {selectedIds.length === 0
-                      ? "None selected"
-                      : `${selectedIds.length} selected`}
-                  </label>
-                ) : needsYou ? (
-                  "Threads that need you"
-                ) : (
-                  "Threads"
-                )}
-              </span>
-              {!needsYou && (
-                <div className="threads-tools">
-                  <div
-                    className="segmented"
-                    style={{ textTransform: "none", letterSpacing: 0 }}
-                  >
-                    <button
-                      type="button"
-                      className={tab === "active" ? "active" : ""}
-                      onClick={() => switchTab("active")}
-                    >
-                      Active
-                    </button>
-                    <button
-                      type="button"
-                      className={tab === "archived" ? "active" : ""}
-                      onClick={() => switchTab("archived")}
-                    >
-                      Archived
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    className={`btn small ${selectMode ? "primary" : ""}`}
-                    aria-pressed={selectMode}
-                    onClick={toggleSelectMode}
-                  >
-                    {selectMode ? "Done" : "Select"}
-                  </button>
-                </div>
-              )}
-            </div>
-            {(list.length > 5 || searching) && (
+            {(all.length > 5 || searching) && !needsYou && (
               <label className="search">
                 <IconSearch aria-hidden />
                 <input
@@ -496,6 +485,74 @@ export function Inbox({ filter }: { filter: string | null }) {
                 />
               </label>
             )}
+            <div className="threads-head">
+              {selectMode ? (
+                <label className="select-all">
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    className="select-box"
+                    aria-label="Select all visible threads"
+                    checked={
+                      list.length > 0 && selectedIds.length === list.length
+                    }
+                    onChange={() =>
+                      setSelected((prev) =>
+                        prev.size === list.length
+                          ? new Set()
+                          : new Set(list.map((t) => t.id)),
+                      )
+                    }
+                  />
+                  {selectedIds.length === 0
+                    ? "None selected"
+                    : `${selectedIds.length} selected`}
+                </label>
+              ) : needsYou ? (
+                <span className="threads-label">Threads that need you</span>
+              ) : (
+                <div className="view-chips" role="group" aria-label="Show">
+                  {(
+                    [
+                      ["all", "All", 0],
+                      ["unread", "Unread", viewCounts.unread],
+                      ["working", "Working", viewCounts.working],
+                      ["archived", "Archived", 0],
+                    ] as const
+                  ).map(([key, label, n]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`view-chip ${key} ${view === key ? "active" : ""}`}
+                      aria-pressed={view === key}
+                      onClick={() => switchView(key)}
+                    >
+                      {label}
+                      {n > 0 && <span className="n">{n}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {!needsYou && (
+                <button
+                  type="button"
+                  className={`btn small select-toggle ${selectMode ? "primary" : ""}`}
+                  aria-pressed={selectMode}
+                  aria-label={selectMode ? "Done selecting" : "Select threads"}
+                  title={selectMode ? undefined : "Select threads"}
+                  onClick={toggleSelectMode}
+                >
+                  {selectMode ? (
+                    "Done"
+                  ) : (
+                    <>
+                      <IconSelect aria-hidden />
+                      <span className="label">Select</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
             {!inboxLoaded ? (
               <div className="thread-list">
                 {[0, 1, 2].map((i) => (
@@ -503,10 +560,7 @@ export function Inbox({ filter }: { filter: string | null }) {
                 ))}
               </div>
             ) : list.length === 0 ? (
-              <EmptyThreads
-                archived={tab === "archived"}
-                searching={searching}
-              />
+              <EmptyThreads view={view} searching={searching} />
             ) : (
               <div
                 className={`thread-list grouped ${fromSnapshot ? "stale" : ""}`}
@@ -516,6 +570,8 @@ export function Inbox({ filter }: { filter: string | null }) {
                     key={t.id}
                     t={t}
                     showArchived={searching}
+                    showAgent={showAgent}
+                    returned={returned === t.id}
                     onMenu={() => setRowMenu(t)}
                     selectMode={selectMode}
                     selected={selected.has(t.id)}
@@ -532,7 +588,7 @@ export function Inbox({ filter }: { filter: string | null }) {
                 ))}
               </div>
             )}
-            {tab === "active" &&
+            {view === "all" &&
               cursor &&
               !searching &&
               inboxLoaded &&
@@ -663,14 +719,19 @@ export function Inbox({ filter }: { filter: string | null }) {
   );
 }
 
-/** The thread's summary: `description`, falling back to its `summary` alias. */
-function threadDescription(t: Thread): string {
-  return (t.description || t.summary || "").trim();
-}
-
+/**
+ * One thread. The title says which thread it is and the summary says what it
+ * is about; both stay put whatever the agent is doing. What is happening now
+ * goes on its own line underneath: the question that is waiting, the agent's
+ * live status, or the newest message while it is unread. The bar down the
+ * left edge says the same thing at a glance (amber: needs you, green:
+ * working, accent: unread).
+ */
 function ThreadRow({
   t,
   showArchived,
+  showAgent,
+  returned,
   onMenu,
   selectMode,
   selected,
@@ -679,6 +740,8 @@ function ThreadRow({
 }: {
   t: Thread;
   showArchived: boolean;
+  showAgent: boolean;
+  returned: boolean;
   onMenu: () => void;
   selectMode?: boolean;
   selected?: boolean;
@@ -687,14 +750,15 @@ function ThreadRow({
 }) {
   const unread = t.unread_count > 0;
   const needs = t.pending_questions > 0;
-  const name = t.agent || t.title || "Agent";
   const liveActivity = useLiveActivity(t.activity);
-  // Idle sessions keep their last message preview and never look like typing.
+  // An agent waiting on the user is not working, and never looks like it.
   const activity = liveActivity?.kind === "waiting" ? null : liveActivity;
   const draft = useStore((s) => s.drafts[t.id]);
   const now = useNow(30000);
   const pressTimer = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false);
+  const summary = threadSummary(t);
+  const state = needs ? "needs-you" : activity ? "working" : unread ? "unread" : "";
 
   // Long-press (or right-click) opens the row's actions. The click that the
   // finger's lift produces is swallowed once; any later pointer resets that.
@@ -722,11 +786,47 @@ function ThreadRow({
     [],
   );
 
+  const preview = (
+    <>
+      {t.preview_sender === "user" && <span className="who">You: </span>}
+      {t.preview_sender === "question" && <span className="asked">Asked: </span>}
+      {t.preview}
+    </>
+  );
+  // The line for what is happening now. With no summary the newest message
+  // stands in for it above, so it is not repeated here.
+  let foot: React.ReactNode = null;
+  if (needs && summary) {
+    foot = (
+      <span className="foot-text needs">
+        <span className="asked">
+          {t.pending_questions > 1 ? `${t.pending_questions} questions` : "Asked"}
+          {t.preview_sender === "question" && t.preview ? ": " : ""}
+        </span>
+        {t.preview_sender === "question" ? t.preview : ""}
+      </span>
+    );
+  } else if (activity && !needs) {
+    foot = (
+      <>
+        <span className={`foot-text live ${activity.kind}`}>
+          <span className="live-dot" aria-hidden />
+          <span className="live-text">{activity.text}</span>
+        </span>
+        <span className="foot-time" title="How long the agent has been busy">
+          {busyFor(activity.since, now)}
+        </span>
+      </>
+    );
+  } else if (unread && summary && t.preview) {
+    foot = <span className="foot-text new">{preview}</span>;
+  }
+
   return (
     <Link
       href={`/t/${t.id}`}
       data-scroll-anchor={`/t/${t.id}`}
-      className={`thread-row ${unread ? "unread" : ""} ${needs ? "needs-you" : ""} ${activity ? "live" : ""} ${selectMode ? "selecting" : ""} ${selected ? "selected" : ""}`}
+      className={`thread-row ${state} ${unread ? "unread" : ""} ${selectMode ? "selecting" : ""} ${selected ? "selected" : ""} ${returned ? "returned" : ""}`}
       onPointerDown={startPress}
       onPointerUp={endPress}
       onPointerLeave={endPress}
@@ -759,7 +859,9 @@ function ThreadRow({
           e.preventDefault();
           e.stopPropagation();
           onToggleSelect?.({ shiftKey: e.shiftKey });
+          return;
         }
+        lastOpened = t.id;
       }}
     >
       {selectMode && (
@@ -783,67 +885,44 @@ function ThreadRow({
           />
         </span>
       )}
-      <Avatar name={name} />
       <div className="thread-main">
         <div className="thread-head">
-          <span className="thread-title">
-            {t.title || t.agent || "Untitled thread"}
-          </span>
-          {t.title && t.agent && (
+          <span className="thread-title">{threadTitle(t)}</span>
+          {showAgent && t.title && t.agent && (
             <span className="thread-agent">{t.agent}</span>
           )}
-        </div>
-        <div className="thread-preview">
-          {activity ? (
-            <span className={`live-line ${activity.kind}`}>
-              <span className="live-dot" aria-hidden />
-              {activity.text}
+          <span className="thread-side">
+            {showArchived && t.archived_at && (
+              <span className="pill muted">Archived</span>
+            )}
+            {t.muted && <IconBellOff className="muted-icon" aria-label="Muted" />}
+            {unread && (
+              <span
+                className="unread-count"
+                aria-label={`${t.unread_count} unread`}
+              >
+                {t.unread_count > 99 ? "99+" : t.unread_count}
+              </span>
+            )}
+            <span title={fullDateTime(t.last_activity_at)}>
+              {compactTime(t.last_activity_at, now)}
             </span>
-          ) : threadDescription(t) ? (
-            <>
-              {draft && <span className="draft-tag">Draft</span>}
-              <span style={{ color: "var(--text-3)" }}>Summary: </span>
-              <span title={threadDescription(t)}>{threadDescription(t)}</span>
-            </>
+          </span>
+        </div>
+        <div className={`thread-summary ${summary ? "" : "is-preview"}`}>
+          {summary ? (
+            summary
+          ) : t.preview ? (
+            preview
           ) : (
-            <>
-              {draft && <span className="draft-tag">Draft</span>}
-              {t.preview_sender === "user" && (
-                <span style={{ color: "var(--text-3)" }}>You: </span>
-              )}
-              {t.preview_sender === "question" && (
-                <span className="asked">Asked: </span>
-              )}
-              {t.preview || (
-                <em style={{ color: "var(--text-3)" }}>No messages yet</em>
-              )}
-            </>
+            <em>No messages yet</em>
           )}
         </div>
-      </div>
-      <div className="thread-side">
-        <span title={fullDateTime(t.last_activity_at)}>
-          {compactTime(t.last_activity_at, now)}
-        </span>
-        {needs ? (
-          <span className="pill amber">
-            {t.pending_questions === 1
-              ? "Needs you"
-              : `${t.pending_questions} questions`}
-          </span>
-        ) : unread ? (
-          <span
-            className="unread-count"
-            aria-label={`${t.unread_count} unread`}
-          >
-            {t.unread_count > 99 ? "99+" : t.unread_count}
-          </span>
-        ) : null}
-        {showArchived && t.archived_at && (
-          <span className="pill muted">Archived</span>
-        )}
-        {t.muted && !needs && (
-          <IconBellOff className="muted-icon" aria-label="Muted" />
+        {(foot || draft) && (
+          <div className="thread-foot">
+            {draft && <span className="draft-tag">Draft</span>}
+            {foot ?? <span className="foot-text draft">{draft}</span>}
+          </div>
         )}
       </div>
     </Link>
@@ -920,31 +999,31 @@ function RowSheet({ t, onClose }: { t: Thread; onClose: () => void }) {
 }
 
 function EmptyThreads({
-  archived,
+  view,
   searching,
 }: {
-  archived: boolean;
+  view: InboxView;
   searching: boolean;
 }) {
+  const [title, body] = searching
+    ? ["No matches", "Try a different search."]
+    : view === "archived"
+      ? ["Nothing archived", "Archived threads will show up here."]
+      : view === "unread"
+        ? ["Nothing unread", "You have read everything your agents sent."]
+        : view === "working"
+          ? ["Nothing working", "No agent is in the middle of something right now."]
+          : [
+              "No threads yet",
+              "When an agent posts its first message, a thread appears here and your phone can buzz.",
+            ];
   return (
     <div className="empty">
       <div className="glyph">
         <IconInbox />
       </div>
-      <h2>
-        {searching
-          ? "No matches"
-          : archived
-            ? "Nothing archived"
-            : "No threads yet"}
-      </h2>
-      <p>
-        {searching
-          ? "Try a different search."
-          : archived
-            ? "Archived threads will show up here."
-            : "When an agent posts its first message, a thread appears here and your phone can buzz."}
-      </p>
+      <h2>{title}</h2>
+      <p>{body}</p>
     </div>
   );
 }

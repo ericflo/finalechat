@@ -51,6 +51,10 @@ export interface Thread {
   description: string;
   /** Alias of `description`; identical value. Prefer `description`. */
   summary: string;
+  /** The user wrote the title in the app; agents cannot change it until the user clears it. */
+  title_pinned?: boolean;
+  /** The same for the summary. */
+  description_pinned?: boolean;
   unread_count: number;
   pending_questions: number;
   activity: Activity | null;

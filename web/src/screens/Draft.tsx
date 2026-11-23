@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Avatar, Sheet } from "../components/Common";
-import { IconChevron, IconClock, IconFolder, IconSend, IconSettings } from "../components/Icons";
+import { Sheet } from "../components/Common";
+import { IconChevron, IconFolder, IconSend, IconSettings } from "../components/Icons";
 import { directoryChoices, relayName, relayProfiles, startSession, useSessionStarters } from "../components/NewSession";
 import { RunningRelays, agentName, runningRelays } from "../components/Relay";
 import { ResourceSettingsSheet } from "../components/ThreadSettings";
@@ -39,12 +39,13 @@ function rememberRecent(key: string, r: RecentRelay) {
   }
 }
 
-/** A new session before it exists: it looks like a thread, the folder chip
- * picks where the session will start, the agent chips pick who does the work
- * (eagent itself, or an agent eagent starts and relays to), Settings edits
- * the project's defaults, and the first message is what actually starts the
- * session, so it is born with everything already chosen. Nothing is created
- * until then. */
+/** A new session before it exists. The page is a short form: who does the
+ * work (eagent itself, or an agent eagent starts and relays to), what it
+ * runs with, and the folder it starts in; under it, what is already running
+ * on that machine, so the user can go there instead. The message box at the
+ * bottom is all that stays in reach of the thumb, and the first message is
+ * what starts the session, born with everything already chosen. Nothing is
+ * created until then. */
 export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
   const { starters, loaded } = useSessionStarters();
   const starter = starters.find((s) => s.resource.id === resourceId);
@@ -97,7 +98,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
     () =>
       (recentKey ? readRecent(recentKey) : []).flatMap((r) => {
         const p = profiles.find((x) => x.name === r.relay);
-        return p ? [{ ...r, label: `${agentName(p.agent, relayName(p))} · ${base(r.dir)}`, title: `${p.label} in ${home(r.dir)}` }] : [];
+        return p ? [{ ...r, agent: agentName(p.agent, relayName(p)), folder: base(r.dir), title: `${p.label} in ${home(r.dir)}` }] : [];
       }),
     [recentKey, profiles],
   );
@@ -127,9 +128,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
   const [optionsOpen, setOptionsOpen] = useState(false);
   const built = starter && startAction?.inputs?.length ? startModel(starter.resource.descriptor, startAction, options, saveOptions, { relay: relay?.name ?? "" }) : null;
   const form = built && built.items.length ? built : null;
-  const offerOptions = !!form;
   const summary = form ? formSummary(form) : [];
-  const changed = summary.filter((l) => l.changed);
   // A relayed agent may start with nothing to do yet; eagent needs a task.
   const ready = !!text.trim() || !!relay;
   // Set again on mount: StrictMode's dev remount would otherwise leave it true.
@@ -139,8 +138,10 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
       cancelled.current = true;
     };
   }, []);
+  // With a keyboard the message is the next thing to type. On a phone the
+  // form comes first, and focus would only raise the keyboard over it.
   useEffect(() => {
-    ref.current?.focus();
+    if (window.matchMedia("(hover: hover) and (pointer: fine)").matches) ref.current?.focus();
   }, [loaded]);
 
   const dir = cwd ?? choices?.root ?? "";
@@ -171,17 +172,16 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
     }
   };
 
-  const title = starter ? starter.resource.label : "New session";
+  // One row per thing it will run with. A relayed agent has one (its model
+  // and effort), under the agent's own name, which the picker above already
+  // says: call that row what it is.
+  const rows = summary.map((l) => ({ ...l, label: relay && summary.length === 1 ? "Model" : l.title }));
+  const optionsTitle = relay ? `${who}'s model and reasoning effort for this session` : "Configuration and models for this session";
   return (
     <div className="page thread">
       <TopBar
-        title={
-          <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, maxWidth: "100%" }}>
-            <Avatar name={who} small />
-            <span style={{ minWidth: 0, flex: "0 1 auto", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
-          </span>
-        }
-        subtitle={starter ? `new ${relay ? `${who} ` : ""}session · ${starter.connector.name}${starter.online ? "" : " · offline"}` : loaded ? "not connected" : "loading…"}
+        title="New session"
+        subtitle={starter ? `${starter.connector.name}${starter.online ? "" : " · offline"}` : loaded ? "not connected" : "loading…"}
         backTo="/"
         right={
           starter ? (
@@ -190,18 +190,9 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
             </button>
           ) : null
         }
-        below={
-          starter ? (
-            <div className="meta-strip">
-              <button type="button" className="meta-chip" title={`Start in ${dir}. Tap to change.`} onClick={() => setPicking(true)} disabled={busy}>
-                <IconFolder /> {home(dir)}
-              </button>
-            </div>
-          ) : null
-        }
       />
-      <div className="messages">
-        {!loaded && <div className="skeleton" style={{ height: 90, width: "80%" }} />}
+      <div className="draft">
+        {!loaded && <div className="skeleton" style={{ height: 150 }} />}
         {loaded && !starter && (
           <div className="empty">
             <h2>Not connected</h2>
@@ -209,103 +200,83 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
           </div>
         )}
         {starter && !status && (
-          <div className="empty">
-            <h2>New session</h2>
-            {relay ? (
-              <p>
-                {who} will work in <code>{home(dir)}</code>
-                {summary.length ? (changed.length ? " with your choices" : " with these defaults") : null}. eagent starts it and passes your messages on. Say what to do, or just start it.
-              </p>
-            ) : (
-              <p>
-                It will start in <code>{home(dir)}</code>
-                {summary.length ? (changed.length ? " with your changes" : <> with this project&rsquo;s settings</>) : null}. Say what to do.
-              </p>
+          <>
+            {!starter.online && <p className="draft-warn">This project&rsquo;s eagent is offline right now. Start it there, then send.</p>}
+            {profiles.length > 0 && (
+              <section>
+                <h2 className="draft-label" id="draft-agent">
+                  Agent
+                </h2>
+                <div className="agent-picker" role="group" aria-labelledby="draft-agent">
+                  {agents.map((o) => {
+                    const active = (relay?.name ?? "") === o.name;
+                    return (
+                      <button key={o.name || "eagent"} type="button" className={`agent-option${active ? " active" : ""}`} aria-pressed={active} title={o.title} disabled={busy} onClick={() => pickAgent(o.name)}>
+                        {o.short}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
             )}
-            {summary.length > 0 && (
-              <div className="start-summary" aria-label="What it will run with">
-                {summary.map((l) => (
-                  <button key={l.title} type="button" className={l.changed ? "changed" : ""} onClick={() => setOptionsOpen(true)} disabled={busy}>
-                    <span className="k">{l.title}</span>
+            <section>
+              <div className="setup-list" role="group" aria-label="What it will run with">
+                {rows.map((l) => (
+                  <button key={l.title} type="button" className={`setup-row${l.changed ? " changed" : ""}`} title={optionsTitle} disabled={busy} onClick={() => setOptionsOpen(true)}>
+                    <span className="k">{l.label}</span>
                     <span className="v">{l.text || "—"}</span>
                     <IconChevron aria-hidden="true" />
                   </button>
                 ))}
+                <button type="button" className="setup-row" title={`${relay ? `${who} works` : "Starts"} in ${home(dir)}. Tap to change.`} aria-label={`Folder: ${home(dir)}. Change`} disabled={busy} onClick={() => setPicking(true)}>
+                  <span className="k">Folder</span>
+                  <span className="v mono">{home(dir)}</span>
+                  <IconChevron aria-hidden="true" />
+                </button>
               </div>
+              <p className="draft-note">{relay ? `eagent starts ${who} in this folder and passes your messages on.` : "eagent does the work itself, starting in this folder."}</p>
+            </section>
+            {recent.length > 0 && (
+              <section>
+                <h2 className="draft-label" id="draft-recent">
+                  Recent
+                </h2>
+                <div className="recent-picker" role="group" aria-labelledby="draft-recent">
+                  {recent.map((r) => {
+                    const active = relay?.name === r.relay && dir === r.dir;
+                    return (
+                      <button
+                        key={`${r.relay}:${r.dir}`}
+                        type="button"
+                        className={`recent-chip${active ? " active" : ""}`}
+                        aria-pressed={active}
+                        title={r.title}
+                        disabled={busy}
+                        onClick={() => {
+                          pickAgent(r.relay);
+                          choose(r.dir);
+                        }}
+                      >
+                        {r.agent} <span className="in">in</span> <span className="dir">{r.folder}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
             )}
-            {!starter.online && <p>This project&rsquo;s eagent is offline right now. Start it there, then send.</p>}
-          </div>
+            {running.length > 0 && <RunningRelays relays={running} />}
+          </>
         )}
-        {starter && !status && running.length > 0 && <RunningRelays relays={running} />}
         {status && (
           <div className="empty">
             <span className="spinner" />
             <p style={{ marginTop: 12 }}>{status}</p>
           </div>
         )}
-        {error && (
-          <div className="empty">
-            <p className="form-error">{error}</p>
-          </div>
-        )}
+        {error && <p className="draft-warn error">{error}</p>}
       </div>
       {starter && (
         <div className="composer-wrap">
-          {profiles.length > 0 && (
-            <div className="agent-picker" role="group" aria-label="Who does the work">
-              {agents.map((o) => {
-                const active = (relay?.name ?? "") === o.name;
-                return (
-                  <button key={o.name || "eagent"} type="button" className={`agent-chip${active ? " active" : ""}`} aria-pressed={active} title={o.title} disabled={busy} onClick={() => pickAgent(o.name)}>
-                    {o.short}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          {offerOptions && (
-            <div className="folder-row">
-              <button type="button" className={`folder-chip options${changed.length ? " changed" : ""}`} title={relay ? `${who}'s model and reasoning effort for this session` : "Configuration and models for this session"} disabled={busy} onClick={() => setOptionsOpen(true)}>
-                <IconSettings aria-hidden="true" />
-                <span>{chipText(summary)}</span>
-                <IconChevron aria-hidden="true" className="folder-chip-more" />
-              </button>
-            </div>
-          )}
-          {profiles.length > 0 && (
-            // Where it works, right under who does the work.
-            <div className="folder-row">
-              <button type="button" className="folder-chip" title={`${relay ? `${who} works` : "Starts"} in ${home(dir)}. Tap to change.`} aria-label={`Folder: ${home(dir)}. Change`} disabled={busy} onClick={() => setPicking(true)}>
-                <IconFolder aria-hidden="true" />
-                <span>{home(dir)}</span>
-                <IconChevron aria-hidden="true" className="folder-chip-more" />
-              </button>
-            </div>
-          )}
-          {recent.length > 0 && (
-            <div className="recent-picker" role="group" aria-label="Recent">
-              <IconClock className="recent-icon" aria-hidden="true" />
-              {recent.map((r) => {
-                const active = relay?.name === r.relay && dir === r.dir;
-                return (
-                  <button
-                    key={`${r.relay}:${r.dir}`}
-                    type="button"
-                    className={`recent-chip${active ? " active" : ""}`}
-                    aria-pressed={active}
-                    title={r.title}
-                    disabled={busy}
-                    onClick={() => {
-                      pickAgent(r.relay);
-                      choose(r.dir);
-                    }}
-                  >
-                    {r.label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
           <form
             className="composer"
             onSubmit={(e) => {
@@ -316,7 +287,8 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
             <textarea
               ref={ref}
               rows={1}
-              placeholder={relay ? `What should ${who} do? (optional)` : "What should it do?"}
+              placeholder={relay ? `Message ${who} (optional)` : "What should it do?"}
+              aria-label={relay ? `First message to ${who}, optional` : "What should it do?"}
               value={text}
               disabled={busy}
               maxLength={32768}
@@ -403,17 +375,6 @@ function DirectorySheet({ choices, current, who, onChoose, onClose }: { choices:
       </div>
     </Sheet>
   );
-}
-
-/** The composer chip: the first choice (the configuration), and which of
- * the rest were changed. */
-function chipText(summary: ReturnType<typeof formSummary>): string {
-  const [first, ...rest] = summary;
-  if (!first) return "Session options";
-  const changed = rest.filter((l) => l.changed).map((l) => l.title);
-  const head = first.text || first.title;
-  if (!changed.length) return head;
-  return `${head} · ${changed.length > 2 ? `${changed.slice(0, 2).join(", ")} +${changed.length - 2}` : changed.join(", ")} changed`;
 }
 
 /** The inputs the agent declares for starting a session, as a form: each

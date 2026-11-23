@@ -252,6 +252,8 @@ func (s *Server) handleUpdateThread(w http.ResponseWriter, r *http.Request) {
 	}
 	updated, err := s.store.UpdateThread(r.Context(), p.user.ID, thread.ID, store.ThreadPatch{
 		Title: req.Title.ptr(), Agent: req.Agent.ptr(), Description: description, Archived: req.Archived.ptr(), Muted: req.Muted.ptr(), Meta: meta,
+		// What the user types in the app is theirs to keep; see ThreadPatch.
+		ByUser: !p.viaToken(),
 	})
 	if err != nil {
 		writeError(w, err)

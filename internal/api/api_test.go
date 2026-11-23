@@ -474,6 +474,66 @@ func TestThreadDescription(t *testing.T) {
 	}
 }
 
+// A title or summary the user writes in the app is theirs: an agent's later
+// value for that field is ignored until the user clears it.
+func TestThreadPins(t *testing.T) {
+	b, a := setup(t)
+	created := a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{
+		"external_id": "pins:1", "title": "project", "description": "First request, word for word.",
+	})
+	id := str(sub(created, "thread"), "id")
+	pinned := func(th map[string]any) (bool, bool) {
+		tp, _ := th["title_pinned"].(bool)
+		dp, _ := th["description_pinned"].(bool)
+		return tp, dp
+	}
+	if tp, dp := pinned(sub(created, "thread")); tp || dp {
+		t.Fatalf("a new thread starts unpinned, got %v", sub(created, "thread"))
+	}
+
+	// The agent keeps both current, as often as it likes.
+	th := sub(a.must(http.StatusOK, "PATCH", "/api/v1/threads/"+id, map[string]any{"title": "Checkout redesign", "description": "Rebuilding checkout; cart page done."}), "thread")
+	if str(th, "title") != "Checkout redesign" || str(th, "description") != "Rebuilding checkout; cart page done." {
+		t.Fatalf("agent update not applied: %v", th)
+	}
+	if tp, dp := pinned(th); tp || dp {
+		t.Fatalf("an agent's value must not pin, got %v", th)
+	}
+
+	// The user renames the thread in the app: the title is pinned, the
+	// summary (which they did not touch) is not.
+	th = sub(b.must(http.StatusOK, "PATCH", "/api/v1/threads/"+id, map[string]any{"title": "Checkout v2"}), "thread")
+	if tp, dp := pinned(th); str(th, "title") != "Checkout v2" || !tp || dp {
+		t.Fatalf("user rename should pin the title only, got %v", th)
+	}
+
+	// The agent's next update changes the summary and leaves the title.
+	th = sub(a.must(http.StatusOK, "PATCH", "/api/v1/threads/"+id, map[string]any{"title": "Checkout redesign", "summary": "Payment step shipped."}), "thread")
+	if str(th, "title") != "Checkout v2" || str(th, "description") != "Payment step shipped." {
+		t.Fatalf("pinned title must survive an agent update, got %v", th)
+	}
+
+	// The user writes the summary too; now neither field moves.
+	th = sub(b.must(http.StatusOK, "PATCH", "/api/v1/threads/"+id, map[string]any{"description": "My own words."}), "thread")
+	if tp, dp := pinned(th); !tp || !dp {
+		t.Fatalf("user summary should pin, got %v", th)
+	}
+	th = sub(a.must(http.StatusOK, "PATCH", "/api/v1/threads/"+id, map[string]any{"title": "x", "description": "y", "agent": "Codex"}), "thread")
+	if str(th, "title") != "Checkout v2" || str(th, "description") != "My own words." || str(th, "agent") != "Codex" {
+		t.Fatalf("pinned fields must survive, unpinned ones apply, got %v", th)
+	}
+
+	// Clearing a field hands it back to the agent.
+	th = sub(b.must(http.StatusOK, "PATCH", "/api/v1/threads/"+id, map[string]any{"title": "", "description": ""}), "thread")
+	if tp, dp := pinned(th); tp || dp || str(th, "title") != "" {
+		t.Fatalf("clearing should unpin, got %v", th)
+	}
+	th = sub(a.must(http.StatusOK, "PATCH", "/api/v1/threads/"+id, map[string]any{"title": "Checkout redesign", "description": "All steps shipped."}), "thread")
+	if str(th, "title") != "Checkout redesign" || str(th, "description") != "All steps shipped." {
+		t.Fatalf("agent should own cleared fields again, got %v", th)
+	}
+}
+
 func TestQuestionLifecycleWithLongPoll(t *testing.T) {
 	b, a := setup(t)
 	thread := str(sub(a.must(http.StatusCreated, "POST", "/api/v1/threads", map[string]any{"external_id": "q:1", "title": "questions"}), "thread"), "id")

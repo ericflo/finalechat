@@ -111,7 +111,7 @@ input, textarea { font-size: 16px; } /* prevents iOS zoom */
 h1, h2, h3, h4 { margin: 0; font-weight: 650; letter-spacing: -0.01em; }
 p { margin: 0; }
 code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
-.num, .thread-side, .msg-meta, .att-meta, .token-row .meta, .q-expires, .q-time, .act-time, .unread-count, .device-row .meta { font-variant-numeric: tabular-nums; }
+.num, .thread-side, .foot-time, .msg-meta, .att-meta, .token-row .meta, .q-expires, .q-time, .act-time, .unread-count, .device-row .meta { font-variant-numeric: tabular-nums; }
 
 /* Layout ------------------------------------------------------------------ */
 .app { display: flex; flex-direction: column; min-height: 100dvh; }
@@ -173,13 +173,27 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 /* The inbox's "Threads" row: on the narrowest phones the tabs tighten, and
    if even that is too wide (select mode) the tools wrap under the label
    instead of running off the screen. */
-.threads-head { justify-content: space-between; flex-wrap: wrap; row-gap: 6px; }
-.threads-tools { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-@media (max-width: 350px) {
-  .threads-tools { gap: 6px; }
-  .threads-tools .segmented button { padding: 6px 8px; }
-  .threads-tools .btn.small { padding: 0 9px; }
+/* Above the list: which threads to show, and the way into bulk selection. */
+.threads-head { display: flex; align-items: center; gap: 8px; margin: 12px 0 10px; min-height: 34px; }
+.page-body > .threads-head:first-child { margin-top: 2px; }
+.threads-label { font-size: 12.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
+.threads-head .select-toggle { margin-left: auto; flex: none; gap: 6px; }
+.threads-head .select-toggle svg { width: 16px; height: 16px; }
+@media (max-width: 480px) {
+  .threads-head .select-toggle:not(.primary) { padding: 0 9px; }
+  .threads-head .select-toggle:not(.primary) .label { display: none; }
+  .view-chip { padding: 0 10px; font-size: 13px; }
 }
+@media (min-width: 481px) { .threads-head .select-toggle svg { display: none; } }
+.view-chips { display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 2px; margin: -2px; }
+.view-chips::-webkit-scrollbar { display: none; }
+.view-chip { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 11px; border-radius: 999px; font-size: 13.5px; font-weight: 600; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); white-space: nowrap; }
+.view-chip:hover { color: var(--text); border-color: var(--border-strong); }
+.view-chip.active { background: var(--text); color: var(--bg); border-color: var(--text); }
+.view-chip .n { font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--text-2); }
+.view-chip.unread .n { background: var(--accent-soft); color: var(--accent); }
+.view-chip.working .n { background: var(--green-soft); color: var(--green-text); }
+.view-chip.active .n { background: color-mix(in srgb, var(--bg) 22%, transparent); color: var(--bg); }
 .section-title .count { background: var(--amber-soft); color: var(--amber-text); border-radius: 999px; padding: 1px 8px; font-size: 12px; letter-spacing: 0; }
 
 .filter-row { display: flex; margin: 4px 0 2px; }
@@ -193,8 +207,11 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 /* Threads share one surface: a list, not a stack of cards. */
 .thread-list.grouped { gap: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; }
 .thread-list.stale { opacity: 0.85; }
+/* One thread: title, then what it is about, then (only when there is
+   something to say) what is happening now. The bar on the left edge carries
+   the state: amber needs you, green working, accent unread. */
 .thread-row {
-  display: grid; grid-template-columns: 44px 1fr auto; gap: 12px; align-items: start; position: relative;
+  display: block; position: relative;
   padding: 12px 14px 12px 16px; text-align: left; width: 100%; color: inherit;
   background: var(--surface); border-top: 1px solid var(--border);
   transition: background 0.15s; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
@@ -202,10 +219,13 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .thread-row:first-child { border-top: 0; }
 .thread-row:hover { text-decoration: none; background: var(--surface-2); }
 .thread-row:active { background: var(--accent-soft); }
-.thread-row::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 0 3px 3px 0; background: transparent; }
+.thread-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; }
+.thread-row.unread::before { background: var(--accent); }
+.thread-row.working::before { background: var(--green); }
 .thread-row.needs-you::before { background: var(--amber); }
-.thread-row.unread .thread-title { font-weight: 700; }
-.thread-row.unread .thread-preview { color: var(--text); }
+/* Back from a thread: its row shows for a moment, wherever it is now. */
+.thread-row.returned { animation: row-returned 2.2s var(--ease); }
+@keyframes row-returned { 0%, 35% { background: var(--accent-soft); } 100% { background: var(--surface); } }
 .avatar {
   width: 44px; height: 44px; border-radius: 14px; display: flex; align-items: center; justify-content: center;
   font-weight: 700; font-size: 17px; color: white; letter-spacing: -0.02em; flex: none;
@@ -213,16 +233,30 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 }
 .avatar.small { width: 30px; height: 30px; font-size: 12px; border-radius: 9px; }
 .thread-main { min-width: 0; }
-.thread-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
-.thread-title { font-size: 15.5px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.thread-agent { font-size: 13px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 45%; }
-.thread-agent::before { content: "·"; margin-right: 6px; color: var(--text-3); }
-.thread-preview { font-size: 14px; color: var(--text-2); margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; }
-.thread-preview .asked { color: var(--amber-text); font-weight: 600; }
-.draft-tag { color: var(--red); font-weight: 600; margin-right: 4px; }
-.thread-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; font-size: 12px; color: var(--text-3); white-space: nowrap; min-width: 30px; padding-top: 1px; }
-.unread-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
-.muted-icon { width: 15px; height: 15px; color: var(--text-3); }
+.thread-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.thread-title { font-size: 15.5px; font-weight: 600; line-height: 1.3; letter-spacing: -0.005em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.thread-row.unread .thread-title { font-weight: 750; }
+/* The agent's name gives way before the title does. */
+.thread-agent { font-size: 12.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 100 auto; }
+.thread-side { margin-left: auto; padding-left: 4px; display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 12px; color: var(--text-3); white-space: nowrap; align-self: center; }
+.thread-row.unread .thread-side { color: var(--accent); font-weight: 600; }
+/* Two short sentences: what the thread is for, then where it stands. Three
+   lines hold both on a phone; a wide screen needs fewer. */
+.thread-summary { font-size: 14px; color: var(--text-2); margin-top: 2px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.38; }
+.thread-summary .who { color: var(--text-3); }
+.thread-summary .asked, .thread-foot .asked { color: var(--amber-text); font-weight: 600; }
+.thread-row.unread .thread-summary.is-preview { color: var(--text); }
+.thread-foot { display: flex; align-items: baseline; gap: 8px; margin-top: 5px; font-size: 13px; line-height: 1.35; min-width: 0; }
+.foot-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+.foot-text.new { color: var(--text); font-weight: 500; }
+.foot-text.needs { color: var(--text); }
+.foot-text.live { display: flex; align-items: center; gap: 7px; color: var(--green-text); font-weight: 550; }
+.foot-text.live .live-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.foot-text.live.tool .live-text { font-family: var(--mono); font-size: 12.5px; font-weight: 500; }
+.foot-time { flex: none; font-size: 12px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.draft-tag { flex: none; color: var(--red); font-weight: 600; }
+.unread-count { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 11.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.muted-icon { width: 14px; height: 14px; color: var(--text-3); }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); display: inline-block; }
 .pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
 .pill.amber { background: var(--amber-soft); color: var(--amber-text); }
@@ -230,7 +264,8 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .pill.green { background: var(--green-soft); color: var(--green-text); }
 .pill.muted { background: var(--surface-2); color: var(--text-3); }
 
-.search { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0 12px; height: 42px; margin-bottom: 10px; }
+.search { display: flex; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0 12px; height: 42px; margin-top: 14px; }
+.page-body > .search:first-child { margin-top: 2px; }
 .search input { flex: 1; border: 0; background: transparent; outline: 0; min-width: 0; }
 .search svg { width: 18px; height: 18px; color: var(--text-3); flex: none; }
 
@@ -374,14 +409,6 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .route-pop .item-text { display: flex; flex-direction: column; min-width: 0; font-size: 15px; font-weight: 600; }
 .route-pop .item-text small { font-size: 12.5px; font-weight: 400; color: var(--text-3); }
 /* A new session's agent picker: eagent, or an agent eagent starts and relays to. */
-.agent-picker { display: flex; flex-wrap: wrap; gap: 6px; max-width: 760px; margin: 0 auto 8px; }
-.agent-chip { min-height: 34px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2); font-size: 14px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-chip.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-.folder-row { display: flex; max-width: 760px; margin: 0 auto 8px; }
-.folder-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 9px 0 11px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text-2); font-size: 13px; font-family: var(--mono); max-width: 100%; min-width: 0; white-space: nowrap; }
-.folder-chip span { overflow: hidden; text-overflow: ellipsis; }
-.folder-chip svg { flex: none; width: 15px; height: 15px; color: var(--text-3); }
-.folder-chip .folder-chip-more { width: 13px; height: 13px; transform: rotate(90deg); }
 .jump-pill { position: sticky; bottom: calc(var(--composer-h, 60px) + 12px); align-self: center; z-index: 5; box-shadow: var(--shadow-lg); }
 
 /* Agent activity ---------------------------------------------------------- */
@@ -397,9 +424,6 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .act-text { overflow-wrap: anywhere; }
 .act-time { font-size: 12px; color: var(--text-3); white-space: nowrap; margin-left: 2px; }
 @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.4; } 40% { transform: translateY(-4px); opacity: 1; } }
-.live-line { display: inline-flex; align-items: flex-start; gap: 7px; color: var(--accent); font-weight: 500; max-width: 100%; }
-.live-line .live-dot { margin-top: 6px; }
-.live-line.tool { font-family: var(--mono); font-size: 13px; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 25%, transparent); animation: pulse 1.6s infinite; flex: none; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
@@ -421,6 +445,8 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .q-agent + .q-eyebrow { flex: none; max-width: 40%; }
 .q-time { margin-left: auto; font-size: 12px; color: var(--text-3); flex: none; }
 .q-prompt { font-size: 16px; line-height: 1.45; font-weight: 500; white-space: pre-wrap; }
+.q-prompt.cut { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.q-more { margin-top: 4px; font-size: 13.5px; font-weight: 600; color: var(--accent); min-height: 28px; }
 .q-options { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .q-option {
   display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; text-align: left; width: 100%;
@@ -637,7 +663,7 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .grant-options label, .connector-row legend label { display: flex; align-items: center; gap: 8px; }
 
 /* Bulk selection ---------------------------------------------------------- */
-.thread-row.selecting { grid-template-columns: auto 44px 1fr auto; align-items: center; }
+.thread-row.selecting { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: center; }
 .thread-row.selected { background: var(--accent-soft); }
 /* 44px touch target wrapping a 24px box: no layout shift, thumb-friendly. */
 .select-hit {
@@ -701,17 +727,6 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .autopilot-until input { flex: 1; min-width: 0; min-height: 40px; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--surface); outline: 0; }
 .autopilot-until input:focus { border-color: var(--accent); }
 .autopilot .field { margin: 12px 4px 4px; }
-.running { width: 100%; max-width: 520px; margin: 0 auto; }
-.running .section-title { margin-top: 4px; }
-.running-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 10px 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border); text-align: left; }
-.running-row + .running-row { margin-top: 8px; }
-.running-row:hover { border-color: var(--border-strong); }
-.running-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.running-agent { font-size: 15px; font-weight: 600; }
-.running-dir { font-family: var(--mono); font-size: 12.5px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.running-age { flex: none; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
-.running-age.exited { color: var(--red); }
-.running-row > svg { width: 18px; height: 18px; flex: none; color: var(--text-3); }
 @media (prefers-reduced-motion: reduce) { .relay-badge .relay-dot { animation: none; } }
 
 /* Relay threads: receipts, the agent's own reports and screens. */
@@ -751,11 +766,6 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .screen-head .message-action:hover, .screen-head .message-action:focus-visible { background: rgba(255,255,255,0.12); color: #fff; }
 .screen-text { margin: 0; padding: 10px 12px 12px; font-family: var(--mono); font-size: 11px; line-height: 1.35; white-space: pre; overflow-x: auto; tab-size: 8; -webkit-overflow-scrolling: touch; }
 .screen-text:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.recent-picker { display: flex; align-items: center; gap: 6px; max-width: 760px; margin: 0 auto 8px; overflow-x: auto; scrollbar-width: none; }
-.recent-picker::-webkit-scrollbar { display: none; }
-.recent-icon { flex: none; width: 16px; height: 16px; color: var(--text-3); }
-.recent-chip { flex: none; min-height: 30px; padding: 0 11px; border-radius: 999px; border: 1px dashed var(--border-strong); background: transparent; color: var(--text-2); font-size: 13px; font-weight: 600; white-space: nowrap; }
-.recent-chip.active { border-style: solid; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
 /* Free text with suggested values (a model id): type, or browse. */
 .suggest-row { display: flex; gap: 8px; align-items: stretch; }
@@ -773,3 +783,58 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .start-options h2 { font-size: 18px; margin-bottom: 4px; }
 .start-options > p { font-size: 13px; color: var(--text-3); margin-bottom: 12px; }
 .start-options .settings-field { margin-bottom: 14px; }
+
+/* New session: a short form (who does the work, what it runs with, where),
+   then what is already running. Only the message box sits at the bottom. */
+.draft { flex: 1; width: 100%; max-width: 560px; margin: 0 auto; padding: 16px 16px 28px; display: flex; flex-direction: column; gap: 24px; }
+.draft .empty { padding: 28px 12px; }
+.draft-label { display: flex; align-items: center; gap: 8px; margin: 0 4px 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-3); }
+.draft-label .n { padding: 0 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); font-size: 11.5px; letter-spacing: 0; line-height: 18px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.draft-note { margin: 8px 4px 0; font-size: 13px; line-height: 1.45; color: var(--text-3); }
+.draft-warn { margin: 0; padding: 10px 14px; border-radius: var(--radius-sm); background: var(--amber-soft); color: var(--amber-text); font-size: 14px; line-height: 1.4; }
+.draft-warn.error { background: var(--red-soft); color: var(--red); }
+
+/* Who does the work: one control, one choice filled in. */
+.agent-picker { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
+.agent-option { flex: 1 1 auto; min-width: 0; min-height: 42px; padding: 0 10px; border-radius: 10px; color: var(--text-2); font-size: 14.5px; font-weight: 600; letter-spacing: -0.005em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: background-color 0.15s var(--ease), color 0.15s var(--ease); }
+.agent-option:hover { color: var(--text); background: var(--surface-2); }
+.agent-option.active { background: var(--accent); color: var(--accent-text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); }
+.agent-option:disabled { opacity: 0.6; }
+
+/* What it runs with and where: grouped rows, name on the left, value on
+   the right, each opening its own sheet. */
+.setup-list, .running-list { border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); overflow: hidden; }
+.setup-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 10px 8px 16px; text-align: left; }
+.setup-row + .setup-row, .running-row + .running-row { border-top: 1px solid var(--border); }
+.setup-row:hover, .running-row:hover { background: var(--surface-2); }
+.setup-row .k { flex: none; font-size: 15px; color: var(--text-2); }
+.setup-row .v { flex: 1; min-width: 0; text-align: right; font-size: 15px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setup-row .v.mono { font-family: var(--mono); font-size: 13.5px; font-weight: 500; }
+.setup-row.changed .v { color: var(--accent); }
+.setup-row.changed .k::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 7px; border-radius: 50%; background: var(--accent); vertical-align: 2px; }
+.setup-row > svg, .running-row > svg { width: 16px; height: 16px; flex: none; color: var(--text-3); }
+.setup-row:disabled { opacity: 0.6; }
+
+/* An agent and folder used before: one tap sets both. */
+.recent-picker { display: flex; flex-wrap: wrap; gap: 6px; }
+.recent-chip { min-height: 34px; max-width: 100%; padding: 0 13px; border-radius: 999px; border: 1px solid var(--border-strong); color: var(--text); font-size: 13.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.recent-chip .in, .running-sub .in { color: var(--text-3); font-weight: 400; }
+.recent-chip .dir { font-family: var(--mono); font-size: 12.5px; font-weight: 500; color: var(--text-2); }
+.recent-chip:hover { background: var(--surface); }
+.recent-chip.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+.recent-chip.active .dir, .recent-chip.active .in { color: inherit; }
+
+/* What is running on that machine, named by its thread. */
+.running-row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 58px; padding: 9px 10px 9px 16px; text-align: left; }
+.running-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); opacity: 0.45; }
+.running-dot.working { background: var(--green); opacity: 1; box-shadow: 0 0 0 3px var(--green-soft); }
+.running-dot.blocked { background: var(--amber); opacity: 1; box-shadow: 0 0 0 3px var(--amber-soft); }
+.running-dot.exited { background: var(--red); opacity: 1; }
+.running-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.running-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.running-sub { font-size: 13px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.running-sub .dir { font-family: var(--mono); font-size: 12.5px; }
+.running-age { flex: none; font-size: 13px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+.running-age.exited { color: var(--red); }
+.running-more { display: block; margin: 8px auto 0; padding: 6px 12px; border-radius: 999px; font-size: 13.5px; font-weight: 600; color: var(--accent); }
+.running-more:hover { background: var(--accent-soft); }

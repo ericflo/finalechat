@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../lib/api";
 import type { SettingsResource } from "../lib/artifacts";
 import { navigate } from "../lib/router";
-import { toast } from "../lib/store";
+import { toast, useStore } from "../lib/store";
 import { sameDay, shortTime, useNow } from "../lib/time";
 import type { RelayReceipt, Thread, ThreadRelay } from "../lib/types";
 import { Avatar, ConfirmSheet, Sheet } from "./Common";
@@ -287,9 +287,25 @@ function runningFor(iso: string, now: number): string {
   return `${Math.floor(m / 1440)}d`;
 }
 
-/** What is already running on this machine; a row opens its thread. */
+/** How many running sessions show before "Show all". */
+const runningShown = 4;
+
+/** What is already running on this machine; a row opens its thread. Each
+ * row is named by its thread's title when the inbox has the thread, since
+ * the agent and the folder are the same for most of them. */
 export function RunningRelays({ relays }: { relays: RunningRelay[] }) {
   const now = useNow(30000);
+  const threads = useStore((s) => s.threads);
+  const titles = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of Object.values(threads)) {
+      if (!t.title) continue;
+      m.set(t.id, t.title);
+      if (t.external_id) m.set(`ext:${t.external_id}`, t.title);
+    }
+    return m;
+  }, [threads]);
+  const [all, setAll] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const open = async (r: RunningRelay) => {
     setOpening(r.thread);
@@ -302,28 +318,42 @@ export function RunningRelays({ relays }: { relays: RunningRelay[] }) {
       setOpening(null);
     }
   };
+  const shown = all ? relays : relays.slice(0, runningShown);
   return (
     <section className="running" aria-labelledby="running-title">
-      <div className="section-title" id="running-title">
-        Running now
+      <h2 className="draft-label" id="running-title">
+        Running now <span className="n">{relays.length}</span>
+      </h2>
+      <div className="running-list">
+        {shown.map((r, i) => {
+          const name = agentName(r.agent, r.name);
+          const folder = r.dir.replace(/\/+$/, "").split("/").pop() || r.dir;
+          const title = titles.get(r.thread) ?? "";
+          const named = title !== "" && title.toLowerCase() !== folder.toLowerCase();
+          const age = runningFor(r.created, now);
+          const when = r.state === "exited" ? ["exited", age].filter(Boolean).join(" · ") : age;
+          const dot = r.state === "working" || r.state === "starting" ? "working" : r.state === "blocked" ? "blocked" : r.state === "exited" ? "exited" : "idle";
+          return (
+            <button key={r.target || `${r.thread}-${r.name}-${i}`} type="button" className="running-row" title={r.dir || undefined} disabled={opening === r.thread} onClick={() => void open(r)}>
+              <span className={`running-dot ${dot}`} role="img" aria-label={dot === "working" ? "working" : dot === "blocked" ? "needs you" : dot === "exited" ? "exited" : "idle"} />
+              <span className="running-main">
+                <span className="running-title">{named ? title : name}</span>
+                <span className="running-sub">
+                  {named && <>{name} <span className="in">in</span> </>}
+                  {folder && <span className="dir">{folder}</span>}
+                </span>
+              </span>
+              {when && <span className={`running-age${r.state === "exited" ? " exited" : ""}`}>{when}</span>}
+              <IconChevron aria-hidden="true" />
+            </button>
+          );
+        })}
       </div>
-      {relays.map((r, i) => {
-        const name = agentName(r.agent, r.name);
-        const folder = r.dir.replace(/\/+$/, "").split("/").pop() || r.dir;
-        const age = runningFor(r.created, now);
-        const when = r.state === "exited" ? ["exited", age].filter(Boolean).join(" · ") : age;
-        return (
-          <button key={r.target || `${r.thread}-${r.name}-${i}`} type="button" className="running-row" title={r.dir || undefined} disabled={opening === r.thread} onClick={() => void open(r)}>
-            <Avatar name={name} small />
-            <span className="running-main">
-              <span className="running-agent">{name}</span>
-              {folder && <span className="running-dir">{folder}</span>}
-            </span>
-            {when && <span className={`running-age${r.state === "exited" ? " exited" : ""}`}>{when}</span>}
-            <IconChevron aria-hidden="true" />
-          </button>
-        );
-      })}
+      {relays.length > runningShown && (
+        <button type="button" className="running-more" onClick={() => setAll(!all)}>
+          {all ? "Show fewer" : `Show all ${relays.length}`}
+        </button>
+      )}
     </section>
   );
 }

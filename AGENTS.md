@@ -103,7 +103,9 @@ cap keeps proxies happy; loop if you need longer.
   the fly; every other route returns 404 for an unknown one.
 - `PATCH /threads/{ref}` sets `title`, `agent`, `description` (or its
   alias `summary`), `archived`, `muted` or merges
-  `meta`. A new message or question un-archives a thread automatically.
+  `meta`. A title or description the user wrote in the app is pinned and
+  keeps their text. A new message or question un-archives a thread
+  automatically.
 - To archive, mute, mark read, or delete many threads at once, use
   `POST /threads/bulk` with `{"ids": ["<uuid>", ...], "archived": true}` (1 to
   100 UUIDs; `delete: true` is exclusive). Unknown ids are skipped, a malformed
@@ -117,20 +119,37 @@ curl -sS https://www.finalechat.com/api/v1/threads/bulk \
 
 ## Keep the thread titled and summarized
 
-Set a short title on the first post (the project or task name) so the
-thread is recognizable in the inbox. As the work evolves, refresh the title
-and PATCH a 1–2 sentence `description` of where things stand: after major
-findings, when the course changes, and before finishing. `summary` is
-accepted as an alias of `description` everywhere (if both are sent,
-`description` wins); thread JSON carries both with identical values.
+The inbox shows each thread as its title, its summary, and what is new.
+With many threads open, those two fields are how the user tells them apart
+and sees where each stands without opening it.
+
+- `title` is the subject of the session, the way the user would name it:
+  "Checkout page redesign", "Release 1.2". Two to six words, no status
+  ("done", "in progress"), and never just the project directory's name. Set
+  it on the first post or as soon as you know what the work is, then leave
+  it alone unless the session becomes about something else: the user finds
+  the thread by it.
+- `description` is one or two short sentences covering the whole session:
+  what it is for, then where it stands (what is finished, running, or
+  waiting on the user). Refresh it when that changes: after a finding, when
+  the course changes, when you start waiting, and before finishing. Do not
+  paste the user's request into it. The list shows about 170 characters.
+
+`summary` is accepted as an alias of `description` everywhere (if both are
+sent, `description` wins); thread JSON carries both with identical values.
+
+What the user writes wins. A title or summary the user edits in the app is
+pinned (`title_pinned`, `description_pinned` on the thread): a token's
+PATCH to that field is accepted and ignored, the response shows the user's
+text, and the pin lifts when the user clears the field.
 
 ```bash
 curl -sS -X PATCH https://www.finalechat.com/api/v1/threads/ext:my-session-42 \
   -H "Authorization: Bearer $FINALECHAT_TOKEN" -H "Content-Type: application/json" \
-  -d '{"title": "finalechat: release 1.2", "description": "Staging deploy is green; waiting on approval to promote to production."}'
+  -d '{"title": "Release 1.2", "description": "Shipping 1.2 to production. Staging is green; waiting on approval to promote."}'
 
-finalechat retitle -t ext:my-session-42 --title "finalechat: release 1.2" \
-  --description "Staging deploy is green; waiting on approval to promote to production."
+finalechat retitle -t ext:my-session-42 --title "Release 1.2" \
+  --description "Shipping 1.2 to production. Staging is green; waiting on approval to promote."
 ```
 
 ## What to post, and when
@@ -147,8 +166,8 @@ finalechat retitle -t ext:my-session-42 --title "finalechat: release 1.2" \
   leave `allow_freeform` on unless free text makes no sense. Set
   `multi_select` when several options may apply. Give a `timeout_seconds` if
   the answer is worthless after a while; the question then expires on its own.
-- Keep titles short (the project or task name); the app shows them next to
-  the agent name.
+- Keep titles short and specific (the subject of the session, not the
+  project directory); the inbox lists threads by them.
 - The user can reply in the app at any time. Replies arrive as messages with
   `"sender": "user"` and `"origin": "session"`; an answered question also adds
   a user message that records the choice. (A message with `"origin":
