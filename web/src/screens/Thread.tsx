@@ -111,8 +111,15 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
     if (thread.unread_count > 0 && document.visibilityState === "visible") void markRead(id);
   }, [id, thread, loaded]);
 
-  const items = useMemo<Item[]>(() => {
+  // Questions that belong to history not loaded yet but stay in view
+  // (pending, or opened from elsewhere), so answering one does not make it
+  // vanish. Cleared per thread.
+  const heldIds = useRef<{ thread: string; ids: Set<string> }>({ thread: id, ids: new Set() });
+  if (heldIds.current.thread !== id) heldIds.current = { thread: id, ids: new Set() };
+
+  const { items, held } = useMemo(() => {
     const out: Item[] = [];
+    const held: Question[] = [];
     // The answer to a question is shown on its card; the transcript copy the
     // server keeps for agents would only repeat it here. An answer row whose
     // question was not answered here (an agent mirroring a decision made in
@@ -122,10 +129,26 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
       const folded = m.meta.kind === "answer" && typeof m.meta.question_id === "string" && answered.has(m.meta.question_id);
       if (!folded) out.push({ kind: "message", at: m.created_at, m });
     }
-    for (const q of questions ?? []) out.push({ kind: "question", at: q.created_at, q });
+    // Messages arrive a page at a time, questions all at once. A question
+    // older than the oldest loaded message belongs to a page not loaded yet:
+    // sorted into the transcript it would sit above every page "Load earlier"
+    // brings in, and the top would never change. It waits for its page. One
+    // that still needs an answer, or was opened from elsewhere, stays in view
+    // above the button instead.
+    const oldest = hasOlder ? messages?.[0]?.created_at : undefined;
+    for (const q of questions ?? []) {
+      if (oldest !== undefined && q.created_at < oldest) {
+        const ids = heldIds.current.ids;
+        if (q.status === "pending" || q.id === highlightQuestion) ids.add(q.id);
+        if (ids.has(q.id)) held.push(q);
+        continue;
+      }
+      out.push({ kind: "question", at: q.created_at, q });
+    }
     out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-    return out;
-  }, [messages, questions]);
+    held.sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0));
+    return { items: out, held };
+  }, [messages, questions, hasOlder, highlightQuestion]);
 
   // Where the "New" divider goes: before the first agent item after last_read_at.
   const newIndex = useMemo(() => {
@@ -327,6 +350,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
       />
       <div ref={listRef} className="messages" onClick={onListClick}>
         {focusedMessage && !items.some(it => it.kind === "message" && it.m.id === focusedMessage.id) && <section aria-label="Selected archived message"><p>Selected message · {fullDateTime(focusedMessage.created_at)}</p><MessageBubble m={focusedMessage} grouped={false} showMeta={true} inspectThread={hasArtifacts ? thread : undefined} onOpen={(items, index) => setViewing({ items, index })} /><button className="btn small" onClick={() => navigate(`/t/${id}`)}>Return to recent conversation</button></section>}
+        {held.map((q) => <QuestionCard key={q.id} q={q} highlight={highlightQuestion === q.id} />)}
         {hasOlder && (
           <button type="button" className="btn small" style={{ alignSelf: "center" }} disabled={loadingOlder} onClick={loadOlder}>
             {loadingOlder ? "Loading…" : "Load earlier messages"}
