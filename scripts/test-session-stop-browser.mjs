@@ -22,7 +22,7 @@ await mkdir(shots, { recursive: true });
 
 const now = () => new Date().toISOString();
 const ago = (min) => new Date(Date.now() - min * 60000).toISOString();
-const description = 'Ends this session now, as eagent’s Stop does. A reply here resumes it. Claude Code keeps running in its own terminal; stop it from its controls.';
+const description = 'Ends this eagent session now, like Stop in eagent’s web UI. Claude Code stops with it. A reply here resumes the session while eagent serve or connector run is up.';
 const thread = (id, title, meta = {}) => ({
   id, external_id: `eagent:${id}`, title, agent: 'eagent', meta, created_at: ago(600), updated_at: ago(1), last_activity_at: ago(1), last_read_at: ago(0),
   archived_at: null, muted: false, preview: 'Done with the first pass.', preview_sender: 'agent', unread_count: 0, pending_questions: 0,
@@ -109,7 +109,7 @@ try {
     await page.getByRole('button', { name: 'Stop session' }).click();
     const sheet = page.locator('.confirm');
     await sheet.getByText('Stop session?').waitFor();
-    assert.match(await sheet.textContent(), /A reply here resumes it\./);
+    assert.match(await sheet.textContent(), /Claude Code stops with it\./);
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${shots}/${name}-stop-confirm.png` });
     await sheet.getByRole('button', { name: 'Stop session' }).click();
