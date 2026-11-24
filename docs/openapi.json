@@ -3479,7 +3479,7 @@
           "Attachments"
         ],
         "summary": "Upload files to attach to a later message",
-        "description": "Creates a missing ext: thread on demand. Send multipart/form-data with one or more file parts (any field name; at most 8), or a raw body whose Content-Type is the file type with the filename in X-Filename or ?filename=. Images (png, jpeg, gif, webp) get dimensions and a JPEG thumbnail. Uploads not attached to a message within 24 hours are deleted.",
+        "description": "Creates a missing ext: thread on demand. Send multipart/form-data with one or more file parts (any field name; at most 8), or a raw body whose Content-Type is the file type with the filename in X-Filename or ?filename=. Images (png, jpeg, gif, webp) get dimensions, a JPEG thumbnail and, when heavy, a compressed display rendition. Uploads not attached to a message within 24 hours are deleted.",
         "parameters": [
           {
             "name": "ref",
@@ -3821,6 +3821,101 @@
             },
             "content": {
               "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Object storage failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Attachments are not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/attachments/{id}/display": {
+      "get": {
+        "tags": [
+          "Attachments"
+        ],
+        "summary": "Download an image's display rendition",
+        "description": "The compressed copy of a heavy image, for viewing: a JPEG at the image's own resolution, scaled down only past 3840×2160 pixels' worth. Images over 512 KiB get one when it is at most three quarters of the original's size; animated GIFs never do. For an attachment without one the original bytes are returned, so this path always works for viewing.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID."
+            },
+            "description": "Attachment id."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The display rendition, or the original when the attachment has none.",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "inline for images, PDFs and text; attachment otherwise; carries the filename."
+              },
+              "Cache-Control": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "private, no-cache"
+              }
+            },
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "*/*": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
@@ -8220,11 +8315,11 @@
           },
           "width": {
             "type": "integer",
-            "description": "Images only."
+            "description": "Images only; upright, as a browser shows the image (EXIF orientation applied)."
           },
           "height": {
             "type": "integer",
-            "description": "Images only."
+            "description": "Images only; upright."
           },
           "thumb_width": {
             "type": "integer",
@@ -8233,6 +8328,18 @@
           "thumb_height": {
             "type": "integer",
             "description": "Images only."
+          },
+          "display_width": {
+            "type": "integer",
+            "description": "Images with a display rendition only: its width."
+          },
+          "display_height": {
+            "type": "integer",
+            "description": "Images with a display rendition only: its height."
+          },
+          "display_size": {
+            "type": "integer",
+            "description": "Images with a display rendition only: its size in bytes."
           },
           "created_at": {
             "type": "string",
@@ -8246,6 +8353,10 @@
           "thumb_url": {
             "type": "string",
             "description": "JPEG thumbnail path; images only."
+          },
+          "display_url": {
+            "type": "string",
+            "description": "Path of the display rendition: a compressed JPEG of a heavy image at its own resolution (scaled to at most 3840×2160 pixels' worth), for viewing; url stays the original. Present only when the image has one."
           }
         },
         "example": {

@@ -307,8 +307,30 @@ client that holds the anchor can prune everything it may hold.
 not becomes a `file` of type `application/octet-stream`), otherwise `file`.
 Images carry `width`, `height` and a JPEG thumbnail whose longest side is
 640 pixels (`thumb_width`, `thumb_height`, `thumb_url`); files omit those
-fields. `url` and `thumb_url` are relative to the base URL. `message_id` is
-`null` until the upload is attached to a message.
+fields. The dimensions are upright: a photo stored on its side with an EXIF
+orientation is reported, and its thumbnail drawn, the way a browser shows it.
+
+A heavy image also has a display rendition, a compressed copy for viewing:
+
+```json
+{
+  "size": 2652936,
+  "display_width": 1920,
+  "display_height": 1080,
+  "display_size": 224117,
+  "display_url": "/api/v1/attachments/01a07ab9-3132-7b58-85f0-5c74ef773395/display"
+}
+```
+
+It is a JPEG at the image's own resolution (scaled down only past 3840×2160
+pixels' worth), made for images over 512 KiB and kept when it is at most
+three quarters of the original's size. Animated GIFs and images that are
+already well compressed have none, and then the fields are absent. The app
+shows it full screen and downloads from `url`, which is always the original,
+byte for byte.
+
+`url`, `thumb_url` and `display_url` are relative to the base URL.
+`message_id` is `null` until the upload is attached to a message.
 
 ### Question
 
@@ -812,8 +834,9 @@ is answered: `meta.kind` is `answer` and `meta.question_id` links it.
 ## Attachments
 
 Messages carry files: screenshots, logs, diffs, PDFs, anything up to 25 MiB,
-at most 8 per message. Images get dimensions and a JPEG thumbnail; the app
-shows them inline, and the thread preview and push notification read
+at most 8 per message. Images get dimensions, a JPEG thumbnail and, when
+heavy, a compressed [display rendition](#attachment); the app shows them
+inline, and the thread preview and push notification read
 `📷 Image` or `📎 Attachment`. Bytes live in a private Backblaze B2 bucket;
 only metadata is in the database. Both agents and the app user send and
 receive attachments the same way.
@@ -896,6 +919,13 @@ curl -sS -o shot.png https://www.finalechat.com/api/v1/attachments/01a07ab9-3132
 
 The JPEG thumbnail of an image attachment (`image/jpeg`, longest side 640).
 For a non-image attachment it returns the original bytes.
+
+### GET /attachments/{id}/display
+
+The [display rendition](#attachment) of an image (`image/jpeg`): what to show
+when a person looks at the image, at a fraction of the original's size. For
+an attachment without one it returns the original bytes, so a viewer can
+always ask here and keep `GET /attachments/{id}` for downloads.
 
 Deleting a thread deletes its attachments and their stored bytes.
 

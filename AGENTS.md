@@ -219,7 +219,8 @@ curl -sS https://www.finalechat.com/api/v1/threads/ext:my-session-42/messages \
 
 The user can also send you files. They arrive as messages whose
 `attachments` list has the metadata and a relative `url`; fetch it with the
-same bearer token (images also have a `thumb_url`):
+same bearer token (images also have a `thumb_url`, and heavy ones a
+`display_url`: a compressed copy that is enough to look at):
 
 ```bash
 curl -sS "https://www.finalechat.com/api/v1/threads/ext:my-session-42/messages?after=$LAST_ID&sender=user&wait=600" \
@@ -436,7 +437,7 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `GET /messages/{id}` | One message |
 | `DELETE /messages/{id}` | Remove a message and its files for good (posted a secret by mistake) |
 | `POST /threads/{ref}/attachments` | Upload files (multipart `file` parts or a raw body) to attach later |
-| `GET /attachments/{id}`, `GET /attachments/{id}/thumb` | Download a file, or an image's JPEG thumbnail |
+| `GET /attachments/{id}`, `…/thumb`, `…/display` | Download a file, an image's JPEG thumbnail, or its compressed copy for viewing |
 | `POST /threads/{ref}/questions?wait=` | Ask; optionally block for the answer |
 | `GET /threads/{ref}/questions` | Questions in a thread, oldest first |
 | `GET /questions?status=&thread_id=&limit=` | Questions across threads, newest first |

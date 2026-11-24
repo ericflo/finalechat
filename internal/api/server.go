@@ -201,9 +201,10 @@ func (s *Server) Handler() http.Handler {
 	authed.HandleFunc("DELETE /api/v1/messages/{id}", s.handleDeleteMessage)
 
 	authed.HandleFunc("POST /api/v1/threads/{thread}/attachments", s.handleUpload)
-	authed.HandleFunc("GET /api/v1/attachments/{id}", s.serveAttachment(false))
-	authed.HandleFunc("HEAD /api/v1/attachments/{id}", s.serveAttachment(false))
-	authed.HandleFunc("GET /api/v1/attachments/{id}/thumb", s.serveAttachment(true))
+	authed.HandleFunc("GET /api/v1/attachments/{id}", s.serveAttachment(""))
+	authed.HandleFunc("HEAD /api/v1/attachments/{id}", s.serveAttachment(""))
+	authed.HandleFunc("GET /api/v1/attachments/{id}/thumb", s.serveAttachment("thumb"))
+	authed.HandleFunc("GET /api/v1/attachments/{id}/display", s.serveAttachment("display"))
 	s.artifactRoutes(authed)
 	s.controlRoutes(authed)
 
@@ -278,6 +279,7 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 		}
 	})
 	go s.every(ctx, 5*time.Minute, 4*time.Minute, s.pruneOrphanAttachments)
+	go s.runDisplayBackfill(ctx)
 	go s.every(ctx, 5*time.Minute, 4*time.Minute, s.pruneArtifactObjects)
 	go s.every(ctx, 10*time.Second, 10*time.Second, func(ctx context.Context) {
 		if err := s.store.ExpireSettingsCommands(ctx); err != nil {

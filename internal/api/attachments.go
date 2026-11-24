@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"io"
 	"io/fs"
 	"mime"
@@ -25,6 +26,16 @@ import (
 // thumbnailSide is the longest side of generated image thumbnails.
 const thumbnailSide = 640
 
+// displayMinBytes is the size past which an image gets a display rendition:
+// below it the original is already quick to load.
+const displayMinBytes = 512 << 10
+
+// backfillMaxPixels bounds what the background pass decodes. An upload is
+// decoded while its sender waits; nothing is waiting on the backfill, so it
+// leaves the largest images as they are rather than spend the memory (a
+// decoded image is 4 to 8 bytes a pixel).
+const backfillMaxPixels = 16_000_000
+
 var errAttachmentsDisabled = &apiError{Status: http.StatusServiceUnavailable, Code: "attachments_disabled", Message: "Attachments are not configured on this server."}
 
 // decorate fills the URLs of a message's attachments.
@@ -41,7 +52,27 @@ func decorateAttachment(a *store.Attachment) {
 	if a.HasThumb() {
 		a.ThumbURL = a.URL + "/thumb"
 	}
+	if a.HasDisplay() {
+		a.DisplayURL = a.URL + "/display"
+	}
 }
+
+// displayRendition renders the compressed copy of an image that the app
+// shows full screen, or nil when the image is better shown as it is: a small
+// file, an animation (only its first frame would survive), or one that
+// compresses to little less than it already is.
+func displayRendition(contentType string, size int, img image.Image, orientation int) ([]byte, imaging.Info) {
+	if contentType == "image/gif" || size <= displayMinBytes {
+		return nil, imaging.Info{}
+	}
+	out, info, err := imaging.Display(img, orientation)
+	if err != nil || len(out) > size/4*3 {
+		return nil, imaging.Info{}
+	}
+	return out, info
+}
+
+func displayKey(id uuid.UUID) string { return fmt.Sprintf("a/%s/display.jpg", id) }
 
 // storeUpload validates one uploaded file, renders a thumbnail for images,
 // writes the bytes to object storage, and records a pending attachment.
@@ -82,7 +113,13 @@ func (s *Server) storeAttachment(ctx context.Context, userID, threadID uuid.UUID
 	id := store.NewID()
 	in := store.AttachmentInput{ID: id, Kind: store.AttachmentFile, ContentType: contentType, Filename: filename, Size: len(data)}
 	in.ObjectKey = fmt.Sprintf("a/%s/%s", id, filename)
-	var thumb []byte
+	// Whatever is stored before a later step fails is removed again.
+	var stored []blob.Object
+	discard := func() {
+		for _, o := range stored {
+			_ = s.blobs.Delete(context.Background(), o.Key, o.ID)
+		}
+	}
 	if imaging.ImageTypes[contentType] {
 		// Decoding a large image costs hundreds of megabytes; only a few may
 		// run at once regardless of how many uploads arrive together.
@@ -94,9 +131,17 @@ func (s *Server) storeAttachment(ctx context.Context, userID, threadID uuid.UUID
 			return nil, &apiError{Status: http.StatusServiceUnavailable, Code: "busy", Message: "Too many images are being processed right now. Try again shortly.", RetryAfter: 5}
 		}
 		img, info, err := imaging.Decode(contentType, data)
-		var tinfo imaging.Info
+		var thumb, display []byte
+		var tinfo, dinfo imaging.Info
 		if err == nil {
-			thumb, tinfo, err = imaging.Thumbnail(img, thumbnailSide)
+			// A phone photo is stored sideways with a note to turn it. Browsers
+			// follow the note when they show the original, so the renditions
+			// and the reported size follow it too.
+			orientation := imaging.Orientation(contentType, data)
+			info = info.Upright(orientation)
+			if thumb, tinfo, err = imaging.Thumbnail(img, thumbnailSide, orientation); err == nil {
+				display, dinfo = displayRendition(contentType, len(data), img, orientation)
+			}
 		}
 		<-decoding
 		if err != nil {
@@ -112,22 +157,29 @@ func (s *Server) storeAttachment(ctx context.Context, userID, threadID uuid.UUID
 			return nil, errStorage
 		}
 		in.ThumbID = obj.ID
+		stored = append(stored, blob.Object{Key: in.ThumbKey, ID: obj.ID})
+		if display != nil {
+			// The image is whole without it, so a failure here costs only the
+			// faster view.
+			if obj, err := s.blobs.Put(ctx, displayKey(id), "image/jpeg", display); err != nil {
+				s.log.Warn("store display rendition", "err", err, "size", len(display))
+			} else {
+				in.Display = &store.DisplayInput{Key: displayKey(id), ID: obj.ID, Width: dinfo.Width, Height: dinfo.Height, Size: len(display)}
+				stored = append(stored, blob.Object{Key: displayKey(id), ID: obj.ID})
+			}
+		}
 	}
 	obj, err := s.blobs.Put(ctx, in.ObjectKey, contentType, data)
 	if err != nil {
 		s.log.Error("store attachment", "err", err, "size", len(data))
-		if thumb != nil {
-			_ = s.blobs.Delete(context.Background(), in.ThumbKey, in.ThumbID)
-		}
+		discard()
 		return nil, errStorage
 	}
 	in.ObjectID = obj.ID
+	stored = append(stored, blob.Object{Key: in.ObjectKey, ID: obj.ID})
 	a, err := s.store.CreateAttachment(ctx, userID, threadID, in, s.cfg.AttachmentQuotaBytes)
 	if err != nil {
-		_ = s.blobs.Delete(context.Background(), in.ObjectKey, in.ObjectID)
-		if in.ThumbKey != "" {
-			_ = s.blobs.Delete(context.Background(), in.ThumbKey, in.ThumbID)
-		}
+		discard()
 		if errors.Is(err, store.ErrAttachmentQuota) {
 			return nil, s.errStorageQuota()
 		}
@@ -414,8 +466,10 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"attachments": out, "thread_id": thread.ID})
 }
 
-// GET /api/v1/attachments/{id} and /api/v1/attachments/{id}/thumb
-func (s *Server) serveAttachment(thumb bool) http.HandlerFunc {
+// GET /api/v1/attachments/{id}, and its renditions at …/thumb and
+// …/display. An attachment without the rendition asked for is served as it
+// is, so a client can always follow either path.
+func (s *Server) serveAttachment(rendition string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.blobs == nil {
 			writeError(w, errAttachmentsDisabled)
@@ -433,9 +487,13 @@ func (s *Server) serveAttachment(thumb bool) http.HandlerFunc {
 			return
 		}
 		key, contentType, name := a.ObjectKey, a.ContentType, a.Filename
-		if thumb && a.HasThumb() {
+		switch {
+		case rendition == "thumb" && a.HasThumb():
 			key, contentType = *a.ThumbKey, "image/jpeg"
 			name = strings.TrimSuffix(name, path.Ext(name)) + "-thumb.jpg"
+		case rendition == "display" && a.HasDisplay():
+			key, contentType = *a.DisplayKey, "image/jpeg"
+			name = strings.TrimSuffix(name, path.Ext(name)) + "-display.jpg"
 		}
 		body, _, size, err := s.blobs.Get(r.Context(), key)
 		if errors.Is(err, blob.ErrNotFound) {
@@ -490,7 +548,105 @@ func (s *Server) deleteAttachmentObjects(ctx context.Context, list []*store.Atta
 				s.log.Warn("delete thumbnail object", "key", *a.ThumbKey, "err", err)
 			}
 		}
+		if a.HasDisplay() {
+			if err := s.blobs.Delete(ctx, *a.DisplayKey, a.DisplayID); err != nil {
+				s.log.Warn("delete display object", "key", *a.DisplayKey, "err", err)
+			}
+		}
 	}
+}
+
+// runDisplayBackfill gives the images stored before display renditions
+// existed one each: newest first, one at a time, with a pause between so it
+// never competes with live uploads for memory. Once the queue is empty it
+// only looks again now and then (an older server still running during a
+// deploy stores images without one).
+func (s *Server) runDisplayBackfill(ctx context.Context) {
+	if s.blobs == nil {
+		return
+	}
+	made, saved := 0, int64(0)
+	wait := 30 * time.Second // let a fresh start settle first
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		found, bytes := s.backfillDisplay(ctx)
+		if found {
+			wait = 2 * time.Second
+			if bytes > 0 {
+				made, saved = made+1, saved+bytes
+			}
+			continue
+		}
+		if made > 0 {
+			s.log.Info("display renditions backfilled", "images", made, "bytes_saved_per_view", saved)
+			made, saved = 0, 0
+		}
+		wait = 10 * time.Minute
+	}
+}
+
+// backfillDisplay handles one image from the queue. It reports whether there
+// was one, and how many bytes smaller its display rendition is than the
+// original (0 when it got none).
+func (s *Server) backfillDisplay(ctx context.Context) (found bool, saved int64) {
+	// The claim marks the image decided before any work, so one that cannot
+	// be processed (or that takes the server down) is not tried again.
+	a, err := s.store.ClaimDisplayBackfill(ctx)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) && ctx.Err() == nil {
+			s.log.Error("claim display backfill", "err", err)
+		}
+		return false, 0
+	}
+	if a.ContentType == "image/gif" || a.Size <= displayMinBytes || int64(a.Width)*int64(a.Height) > backfillMaxPixels {
+		return true, 0
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	body, _, _, err := s.blobs.Get(ctx, a.ObjectKey)
+	if err != nil {
+		s.log.Warn("display backfill: fetch original", "id", a.ID, "err", err)
+		return true, 0
+	}
+	data, err := io.ReadAll(io.LimitReader(body, store.MaxAttachmentBytes+1))
+	body.Close()
+	if err != nil || len(data) > store.MaxAttachmentBytes {
+		s.log.Warn("display backfill: read original", "id", a.ID, "err", err)
+		return true, 0
+	}
+	select {
+	case decoding <- struct{}{}:
+	case <-ctx.Done():
+		return true, 0
+	}
+	var display []byte
+	var info imaging.Info
+	if img, _, err := imaging.Decode(a.ContentType, data); err == nil {
+		display, info = displayRendition(a.ContentType, len(data), img, imaging.Orientation(a.ContentType, data))
+	}
+	<-decoding
+	if display == nil {
+		return true, 0
+	}
+	obj, err := s.blobs.Put(ctx, displayKey(a.ID), "image/jpeg", display)
+	if err != nil {
+		s.log.Warn("display backfill: store rendition", "id", a.ID, "err", err)
+		return true, 0
+	}
+	if err := s.store.SetAttachmentDisplay(ctx, a.ID, store.DisplayInput{Key: displayKey(a.ID), ID: obj.ID, Width: info.Width, Height: info.Height, Size: len(display)}); err != nil {
+		// Deleted while it was being made, or the write failed: either way
+		// nothing points at the object.
+		_ = s.blobs.Delete(context.Background(), displayKey(a.ID), obj.ID)
+		if !errors.Is(err, store.ErrNotFound) {
+			s.log.Warn("display backfill: record rendition", "id", a.ID, "err", err)
+		}
+		return true, 0
+	}
+	return true, int64(len(data) - len(display))
 }
 
 // pruneOrphanAttachments deletes uploads that were never attached.
