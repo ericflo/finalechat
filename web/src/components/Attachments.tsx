@@ -46,9 +46,10 @@ export function AttachmentList({ items, onOpen }: { items: Attachment[]; onOpen:
           {shown.map((a, i) => {
             const w = a.thumb_width || a.width || 4;
             const h = a.thumb_height || a.height || 3;
-            // A long screenshot or a panorama shows its start, in a tile no
-            // taller than a phone screen's shape and no flatter than 3:1.
-            const shape = between(w / h, 9 / 20, 3);
+            // A long screenshot or a panorama shows its start: the server
+            // makes its thumbnail of that, at no more than 2:5 or 3:1. A
+            // thumbnail from before it did is held to the same shape.
+            const shape = between(w / h, 2 / 5, 3);
             const last = i === shown.length - 1 && extra > 0;
             return (
               <button

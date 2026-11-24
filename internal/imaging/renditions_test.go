@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/jpeg"
 	"math"
 	"testing"
@@ -198,5 +199,52 @@ func TestDisplayPutsTransparencyOnWhite(t *testing.T) {
 	}
 	if _, _, got := corners(t, out); !near(got[0], color.RGBA{255, 255, 255, 255}) {
 		t.Fatalf("transparent pixels came out %v, want white", got[0])
+	}
+}
+
+// Squeezed whole into a thumbnail, a long screenshot is a sliver nobody can
+// make out. Its thumbnail is of its top instead, a panorama's of its left,
+// and that is the top or the left as the image is shown, however it is
+// stored.
+func TestThumbnailOfALongImageShowsItsStart(t *testing.T) {
+	// What undoes each orientation: storing the picture this way and tagging
+	// it with the orientation shows it as it was.
+	undo := map[int]int{1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 8, 7: 7, 8: 6}
+	for _, c := range []struct {
+		name         string
+		w, h, rw, rh int // the picture, and the part of it shown
+		tw, th       int
+	}{
+		{"a long screenshot", 80, 400, 80, 200, 25, 64},
+		{"a panorama", 600, 100, 300, 100, 64, 21},
+		{"a phone screenshot, whole", 90, 200, 90, 200, 28, 64},
+	} {
+		// Quadrants over the part that should be shown; the rest is black.
+		picture := &canvas{RGBA: image.NewRGBA(image.Rect(0, 0, c.w, c.h)), free: func() {}}
+		draw.Draw(picture.RGBA, picture.Rect, image.Black, image.Point{}, draw.Src)
+		draw.Draw(picture.RGBA, image.Rect(0, 0, c.rw, c.rh), quadrants(c.rw, c.rh), image.Point{}, draw.Src)
+		for orientation := 1; orientation <= 8; orientation++ {
+			stored := picture
+			if orientation != 1 {
+				var err error
+				if stored, err = orient(picture, undo[orientation]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			thumb, info, err := Thumbnail(stored.RGBA, 64, orientation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w, h, got := corners(t, thumb)
+			if w != c.tw || h != c.th || info.Width != w || info.Height != h {
+				t.Errorf("%s, orientation %d: thumbnail is %dx%d (info %dx%d), want %dx%d", c.name, orientation, w, h, info.Width, info.Height, c.tw, c.th)
+				continue
+			}
+			for i, want := range upright[1] {
+				if !near(got[i], want) {
+					t.Errorf("%s, orientation %d: corner %d is %v, want %v", c.name, orientation, i, got[i], want)
+				}
+			}
+		}
 	}
 }

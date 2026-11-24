@@ -3788,7 +3788,7 @@
           "Attachments"
         ],
         "summary": "Download an image's thumbnail",
-        "description": "JPEG thumbnail with the longest side at most 640 pixels. For a non-image attachment the original bytes are returned.",
+        "description": "JPEG thumbnail with the longest side at most 640 pixels. Of an image more than 2.5 times as long as it is wide, or 3 times as wide as it is tall (a long screenshot, a panorama), it shows the start, the top or the left, rather than all of it as a sliver. For a non-image attachment the original bytes are returned.",
         "parameters": [
           {
             "name": "id",

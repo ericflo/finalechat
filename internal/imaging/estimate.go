@@ -35,11 +35,13 @@ func Estimate(contentType string, data []byte, thumbSide int) Cost {
 	if !ok || l.w <= 0 || l.h <= 0 {
 		return Cost{}
 	}
-	rotated := turned(Orientation(contentType, data))
+	orientation := Orientation(contentType, data)
+	rotated := turned(orientation)
 	c := Cost{Width: l.w, Height: l.h, Base: l.decode}
-	w, h := thumbnailSize(l.w, l.h, thumbSide)
+	tw, th := thumbnailRegion(l.w, l.h, orientation)
+	w, h := thumbnailSize(tw, th, thumbSide)
 	memory, _ := canvasSize(w, h, rotated) // a thumbnail's canvas is too small for disk
-	c.Base += memory + scalerMemory(w, h, l.w, l.h)
+	c.Base += memory + scalerMemory(w, h, tw, th)
 	// The encoder's output is kept only while it is smaller than the file,
 	// and is gathered in pieces and then put together.
 	c.Display = int64(len(data)) * 3 / 2

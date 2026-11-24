@@ -133,11 +133,29 @@ const (
 )
 
 // Thumbnail scales the image so its longest side is at most maxSide and
-// encodes it as JPEG, upright per the EXIF orientation. Images already
-// within bounds are re-encoded so the thumbnail is always a small, fast
-// JPEG.
+// encodes it as an upright JPEG. Of an image too long or too wide to make
+// out at that size it shows the start instead (see thumbnailRegion).
 func Thumbnail(img image.Image, maxSide, orientation int) ([]byte, Info, error) {
 	b := img.Bounds()
+	if sw, sh := thumbnailRegion(b.Dx(), b.Dy(), orientation); sw != b.Dx() || sh != b.Dy() {
+		if whole, ok := img.(interface {
+			SubImage(image.Rectangle) image.Image
+		}); ok {
+			// The start of the upright image is against the left or right
+			// and the top or bottom of the stored one, by how it is turned.
+			x, y := b.Min.X, b.Min.Y
+			switch orientation {
+			case 2, 3, 7, 8:
+				x = b.Max.X - sw
+			}
+			switch orientation {
+			case 3, 4, 6, 7:
+				y = b.Max.Y - sh
+			}
+			img = whole.SubImage(image.Rect(x, y, x+sw, y+sh))
+			b = img.Bounds()
+		}
+	}
 	w, h := thumbnailSize(b.Dx(), b.Dy(), maxSide)
 	var out bytes.Buffer
 	info, err := render(&out, img, w, h, orientation, thumbQuality, false)
@@ -145,6 +163,20 @@ func Thumbnail(img image.Image, maxSide, orientation int) ([]byte, Info, error) 
 		return nil, Info{}, err
 	}
 	return out.Bytes(), info, nil
+}
+
+// thumbnailRegion is the size of the part of a stored w×h image that its
+// thumbnail shows. That is all of it, unless the image the right way up is
+// more than two and a half times as long as it is wide, or three times as
+// wide as it is tall: a long screenshot, a panorama. Squeezed whole into a
+// thumbnail those are a sliver, so the thumbnail is of the top of the one
+// and the left of the other, as far as those proportions go.
+func thumbnailRegion(w, h, orientation int) (int, int) {
+	if orientation >= 5 && orientation <= 8 {
+		h, w = thumbnailRegion(h, w, 1)
+		return w, h
+	}
+	return max(min(w, h*3), 1), max(min(h, w*5/2), 1)
 }
 
 // thumbnailSize fits w×h within a square of maxSide, never enlarging.

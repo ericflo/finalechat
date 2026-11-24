@@ -269,8 +269,9 @@ func TestOversizedImagesAreRefusedAndLongOnesAreNot(t *testing.T) {
 	if att["display_width"] != float64(1080) || att["display_height"] != float64(12000) {
 		t.Errorf("its display copy is %vx%v; it should be 1080x12000", att["display_width"], att["display_height"])
 	}
-	if att["thumb_width"] != float64(57) || att["thumb_height"] != float64(640) {
-		t.Errorf("its thumbnail is %vx%v", att["thumb_width"], att["thumb_height"])
+	// Its thumbnail is of the top of it, not all of it as a sliver.
+	if att["thumb_width"] != float64(256) || att["thumb_height"] != float64(640) {
+		t.Errorf("its thumbnail is %vx%v, want 256x640", att["thumb_width"], att["thumb_height"])
 	}
 }
 

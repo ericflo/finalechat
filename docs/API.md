@@ -311,6 +311,11 @@ Images carry `width`, `height` and a JPEG thumbnail whose longest side is
 640 pixels (`thumb_width`, `thumb_height`, `thumb_url`); files omit those
 fields. The dimensions are upright: a photo stored on its side with an EXIF
 orientation is reported, and its thumbnail drawn, the way a browser shows it.
+The thumbnail of an image more than two and a half times as long as it is
+wide, or three times as wide as it is tall (a long screenshot, a panorama),
+is of its start, the top or the left, as far as those proportions go: all of
+it at that size would be a sliver. Fetch `display_url` or `url` to see the
+whole image.
 
 A heavy image also has a display rendition, a compressed copy for viewing:
 
@@ -921,7 +926,8 @@ curl -sS -o shot.png https://www.finalechat.com/api/v1/attachments/01a07ab9-3132
 
 ### GET /attachments/{id}/thumb
 
-The JPEG thumbnail of an image attachment (`image/jpeg`, longest side 640).
+The JPEG thumbnail of an image attachment (`image/jpeg`, longest side 640; of
+a very long or very wide image, [its start](#attachment)).
 For a non-image attachment it returns the original bytes.
 
 ### GET /attachments/{id}/display
