@@ -9,6 +9,16 @@ export type RowState = "needs-you" | "working" | "unread" | "idle";
 
 export type InboxView = "all" | "unread" | "working" | "live" | "archived";
 
+const inboxViews: readonly InboxView[] = ["all", "unread", "working", "live", "archived"];
+
+export function parseInboxView(raw: string | null | undefined): InboxView {
+  return raw && (inboxViews as readonly string[]).includes(raw) ? (raw as InboxView) : "all";
+}
+
+export function inboxViewPath(view: InboxView): string {
+  return view === "all" ? "/" : `/?view=${view}`;
+}
+
 /** An agent is working when it says so and the status has not lapsed. An
  * agent waiting on the user is not working. */
 export function isWorking(t: Thread, now: number): boolean {
@@ -17,6 +27,7 @@ export function isWorking(t: Thread, now: number): boolean {
 }
 
 export function rowState(t: Thread, now: number): RowState {
+  if (t.archived_at) return "idle";
   if (t.pending_questions > 0) return "needs-you";
   if (isWorking(t, now)) return "working";
   if (t.unread_count > 0) return "unread";
@@ -44,8 +55,8 @@ export function inView(t: Thread, view: InboxView, now: number, live: Record<str
 
 /** Threads with a question waiting come first; then newest activity. */
 export function byAttentionThenActivity(a: Thread, b: Thread): number {
-  const na = a.pending_questions > 0 ? 1 : 0;
-  const nb = b.pending_questions > 0 ? 1 : 0;
+  const na = !a.archived_at && a.pending_questions > 0 ? 1 : 0;
+  const nb = !b.archived_at && b.pending_questions > 0 ? 1 : 0;
   if (na !== nb) return nb - na;
   if (a.last_activity_at !== b.last_activity_at) return a.last_activity_at < b.last_activity_at ? 1 : -1;
   return a.id < b.id ? 1 : -1;

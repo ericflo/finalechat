@@ -116,15 +116,19 @@ function restore(spot: Spot) {
   raf = requestAnimationFrame(tick);
 }
 
-export function navigate(to: string, opts: { replace?: boolean } = {}) {
+export function navigate(to: string, opts: { replace?: boolean; transition?: boolean } = {}) {
   cancelRestore?.();
-  remember(to);
+  if (!opts.replace) remember(to);
   const trail = navState()?.trail ?? [];
   const moved = pathOf(to) !== window.location.pathname;
   const next: NavState = opts.replace ? { key: newKey(), trail } : { key: newKey(), trail: [...trail, here()].slice(-maxTrail) };
   if (opts.replace) window.history.replaceState(next, "", to);
   else window.history.pushState(next, "", to);
   currentKey = next.key;
+  if (opts.transition === false) {
+    listeners.forEach((l) => l());
+    return;
+  }
   // A new screen starts at the top; a change within one (a filter, a
   // panel) leaves the reader where they are.
   const top = () => {

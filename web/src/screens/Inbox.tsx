@@ -49,6 +49,7 @@ import {
   busyFor,
   byAttentionThenActivity,
   heldOrder,
+  inboxViewPath,
   inView,
   isWorking,
   threadSummary,
@@ -66,7 +67,7 @@ function touchOrder() {
   if (orderHold) orderHold = { ...orderHold, touchedAt: serverNow() };
 }
 
-export function Inbox({ filter }: { filter: string | null }) {
+export function Inbox({ filter, view }: { filter: string | null; view: InboxView }) {
   const threads = useStore((s) => s.threads);
   const pending = useStore((s) => s.pending);
   const counts = useStore((s) => s.counts);
@@ -77,7 +78,6 @@ export function Inbox({ filter }: { filter: string | null }) {
   const settings = useStore((s) => s.settings);
   const searchHits = useStore((s) => s.searchHits);
   const live = useStore((s) => s.live);
-  const [view, setView] = useState<InboxView>("all");
   const tab = view === "archived" ? "archived" : "active";
   const [query, setQuery] = useState("");
   const [showAllPending, setShowAllPending] = useState(false);
@@ -115,12 +115,12 @@ export function Inbox({ filter }: { filter: string | null }) {
   // Bulk selection lives here (not in the store): it clears whenever the
   // visible set changes meaning — tab switch, new search — or after delete.
   const switchView = (next: InboxView) => {
-    setView(next);
+    if (next !== view) navigate(inboxViewPath(next), { replace: true, transition: false });
     setSelected(new Set());
   };
   useEffect(() => {
     setSelected(new Set());
-  }, [query]);
+  }, [query, view]);
   const toggleSelect = useCallback((id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -558,7 +558,7 @@ export function Inbox({ filter }: { filter: string | null }) {
                 </button>
               )}
             </div>
-            {!inboxLoaded ? (
+            {!inboxLoaded || (tab === "archived" && !archivedLoaded && !searching) ? (
               <div className="thread-list">
                 {[0, 1, 2].map((i) => (
                   <div key={i} className="skeleton" style={{ height: 84 }} />
@@ -753,12 +753,16 @@ function ThreadRow({
   onToggleSelect?: (e?: { shiftKey?: boolean }) => void;
   onEnterSelect?: () => void;
 }) {
-  const unread = t.unread_count > 0;
-  const needs = t.pending_questions > 0;
-  const session = useStore((s) => s.live[t.id]);
-  const stopping = useStore((s) => !!s.stopping[t.id]);
+  // Archived threads stay quiet in the list until the user unarchives or
+  // replies to them: trailing messages, status updates or a session still
+  // winding down must not light up an archived row.
+  const archived = !!t.archived_at;
+  const unread = !archived && t.unread_count > 0;
+  const needs = !archived && t.pending_questions > 0;
+  const session = useStore((s) => (archived ? undefined : s.live[t.id]));
+  const stopping = useStore((s) => !archived && !!s.stopping[t.id]);
   const relayed = session ? liveRelay(t) : null;
-  const liveActivity = useLiveActivity(t.activity);
+  const liveActivity = useLiveActivity(archived ? null : t.activity);
   // An agent waiting on the user is not working, and never looks like it.
   const activity = liveActivity?.kind === "waiting" ? null : liveActivity;
   const draft = useStore((s) => s.drafts[t.id]);

@@ -35,10 +35,23 @@ const makeThreads = () => [
   thread('h', 'Flaky upload test', { ...describe('Codex chased a flaky upload test; it stopped after the fix landed.'), last_activity_at: ago(40),
     meta: { relay: { name: 'codex', agent: 'codex', label: 'Codex', state: 'working' } } }),
 ];
-// Running now: the working thread, an idle one, and one relaying to Claude
-// Code. The Codex thread's relay meta is stale: its session is not running.
-const liveSessions = ['a', 'd', 'g'].map((id) => ({ thread_id: id, resource_id: 'r-' + id, connector_id: 'c1', label: 'Session ' + id, stop: { label: 'Stop session' } }));
-const archived = [thread('e', 'Old migration', { ...describe('Moved the ledger tables. Finished in March.'), archived_at: ago(900), last_activity_at: ago(900) })];
+// Running now: the working thread, an idle one, one relaying to Claude Code,
+// and an archived thread whose session has not finished winding down yet.
+// The Codex thread's relay meta is stale: its session is not running.
+const liveSessions = ['a', 'd', 'g', 'e'].map((id) => ({ thread_id: id, resource_id: 'r-' + id, connector_id: 'c1', label: 'Session ' + id, stop: { label: 'Stop session' } }));
+const archived = [
+  thread('e', 'Old migration', {
+    ...describe('Moved the ledger tables. Finished in March.'),
+    archived_at: ago(900),
+    last_activity_at: ago(900),
+    last_read_at: ago(910),
+    unread_count: 2,
+    pending_questions: 1,
+    preview: 'Session stopped.',
+    activity: { text: 'Cleaning up', kind: 'working', at: ago(0.1), since: ago(1), expires_at: new Date(Date.now() + 600000).toISOString() },
+    meta: { relay: { name: 'claude', agent: 'claude', label: 'Claude Code · Opus', state: 'working' } },
+  }),
+];
 const user = { id: 'u1', email: 'u@example.com', display_name: 'U', settings: { notify_all_messages: false, remote_mode: false }, created_at: ago(9000) };
 const question = { id: 'q1', thread_id: 'b', prompt: 'Promote to production?', options: [{ label: 'Ship it' }, { label: 'Hold' }], allow_freeform: true, multi_select: false, status: 'pending', answer: null, meta: {}, created_at: ago(5), answered_at: null, expires_at: new Date(Date.now() + 3600000).toISOString() };
 
@@ -66,6 +79,10 @@ try {
         lists++;
         return json({ threads });
       }
+      if (p === '/threads/e') return json({ thread: archived[0] });
+      if (p === '/threads/e/messages') return json({ messages: [], has_more: false });
+      if (p === '/threads/e/read') return json({ thread: { ...archived[0], unread_count: 0 } });
+      if (p === '/counts') return json({ counts: { pending_questions: 1, unread_threads: 1, attention: 2 } });
       if (p === '/questions') return json({ questions: [question] });
       if (p === '/live-sessions') return json({ sessions: liveSessions });
       if (p === '/events') return new Promise(() => {}); // held open, like the real stream
@@ -124,7 +141,35 @@ try {
     await chip('Archived').click();
     await row('Old migration').waitFor();
     assert.deepEqual(await titles(), ['Old migration']);
+    assert.equal(new URL(page.url()).searchParams.get('view'), 'archived');
+    // Archived rows stay quiet: no green Active/working dot, no unread pill, no colored left rail.
+    const archivedRow = row('Old migration');
+    assert.doesNotMatch(await archivedRow.getAttribute('class'), /\b(working|unread|needs-you)\b/);
+    assert.equal(await archivedRow.locator('.session-mark').count(), 0);
+    assert.equal(await archivedRow.locator('.live-dot').count(), 0);
+    assert.equal(await archivedRow.locator('.unread-count').count(), 0);
+    assert.equal(await archivedRow.locator('.thread-foot').count(), 0);
+    // Opening an archived thread and going back via either the in-app Back
+    // button or browser/Android Back returns to Archived, not All.
+    await archivedRow.click();
+    await page.waitForURL(base + '/t/e');
+    await page.locator('.topbar-title').getByText('Old migration').waitFor();
+    await page.getByRole('button', { name: 'Back' }).click();
+    await page.waitForURL(base + '/?view=archived');
+    await row('Old migration').waitFor();
+    assert.equal(await chip('Archived').getAttribute('aria-pressed'), 'true');
+    assert.deepEqual(await titles(), ['Old migration']);
+    await row('Old migration').click();
+    await page.waitForURL(base + '/t/e');
+    await page.locator('.topbar-title').getByText('Old migration').waitFor();
+    await page.goBack();
+    await page.waitForURL(base + '/?view=archived');
+    await row('Old migration').waitFor();
+    assert.equal(await chip('Archived').getAttribute('aria-pressed'), 'true');
+    assert.deepEqual(await titles(), ['Old migration']);
+
     await chip('All').click();
+    assert.equal(new URL(page.url()).search, '');
     assert.deepEqual(await titles(), ['Release 1.2', 'Checkout race fix', 'Docs site search', 'Billing export', 'Search ranking', 'Flaky upload test']);
 
     // The list was just used. A thread that posts now keeps its place, and

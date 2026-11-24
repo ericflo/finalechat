@@ -2,6 +2,7 @@ import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { ErrorBoundary, ToastHost } from "./components/Common";
+import { parseInboxView } from "./lib/inbox";
 import { match, navigate, useRoute } from "./lib/router";
 import { bootstrap, toast, useStore } from "./lib/store";
 import { AuthScreen } from "./screens/Auth";
@@ -93,7 +94,7 @@ function App() {
   }
   if (path === "/settings") return <SettingsScreen />;
   if (path === "/settings/agents") return <AgentsScreen />;
-  return <Inbox filter={route.search.get("filter")} />;
+  return <Inbox filter={route.search.get("filter")} view={parseInboxView(route.search.get("view"))} />;
 }
 
 function registerServiceWorker() {

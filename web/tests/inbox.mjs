@@ -7,7 +7,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-const { agentsDiffer, busyFor, byAttentionThenActivity, heldOrder, inView, isWorking, orderHoldMs, rowState, sameOrder, threadSummary, threadTitle } = await import("../src/lib/inbox.ts");
+const { agentsDiffer, busyFor, byAttentionThenActivity, heldOrder, inboxViewPath, inView, isWorking, orderHoldMs, parseInboxView, rowState, sameOrder, threadSummary, threadTitle } = await import("../src/lib/inbox.ts");
 
 const now = Date.parse("2026-11-23T12:00:00Z");
 const iso = (ms) => new Date(ms).toISOString();
@@ -40,6 +40,12 @@ describe("row state", () => {
     assert.equal(rowState(thread({ activity: busy(), unread_count: 3 }), now), "working");
     assert.equal(rowState(thread({ unread_count: 3 }), now), "unread");
     assert.equal(rowState(thread(), now), "idle");
+  });
+
+  it("keeps archived rows idle even when trailing updates arrive", () => {
+    assert.equal(rowState(thread({ archived_at: iso(now), pending_questions: 1, activity: busy(), unread_count: 3 }), now), "idle");
+    assert.equal(rowState(thread({ archived_at: iso(now), activity: busy() }), now), "idle");
+    assert.equal(rowState(thread({ archived_at: iso(now), unread_count: 2 }), now), "idle");
   });
 
   it("reads the summary from either name and never shows an empty title", () => {
@@ -77,6 +83,18 @@ describe("views", () => {
     assert.equal(inView(t, "live", now), false);
     assert.equal(inView(archived, "live", now, { [archived.id]: {} }), false);
   });
+
+  it("parses and formats inbox view query values", () => {
+    for (const v of ["all", "unread", "working", "live", "archived"]) {
+      assert.equal(parseInboxView(v), v);
+    }
+    assert.equal(parseInboxView(null), "all");
+    assert.equal(parseInboxView(""), "all");
+    assert.equal(parseInboxView("bogus"), "all");
+    assert.equal(inboxViewPath("all"), "/");
+    assert.equal(inboxViewPath("archived"), "/?view=archived");
+    assert.equal(inboxViewPath("unread"), "/?view=unread");
+  });
 });
 
 describe("order", () => {
@@ -85,7 +103,8 @@ describe("order", () => {
     const b = thread({ id: "b", last_activity_at: iso(now - 5000), pending_questions: 1 });
     const c = thread({ id: "c", last_activity_at: iso(now - 9000) });
     const d = thread({ id: "d", last_activity_at: iso(now - 9000) });
-    assert.deepEqual([c, a, d, b].sort(byAttentionThenActivity).map((t) => t.id), ["b", "a", "d", "c"]);
+    const e = thread({ id: "e", last_activity_at: iso(now - 10000), pending_questions: 1, archived_at: iso(now - 2000) });
+    assert.deepEqual([e, c, a, d, b].sort(byAttentionThenActivity).map((t) => t.id), ["b", "a", "d", "c", "e"]);
   });
 
   it("follows the latest order until the reader touches the list", () => {
