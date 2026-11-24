@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Attachment } from "../lib/types";
 import { IconBack, IconClose, IconDownload, IconFile } from "./Icons";
 
@@ -9,6 +9,28 @@ export function humanSize(n: number): string {
 }
 
 const maxTiles = 4;
+
+/** What the viewer shows for an image: its compressed display copy when it
+ * has one. The original stays behind `url`, for the download button. */
+const viewSrc = (a: Attachment) => a.display_url ?? a.url;
+
+// Images fetched ahead of need. Holding the elements keeps each request
+// alive and its bytes in memory; the service worker stores them as well.
+const warmed = new Map<string, HTMLImageElement>();
+
+/** Starts loading an image's viewer copy before it is asked for. Only the
+ * viewer does this: a press on a thumbnail is as often the start of a scroll
+ * as a tap, and would spend data on images nobody opens. */
+function warm(a: Attachment | undefined) {
+  if (!a) return;
+  const src = viewSrc(a);
+  if (warmed.has(src)) return;
+  const img = new Image();
+  img.decoding = "async";
+  img.src = src;
+  warmed.set(src, img);
+  if (warmed.size > 12) warmed.delete(warmed.keys().next().value as string);
+}
 
 /** Renders a message's attachments: an image grid plus file chips. */
 export function AttachmentList({ items, onOpen }: { items: Attachment[]; onOpen: (images: Attachment[], index: number) => void }) {
@@ -58,20 +80,94 @@ interface View {
   y: number;
 }
 
+const atRest: View = { scale: 1, x: 0, y: 0 };
+
+/** One image in the viewer. The current one and its neighbours are all
+ * mounted, so a neighbour has loaded and decoded by the time it is swiped
+ * to. Until an image arrives its thumbnail (already on screen in the thread)
+ * stands in at the same size. `load` holds a neighbour back until the image
+ * on screen has arrived, so fetching ahead never slows the one being looked
+ * at; once started, a load is not withdrawn. */
+function Slide({ item, current, load, from, view, moving, onSettled }: { item: Attachment; current: boolean; load: boolean; from: number; view: View; moving: boolean; onSettled: (id: string) => void }) {
+  const [src, setSrc] = useState(() => viewSrc(item));
+  const [state, setState] = useState<"loading" | "loaded" | "failed">("loading");
+  const [started, setStarted] = useState(load);
+  if (load && !started) setStarted(true);
+  const ref = useRef<HTMLImageElement>(null);
+  const done = () => {
+    setState("loaded");
+    onSettled(item.id);
+    // Decode now, so that showing it later is a paint and not a decode.
+    void ref.current?.decode?.().catch(() => {});
+  };
+  useEffect(() => {
+    // An image already in memory can finish before the handler is attached.
+    if (ref.current?.complete && ref.current.naturalWidth > 0) done();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [src, started]);
+  const style = {
+    transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+    transformOrigin: "center",
+    transition: moving ? "none" : "transform 0.15s var(--ease)",
+  };
+  const w = item.display_width || item.width;
+  const h = item.display_height || item.height;
+  return (
+    <div className={`viewer-slide ${current ? "current" : ""} ${current && from > 0 ? "from-next" : ""} ${current && from < 0 ? "from-prev" : ""}`} aria-hidden={!current}>
+      {state === "loading" && item.thumb_url && w && h ? <img className="viewer-thumb" src={item.thumb_url} width={w} height={h} alt="" draggable={false} style={style} /> : null}
+      {state === "failed" ? (
+        <span className="viewer-failed">Could not load this image.</span>
+      ) : (
+        <img
+          ref={ref}
+          src={started ? src : undefined}
+          alt={item.filename}
+          draggable={false}
+          onLoad={done}
+          // The display copy can be missing; the original always exists.
+          onError={() => {
+            if (src !== item.url) return setSrc(item.url);
+            setState("failed");
+            onSettled(item.id);
+          }}
+          style={{ ...style, opacity: state === "loaded" ? 1 : 0 }}
+        />
+      )}
+      {current && state === "loading" && (
+        <span className="viewer-loading">
+          <span className="spinner" />
+        </span>
+      )}
+    </div>
+  );
+}
+
 /** Full-screen image viewer with pinch, double-tap and wheel zoom, drag to pan,
  * and a swipe down to dismiss. Terminal screenshots need the zoom. */
 export function ImageViewer({ items, index, onClose }: { items: Attachment[]; index: number; onClose: () => void }) {
-  const [i, setI] = useState(index);
-  const item = items[Math.min(i, items.length - 1)] as Attachment;
-  const [loaded, setLoaded] = useState(false);
-  const [view, setView] = useState<View>({ scale: 1, x: 0, y: 0 });
+  const [i, setI] = useState(Math.min(index, items.length - 1));
+  const item = items[i] as Attachment;
+  // Which way the last step went: the image arrives from that side, and the
+  // one after it in that direction is fetched ahead.
+  const [from, setFrom] = useState(0);
+  // Images that have arrived (or given up).
+  const [settled, setSettled] = useState<ReadonlySet<string>>(() => new Set());
+  const onSettled = useCallback((id: string) => setSettled((s) => (s.has(id) ? s : new Set(s).add(id))), []);
+  const [view, setView] = useState<View>(atRest);
   const go = (delta: number) => {
     const next = i + delta;
     if (next < 0 || next >= items.length) return;
     setI(next);
-    setLoaded(false);
-    setView({ scale: 1, x: 0, y: 0 });
+    setFrom(delta);
+    setView(atRest);
   };
+  // Fetching ahead goes in order of need: the image on screen, then its
+  // neighbours (mounted below), then one further along the way being swiped.
+  const here = settled.has(item.id);
+  const ahead = from < 0 ? -1 : 1;
+  const neighbour = items[i + ahead];
+  const further = here && (!neighbour || settled.has(neighbour.id)) ? items[i + 2 * ahead] : undefined;
+  useEffect(() => warm(further), [further]);
   const bodyRef = useRef<HTMLDivElement>(null);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const gesture = useRef<{ start: View; dist: number; cx: number; cy: number; moved: boolean } | null>(null);
@@ -225,21 +321,12 @@ export function ImageViewer({ items, index, onClose }: { items: Attachment[]; in
         </button>
       </div>
       <div ref={bodyRef} className="viewer-body" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel}>
-        {!loaded && <span className="spinner" />}
-        <img
-          src={item.url}
-          alt={item.filename}
-          draggable={false}
-          onLoad={() => setLoaded(true)}
-          style={{
-            opacity: loaded ? 1 : 0,
-            transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
-            transformOrigin: "center",
-            transition: gesture.current ? "none" : "transform 0.15s var(--ease), opacity 0.2s",
-          }}
-        />
+        {[i - 1, i, i + 1].map((n) => {
+          const it = items[n];
+          return it ? <Slide key={it.id} item={it} current={n === i} load={n === i || here} from={from} view={n === i ? view : atRest} moving={n === i && gesture.current !== null} onSettled={onSettled} /> : null;
+        })}
       </div>
-      {loaded && view.scale === 1 && <div className="viewer-hint">{items.length > 1 ? "Swipe for the next image · " : ""}Double-tap or pinch to zoom · swipe down to close</div>}
+      {here && view.scale === 1 && <div className="viewer-hint">{items.length > 1 ? "Swipe for the next image · " : ""}Double-tap or pinch to zoom · swipe down to close</div>}
     </div>
   );
 }

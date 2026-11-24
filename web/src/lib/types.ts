@@ -125,9 +125,14 @@ export interface Attachment {
   height?: number;
   thumb_width?: number;
   thumb_height?: number;
+  /** The compressed copy shown full screen, when the image has one; `url` stays the original. */
+  display_width?: number;
+  display_height?: number;
+  display_size?: number;
   created_at: string;
   url: string;
   thumb_url?: string;
+  display_url?: string;
 }
 
 export interface Message {
