@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"image/gif"
 	"image/jpeg"
 	"image/png"
@@ -129,17 +130,19 @@ const (
 // JPEG.
 func Thumbnail(img image.Image, maxSide, orientation int) ([]byte, Info, error) {
 	b := img.Bounds()
-	w, h := b.Dx(), b.Dy()
-	if w > maxSide || h > maxSide {
-		if w >= h {
-			h = int(float64(h) * float64(maxSide) / float64(w))
-			w = maxSide
-		} else {
-			w = int(float64(w) * float64(maxSide) / float64(h))
-			h = maxSide
-		}
-	}
+	w, h := thumbnailSize(b.Dx(), b.Dy(), maxSide)
 	return render(img, w, h, orientation, thumbQuality)
+}
+
+// thumbnailSize fits w×h within a square of maxSide, never enlarging.
+func thumbnailSize(w, h, maxSide int) (int, int) {
+	if w <= maxSide && h <= maxSide {
+		return w, h
+	}
+	if w >= h {
+		return maxSide, int(float64(h) * float64(maxSide) / float64(w))
+	}
+	return int(float64(w) * float64(maxSide) / float64(h)), maxSide
 }
 
 // Display renders the copy of an image the app shows full screen: a JPEG at
@@ -148,12 +151,18 @@ func Thumbnail(img image.Image, maxSide, orientation int) ([]byte, Info, error) 
 // out larger than an already well-compressed original).
 func Display(img image.Image, orientation int) ([]byte, Info, error) {
 	b := img.Bounds()
-	w, h := b.Dx(), b.Dy()
+	w, h := displaySize(b.Dx(), b.Dy())
+	return render(img, w, h, orientation, displayQuality)
+}
+
+// displaySize keeps w×h unless it is over the display budget, and then
+// scales it to the budget.
+func displaySize(w, h int) (int, int) {
 	if pixels := int64(w) * int64(h); pixels > DisplayPixels {
 		f := math.Sqrt(float64(DisplayPixels) / float64(pixels))
-		w, h = int(float64(w)*f), int(float64(h)*f)
+		return int(float64(w) * f), int(float64(h) * f)
 	}
-	return render(img, w, h, orientation, displayQuality)
+	return w, h
 }
 
 // render draws the image at w×h on white (so transparent screenshots do not
@@ -163,10 +172,13 @@ func render(img image.Image, w, h, orientation, quality int) ([]byte, Info, erro
 	w, h = max(w, 1), max(h, 1)
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	draw.Draw(dst, dst.Bounds(), image.White, image.Point{}, draw.Src)
-	if w == b.Dx() && h == b.Dy() {
+	switch {
+	case w == b.Dx() && h == b.Dy():
 		draw.Draw(dst, dst.Bounds(), img, b.Min, draw.Over)
-	} else {
+	case kernelFits(w, h, b.Dx(), b.Dy()):
 		draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Over, nil)
+	default:
+		shrink(dst, img)
 	}
 	dst = orient(dst, orientation)
 	var buf bytes.Buffer
@@ -174,6 +186,147 @@ func render(img image.Image, w, h, orientation, quality int) ([]byte, Info, erro
 		return nil, Info{}, err
 	}
 	return buf.Bytes(), Info{Width: dst.Bounds().Dx(), Height: dst.Bounds().Dy()}, nil
+}
+
+// While it works, a kernel scaler such as draw.CatmullRom holds every pixel
+// of (destination width × source height) as four float64s. For the
+// thumbnail of a screenshot that is some tens of megabytes. For a
+// 12-megapixel photo brought down to the display budget it is over 300 MB,
+// more than the server has, so past kernelBudget an image is scaled by
+// shrink instead.
+const (
+	kernelBytes  = 32
+	kernelBudget = 32 << 20
+)
+
+// kernelFits reports whether scaling sw×sh to w×h with the kernel scaler
+// stays within its budget. shrink only scales down, so an enlargement (which
+// nothing here asks for) is the kernel scaler's whatever it costs.
+func kernelFits(w, h, sw, sh int) bool {
+	return w > sw || h > sh || int64(w)*int64(sh)*kernelBytes <= kernelBudget
+}
+
+// Cost estimates how many bytes decoding the image and rendering its
+// thumbnail and display copy allocate between them, from its header alone,
+// so that the caller can keep many images from being worked on at once. It
+// is 0 for an image Decode would refuse.
+func Cost(contentType string, data []byte, thumbSide int) int64 {
+	cfg, err := decodeConfig(contentType, bytes.NewReader(data))
+	if err != nil || checkDimensions(cfg.Width, cfg.Height) != nil {
+		return 0
+	}
+	// What the decoders hand back: three planes at most for a JPEG, one or
+	// two bytes for grey, four for colour with alpha, eight at 16 bits.
+	perPixel := int64(4)
+	switch cfg.ColorModel {
+	case color.YCbCrModel:
+		perPixel = 3
+	case color.GrayModel:
+		perPixel = 1
+	case color.Gray16Model:
+		perPixel = 2
+	case color.RGBA64Model, color.NRGBA64Model:
+		perPixel = 8
+	}
+	orientation := Orientation(contentType, data)
+	cost := int64(cfg.Width) * int64(cfg.Height) * perPixel
+	w, h := thumbnailSize(cfg.Width, cfg.Height, thumbSide)
+	cost += renderCost(w, h, cfg.Width, cfg.Height, orientation)
+	w, h = displaySize(cfg.Width, cfg.Height)
+	return cost + renderCost(w, h, cfg.Width, cfg.Height, orientation)
+}
+
+// renderCost is what render allocates to make a w×h rendition of a sw×sh
+// image: the canvas, a second one if it has to be turned, and whatever the
+// scaler works in.
+func renderCost(w, h, sw, sh, orientation int) int64 {
+	cost := int64(max(w, 1)) * int64(max(h, 1)) * 4
+	if orientation > 1 {
+		cost *= 2
+	}
+	switch {
+	case w == sw && h == sh:
+	case kernelFits(w, h, sw, sh):
+		cost += int64(w) * int64(sh) * kernelBytes
+	default:
+		cost += int64(sw)*(shrinkRows*4+8) + int64(w)*48
+	}
+	return cost
+}
+
+// shrinkRows is how many source rows shrink converts at a time.
+const shrinkRows = 32
+
+// shrink scales src down to fill dst, on white where src is transparent, by
+// averaging the source pixels that lie under each destination pixel. It
+// reads the source a few rows at a time, so it needs the same small amount
+// of memory however large the image is.
+//
+// The sums are exact: lengths are measured in units where a source pixel is
+// dw wide and a destination pixel sw wide, so every overlap is a whole
+// number, and each destination pixel is covered by sw×sh of them.
+func shrink(dst *image.RGBA, src image.Image) {
+	sb := src.Bounds()
+	sw, sh := sb.Dx(), sb.Dy()
+	dw, dh := dst.Bounds().Dx(), dst.Bounds().Dy()
+
+	// Each source column lies under one destination column or straddles two:
+	// first[x] is the one it starts in, and part[x] how much of it is there.
+	first := make([]int32, sw)
+	part := make([]uint32, sw)
+	for x := range first {
+		left := x * dw
+		col := left / sw
+		first[x] = int32(col)
+		part[x] = uint32(min(left+dw, (col+1)*sw) - left)
+	}
+
+	band := image.NewRGBA(image.Rect(0, 0, sw, min(shrinkRows, sh)))
+	row := make([]uint64, dw*3) // one source row, summed across
+	sum := make([]uint64, dw*3) // the destination row being filled
+	area := uint64(sw) * uint64(sh)
+	for y := 0; y < sh; y++ {
+		at := y % shrinkRows
+		if at == 0 {
+			r := image.Rect(0, 0, sw, min(shrinkRows, sh-y))
+			draw.Draw(band, r, image.White, image.Point{}, draw.Src)
+			draw.Draw(band, r, src, image.Pt(sb.Min.X, sb.Min.Y+y), draw.Over)
+		}
+		clear(row)
+		pix := band.Pix[at*band.Stride:]
+		for x := 0; x < sw; x++ {
+			r, g, b := uint64(pix[x*4]), uint64(pix[x*4+1]), uint64(pix[x*4+2])
+			i, w := int(first[x])*3, uint64(part[x])
+			row[i] += r * w
+			row[i+1] += g * w
+			row[i+2] += b * w
+			if w = uint64(dw) - w; w > 0 {
+				row[i+3] += r * w
+				row[i+4] += g * w
+				row[i+5] += b * w
+			}
+		}
+		// Likewise a source row lies in one destination row or two.
+		for top, bottom := y*dh, (y+1)*dh; top < bottom; {
+			line := top / sh
+			end := min(bottom, (line+1)*sh)
+			weight := uint64(end - top)
+			for i, v := range row {
+				sum[i] += v * weight
+			}
+			if end == (line+1)*sh {
+				out := dst.Pix[line*dst.Stride:]
+				for x := 0; x < dw; x++ {
+					out[x*4] = uint8((sum[x*3] + area/2) / area)
+					out[x*4+1] = uint8((sum[x*3+1] + area/2) / area)
+					out[x*4+2] = uint8((sum[x*3+2] + area/2) / area)
+					out[x*4+3] = 0xff
+				}
+				clear(sum)
+			}
+			top = end
+		}
+	}
 }
 
 // Orientation reads a JPEG's EXIF orientation: 1 (upright as stored) to 8.

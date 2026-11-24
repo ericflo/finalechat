@@ -12,11 +12,13 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/ericflo/finalechat/internal/blob"
 	"github.com/ericflo/finalechat/internal/imaging"
@@ -29,12 +31,6 @@ const thumbnailSide = 640
 // displayMinBytes is the size past which an image gets a display rendition:
 // below it the original is already quick to load.
 const displayMinBytes = 512 << 10
-
-// backfillMaxPixels bounds what the background pass decodes. An upload is
-// decoded while its sender waits; nothing is waiting on the backfill, so it
-// leaves the largest images as they are rather than spend the memory (a
-// decoded image is 4 to 8 bytes a pixel).
-const backfillMaxPixels = 16_000_000
 
 var errAttachmentsDisabled = &apiError{Status: http.StatusServiceUnavailable, Code: "attachments_disabled", Message: "Attachments are not configured on this server."}
 
@@ -121,13 +117,13 @@ func (s *Server) storeAttachment(ctx context.Context, userID, threadID uuid.UUID
 		}
 	}
 	if imaging.ImageTypes[contentType] {
-		// Decoding a large image costs hundreds of megabytes; only a few may
-		// run at once regardless of how many uploads arrive together.
-		select {
-		case decoding <- struct{}{}:
-		case <-ctx.Done():
-			return nil, errBadRequest("The upload was cancelled.")
-		case <-time.After(20 * time.Second):
+		wait, cancel := context.WithTimeout(ctx, 20*time.Second)
+		done, err := admitImage(wait, contentType, data)
+		cancel()
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, errBadRequest("The upload was cancelled.")
+			}
 			return nil, &apiError{Status: http.StatusServiceUnavailable, Code: "busy", Message: "Too many images are being processed right now. Try again shortly.", RetryAfter: 5}
 		}
 		img, info, err := imaging.Decode(contentType, data)
@@ -143,7 +139,8 @@ func (s *Server) storeAttachment(ctx context.Context, userID, threadID uuid.UUID
 				display, dinfo = displayRendition(contentType, len(data), img, orientation)
 			}
 		}
-		<-decoding
+		img = nil
+		done()
 		if err != nil {
 			return nil, errValidation("The image could not be decoded: %v", err)
 		}
@@ -211,8 +208,32 @@ func humanBytes(n int64) string {
 	return strconv.FormatInt(n, 10) + " bytes"
 }
 
-// decoding bounds concurrent image decodes.
-var decoding = make(chan struct{}, 3)
+// imageMemory is how much memory decoding images and rendering their
+// thumbnails and display copies may hold at once, however many uploads
+// arrive together. A screenshot needs a few tens of megabytes and several
+// are worked on side by side; a phone photo needs most of it and others
+// wait their turn. The server is sized to run in 256 MiB.
+const imageMemory = 128 << 20
+
+var imageWork = semaphore.NewWeighted(imageMemory)
+
+// admitImage waits for room to work on an image and returns the function
+// that gives the room back. An image that needs more than there is in all
+// is let in alone.
+func admitImage(ctx context.Context, contentType string, data []byte) (done func(), err error) {
+	cost := min(imaging.Cost(contentType, data, thumbnailSide), imageMemory)
+	if err := imageWork.Acquire(ctx, cost); err != nil {
+		return nil, err
+	}
+	return func() {
+		// What a large image leaves behind is collected before the next one
+		// is let in, or the two would be in memory together after all.
+		if cost >= imageMemory/8 {
+			debug.FreeOSMemory()
+		}
+		imageWork.Release(cost)
+	}, nil
+}
 
 // uploadDeadline bounds how long a request body may trickle in; SSE and
 // long-polls keep the server-wide read timeout off, so uploads set their own.
@@ -602,7 +623,7 @@ func (s *Server) backfillDisplay(ctx context.Context) (found bool, saved int64) 
 		}
 		return false, 0
 	}
-	if a.ContentType == "image/gif" || a.Size <= displayMinBytes || int64(a.Width)*int64(a.Height) > backfillMaxPixels {
+	if a.ContentType == "image/gif" || a.Size <= displayMinBytes {
 		return true, 0
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -618,9 +639,14 @@ func (s *Server) backfillDisplay(ctx context.Context) (found bool, saved int64) 
 		s.log.Warn("display backfill: read original", "id", a.ID, "err", err)
 		return true, 0
 	}
-	select {
-	case decoding <- struct{}{}:
-	case <-ctx.Done():
+	// An upload too large for the image budget is worked on alone while its
+	// sender waits. Nothing is waiting on this, so such an image is left as
+	// it is rather than given the whole server.
+	if imaging.Cost(a.ContentType, data, thumbnailSide) > imageMemory {
+		return true, 0
+	}
+	done, err := admitImage(ctx, a.ContentType, data)
+	if err != nil {
 		return true, 0
 	}
 	var display []byte
@@ -628,7 +654,7 @@ func (s *Server) backfillDisplay(ctx context.Context) (found bool, saved int64) 
 	if img, _, err := imaging.Decode(a.ContentType, data); err == nil {
 		display, info = displayRendition(a.ContentType, len(data), img, imaging.Orientation(a.ContentType, data))
 	}
-	<-decoding
+	done()
 	if display == nil {
 		return true, 0
 	}

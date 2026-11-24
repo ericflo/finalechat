@@ -96,6 +96,7 @@ own public instance.
 | `FINALECHAT_B2_KEY_ID` / `FINALECHAT_B2_KEY` / `FINALECHAT_B2_BUCKET` | unset | Backblaze B2 bucket-scoped key for attachments; attachments are disabled without them |
 | `FINALECHAT_BLOB_STORE` | `b2` when keys are set, else `disabled` | `memory` keeps attachments in process memory for local development |
 | `TMPDIR` | `/tmp` | Scratch space for uploads past 4 MiB. On a read-only root filesystem mount a volume there; without one the server says so at start and holds each upload in memory (up to 201 MiB a request) |
+| `GOMEMLIMIT` | 80% of the container's memory limit | The Go runtime's memory ceiling. Leave it unset in a container: the server reads the cgroup limit and sets it, so that image work does not run a small container out of memory. It is sized to run in 256 MiB. |
 | `FINALECHAT_MESSENGER_PAGE_ID` / `FINALECHAT_MESSENGER_PAGE_TOKEN` / `FINALECHAT_MESSENGER_APP_SECRET` / `FINALECHAT_MESSENGER_VERIFY_TOKEN` | unset | Facebook Messenger connector (all four or none); see [docs/messenger.md](docs/messenger.md) |
 | `FINALECHAT_SECURE_COOKIES` | `true` | Set `false` for plain-HTTP development |
 | `FINALECHAT_TRUST_PROXY` | `true` | Take the client address from `X-Forwarded-For` (set `false` when the server is reached directly) |

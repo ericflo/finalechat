@@ -63,6 +63,7 @@ func run() error {
 	}
 	log := newLogger(cfg)
 	log.Info("starting finalechat", "version", cfg.Version, "addr", cfg.Addr, "base_url", cfg.BaseURL, "push", cfg.PushEnabled())
+	limitMemory(log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
