@@ -41,7 +41,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   const [load, setLoad] = useState<ThreadLoad | null>(null);
   const [menu, setMenu] = useState(false);
   const [relayMenu, setRelayMenu] = useState(false);
-  const [stopOpen, setStopOpen] = useState(false);
+  const [stopOpen, setStopOpen] = useState<false | "stop" | "archive">(false);
   const [renaming, setRenaming] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [viewing, setViewing] = useState<{ items: Attachment[]; index: number } | null>(null);
@@ -70,7 +70,10 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   // The agent session behind this thread, while it runs, and its stop when
   // the agent offers one.
   const session = useStore((s) => s.live[id]);
-  const stoppable = session?.stop ? session : null;
+  // A stop already on its way is not offered again, so the menus hold still
+  // while the agent answers.
+  const stopping = useStore((s) => !!s.stopping[id]);
+  const stoppable = session?.stop && !stopping ? session : null;
   const receipts = relayReceipts(thread);
   const relayName = relay ? relayAgent(relay) : "";
   // Lets a report's Reply quote it into the composer.
@@ -337,7 +340,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   const subtitle = session ? (
     <span className="sub-session">
       {who}
-      <SessionMark relay={null} />
+      <SessionMark relay={null} stopping={stopping} />
     </span>
   ) : (
     who
@@ -437,8 +440,8 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
         onCommand={sendCommand}
         handle={composer}
       />
-      {relayMenu && relay && <RelaySheet thread={id} relay={relay} onClose={() => setRelayMenu(false)} onSend={sendCommand} stopSession={stoppable ? { label: stoppable.stop?.label || "Stop session", onClick: () => { setRelayMenu(false); setStopOpen(true); } } : undefined} />}
-      {stopOpen && stoppable && <StopSessionSheet session={stoppable} onClose={() => setStopOpen(false)} />}
+      {relayMenu && relay && <RelaySheet thread={id} relay={relay} onClose={() => setRelayMenu(false)} onSend={sendCommand} stopSession={stoppable ? { label: stoppable.stop?.label || "Stop session", onClick: () => { setRelayMenu(false); setStopOpen("stop"); } } : undefined} />}
+      {stopOpen && stoppable && <StopSessionSheet session={stoppable} archive={stopOpen === "archive"} onClose={() => setStopOpen(false)} onArchived={() => { if (window.location.pathname === `/t/${id}`) goBack("/"); }} />}
       {viewing && <ImageViewer items={viewing.items} index={viewing.index} onClose={() => setViewing(null)} />}
 
       {menu && thread && (
@@ -496,8 +499,13 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
             <IconCopy /> Copy thread id
           </button>
           {stoppable && (
-            <button type="button" className="item danger" onClick={() => { setMenu(false); setStopOpen(true); }}>
+            <button type="button" className="item danger" onClick={() => { setMenu(false); setStopOpen("stop"); }}>
               <IconStop /> {stoppable.stop?.label || "Stop session"}
+            </button>
+          )}
+          {stoppable && !thread.archived_at && (
+            <button type="button" className="item danger" onClick={() => { setMenu(false); setStopOpen("archive"); }}>
+              <IconArchive /> Stop and archive
             </button>
           )}
           <button type="button" className="item danger" onClick={() => { setMenu(false); setConfirmDelete(true); }}>

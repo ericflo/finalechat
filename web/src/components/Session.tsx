@@ -1,6 +1,6 @@
-import { APIError } from "../lib/api";
+import { api, APIError } from "../lib/api";
 import { controlAPI, type SettingsCommand } from "../lib/artifacts";
-import { forgetLive, refreshLive, toast } from "../lib/store";
+import { forgetLive, refreshLive, setStopping, toast, updateThread } from "../lib/store";
 import type { LiveSession, Thread, ThreadRelay } from "../lib/types";
 import { ConfirmSheet } from "./Common";
 import { IconTerminal } from "./Icons";
@@ -15,8 +15,17 @@ export function liveRelay(t: Thread): ThreadRelay | null {
 }
 
 /** Beside a row's time while its agent session is running: "Active", or
- * the agent it relays to ("Claude") when a relay is running in it. */
-export function SessionMark({ relay }: { relay: ThreadRelay | null }) {
+ * the agent it relays to ("Claude") when a relay is running in it. While a
+ * stop asked for here is on its way to the agent, "Stopping…". */
+export function SessionMark({ relay, stopping }: { relay: ThreadRelay | null; stopping?: boolean }) {
+  if (stopping) {
+    return (
+      <span className="session-mark stopping" role="status">
+        <span className="session-dot" aria-hidden="true" />
+        Stopping…
+      </span>
+    );
+  }
   const name = relay ? relayAgent(relay) : "";
   const label = relay ? `Active session, relaying to ${relay.label || name} (${relayStatus(relay)})` : "Active session";
   return (
@@ -71,9 +80,50 @@ export async function stopSession(session: LiveSession): Promise<void> {
   }
 }
 
-/** Confirms, then stops: what the agent says the action does is the body. */
-export function StopSessionSheet({ session, onClose }: { session: LiveSession; onClose: () => void }) {
-  const label = session.stop?.label || "Stop session";
+/** Stops a session without holding the user for the agent's answer: the
+ * session's mark reads "Stopping…" until then, and only a failure says
+ * anything. With `archive` the thread is archived at once, not after the
+ * wait (`onArchived` runs when it is), and comes back if the session turns
+ * out to be running still. */
+export function stopInBackground(session: LiveSession, { archive, onArchived }: { archive?: boolean; onArchived?: () => void } = {}): void {
+  const id = session.thread_id;
+  setStopping(id, true);
+  const archived = archive
+    ? updateThread(id, { archived: true }).then(
+        () => {
+          onArchived?.();
+          return true;
+        },
+        (e: Error) => {
+          toast(e.message || "Could not archive", "error");
+          return false;
+        },
+      )
+    : Promise.resolve(false);
+  stopSession(session)
+    .then(() => forgetLive(id))
+    .catch(async (e: Error) => {
+      // A session that ended by itself in the meantime is stopped all the same.
+      const running = await api.liveSessions().then(
+        (r) => (r.sessions ?? []).some((l) => l.thread_id === id),
+        () => true,
+      );
+      if (!running) return;
+      const restored = (await archived) && (await updateThread(id, { archived: false }).then(() => true, () => false));
+      const message = e.message || "Could not stop the session";
+      const said = /[.!?]$/.test(message) ? message : `${message}.`;
+      toast(restored ? `${said} The thread is back in your inbox.` : said, "error");
+    })
+    .finally(() => {
+      setStopping(id, false);
+      void refreshLive();
+    });
+}
+
+/** Confirms, then stops: what the agent says the action does is the body.
+ * With `archive` it is "Stop and archive", the stop and the archive in one. */
+export function StopSessionSheet({ session, archive, onClose, onArchived }: { session: LiveSession; archive?: boolean; onClose: () => void; onArchived?: () => void }) {
+  const label = archive ? "Stop and archive" : session.stop?.label || "Stop session";
   return (
     <ConfirmSheet
       title={`${label}?`}
@@ -81,16 +131,7 @@ export function StopSessionSheet({ session, onClose }: { session: LiveSession; o
       confirmLabel={label}
       danger
       onClose={onClose}
-      onConfirm={() => {
-        toast("Stopping the session…", "info");
-        stopSession(session)
-          .then(() => {
-            forgetLive(session.thread_id);
-            toast("Session stopped", "success");
-          })
-          .catch((e: Error) => toast(e.message || "Could not stop the session", "error"))
-          .finally(() => void refreshLive());
-      }}
+      onConfirm={() => stopInBackground(session, { archive, onArchived })}
     />
   );
 }

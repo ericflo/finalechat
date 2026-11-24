@@ -264,6 +264,8 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .session-relay-icon { width: 12px; height: 12px; flex: none; margin-left: 1px; }
 .session-mark.relayed.blocked { color: var(--amber-text); }
 .session-mark.relayed.blocked .session-dot { background: var(--amber); }
+.session-mark.stopping { color: var(--text-3); }
+.session-mark.stopping .session-dot { background: var(--text-3); }
 .sub-session { display: inline-flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); display: inline-block; }
 .pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }

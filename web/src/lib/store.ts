@@ -50,6 +50,8 @@ export interface State {
   searchHits: { query: string; ids: string[] } | null;
   /** Conversations whose agent session is running now, by thread id. */
   live: Record<string, LiveSession>;
+  /** Threads whose session was asked to stop from here and has not answered yet. */
+  stopping: Record<string, true>;
 }
 
 const defaultSettings: Settings = { notify_all_messages: false, remote_mode: false };
@@ -124,6 +126,7 @@ let state: State = {
   drafts: typeof localStorage !== "undefined" ? readDrafts() : {},
   searchHits: null,
   live: {},
+  stopping: {},
 };
 
 const listeners = new Set<() => void>();
@@ -1052,6 +1055,17 @@ export function forgetLive(threadId: string) {
     const live = { ...s.live };
     delete live[threadId];
     return { live };
+  });
+}
+
+/** Marks a thread's session as being stopped, until its agent answers. */
+export function setStopping(threadId: string, on: boolean) {
+  if (!!state.stopping[threadId] === on) return;
+  set((s) => {
+    const stopping = { ...s.stopping };
+    if (on) stopping[threadId] = true;
+    else delete stopping[threadId];
+    return { stopping };
   });
 }
 

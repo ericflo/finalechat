@@ -756,6 +756,7 @@ function ThreadRow({
   const unread = t.unread_count > 0;
   const needs = t.pending_questions > 0;
   const session = useStore((s) => s.live[t.id]);
+  const stopping = useStore((s) => !!s.stopping[t.id]);
   const relayed = session ? liveRelay(t) : null;
   const liveActivity = useLiveActivity(t.activity);
   // An agent waiting on the user is not working, and never looks like it.
@@ -899,7 +900,7 @@ function ThreadRow({
             <span className="thread-agent">{t.agent}</span>
           )}
           <span className="thread-side">
-            {session && <SessionMark relay={relayed} />}
+            {session && <SessionMark relay={relayed} stopping={stopping} />}
             {showArchived && t.archived_at && (
               <span className="pill muted">Archived</span>
             )}
