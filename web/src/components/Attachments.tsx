@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Attachment } from "../lib/types";
 import { IconBack, IconClose, IconDownload, IconFile } from "./Icons";
 
@@ -82,13 +82,35 @@ interface View {
 
 const atRest: View = { scale: 1, x: 0, y: 0 };
 
-/** One image in the viewer. The current one and its neighbours are all
- * mounted, so a neighbour has loaded and decoded by the time it is swiped
- * to. Until an image arrives its thumbnail (already on screen in the thread)
- * stands in at the same size. `load` holds a neighbour back until the image
- * on screen has arrived, so fetching ahead never slows the one being looked
- * at; once started, a load is not withdrawn. */
-function Slide({ item, current, load, from, view, moving, onSettled }: { item: Attachment; current: boolean; load: boolean; from: number; view: View; moving: boolean; onSettled: (id: string) => void }) {
+/** Space between neighbouring images in the strip, in pixels. */
+const slideGap = 16;
+
+/** How much of a pull past the first or last image the strip gives to. */
+const edgeGive = 0.3;
+
+const between = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/** The transition that brings the strip to rest `dist` pixels away, let go
+ * of at `speed` px/ms towards it. The curve leaves at the speed the finger
+ * had, so the hand-off has no jolt: a flick coasts in and slows, a strip
+ * let go of at a standstill eases away and settles. */
+function glideTo(dist: number, speed: number): string {
+  if (dist < 1) return "";
+  const ms = Math.round(speed > 0.1 ? between((2.5 * dist) / speed, 180, 360) : between(160 + dist * 0.45, 180, 360));
+  // A cubic-bezier (x1, y1, …) sets off at y1/x1 times its average speed.
+  const y1 = between((0.2 * speed * ms) / dist, 0, 1);
+  return `transform ${ms}ms cubic-bezier(0.2, ${y1.toFixed(3)}, 0.3, 1)`;
+}
+
+/** One image in the viewer's strip, at position `at`. The current one and
+ * its neighbours are all mounted, so a neighbour has loaded and decoded by
+ * the time it is pulled into view. Until an image arrives its thumbnail
+ * (already on screen in the thread) stands in at the same size. `load` holds
+ * a neighbour back until the image on screen has arrived, so fetching ahead
+ * never slows the one being looked at; once started, a load is not
+ * withdrawn. Memoised: dragging the strip moves it without re-rendering the
+ * images on it. */
+const Slide = memo(function Slide({ item, at, current, load, view, moving, onSettled }: { item: Attachment; at: number; current: boolean; load: boolean; view: View; moving: boolean; onSettled: (id: string) => void }) {
   const [src, setSrc] = useState(() => viewSrc(item));
   const [state, setState] = useState<"loading" | "loaded" | "failed">("loading");
   const [started, setStarted] = useState(load);
@@ -113,7 +135,7 @@ function Slide({ item, current, load, from, view, moving, onSettled }: { item: A
   const w = item.display_width || item.width;
   const h = item.display_height || item.height;
   return (
-    <div className={`viewer-slide ${current ? "current" : ""} ${current && from > 0 ? "from-next" : ""} ${current && from < 0 ? "from-prev" : ""}`} aria-hidden={!current}>
+    <div className="viewer-slide" style={{ transform: `translateX(calc(${at} * (100% + ${slideGap}px)))` }} aria-hidden={!current}>
       {state === "loading" && item.thumb_url && w && h ? <img className="viewer-thumb" src={item.thumb_url} width={w} height={h} alt="" draggable={false} style={style} /> : null}
       {state === "failed" ? (
         <span className="viewer-failed">Could not load this image.</span>
@@ -140,16 +162,47 @@ function Slide({ item, current, load, from, view, moving, onSettled }: { item: A
       )}
     </div>
   );
+});
+
+interface Gesture {
+  start: View;
+  dist: number;
+  cx: number;
+  cy: number;
+  moved: boolean;
+  /** At rest one finger does one of two things, and whichever way it sets
+   * off is the way it stays: sideways drags the strip, down pulls the image
+   * away to close. */
+  axis: "x" | "y" | null;
+  /** Where the strip was when it was touched; not zero if it was caught
+   * while still gliding from the last swipe. */
+  base: number;
+  /** Sideways speed in px/ms, and the sample it was last measured from. */
+  vx: number;
+  px: number;
+  pt: number;
 }
 
-/** Full-screen image viewer with pinch, double-tap and wheel zoom, drag to pan,
- * and a swipe down to dismiss. Terminal screenshots need the zoom. */
+/** Full-screen image viewer. The images of a message sit side by side in a
+ * strip: a sideways drag pulls the next one in under the finger, and on
+ * release the strip glides to whichever image it should rest on. Pinch,
+ * double-tap and wheel zoom, drag to pan, and a swipe down to dismiss.
+ * Terminal screenshots need the zoom. */
 export function ImageViewer({ items, index, onClose }: { items: Attachment[]; index: number; onClose: () => void }) {
   const [i, setI] = useState(Math.min(index, items.length - 1));
   const item = items[i] as Attachment;
-  // Which way the last step went: the image arrives from that side, and the
-  // one after it in that direction is fetched ahead.
+  // The images mounted, first to last: the current one and its neighbours,
+  // and for as long as the strip is still moving, any that a quick run of
+  // swipes has left on their way out of view.
+  const [span, setSpan] = useState<readonly [number, number]>(() => [i - 1, i + 1]);
+  const tidy = () => setSpan((s) => (s[0] === i - 1 && s[1] === i + 1 ? s : [i - 1, i + 1]));
+  // Which way the last step went: the image after the next in that direction
+  // is fetched ahead.
   const [from, setFrom] = useState(0);
+  // How far the strip is dragged from where image i rests, and the
+  // transition that last sent it gliding ("" for the stylesheet's own).
+  const [drag, setDrag] = useState(0);
+  const [glide, setGlide] = useState("");
   // Images that have arrived (or given up).
   const [settled, setSettled] = useState<ReadonlySet<string>>(() => new Set());
   const onSettled = useCallback((id: string) => setSettled((s) => (s.has(id) ? s : new Set(s).add(id))), []);
@@ -160,6 +213,7 @@ export function ImageViewer({ items, index, onClose }: { items: Attachment[]; in
     setI(next);
     setFrom(delta);
     setView(atRest);
+    setSpan(([lo, hi]) => [Math.min(lo, next - 1), Math.max(hi, next + 1)]);
   };
   // Fetching ahead goes in order of need: the image on screen, then its
   // neighbours (mounted below), then one further along the way being swiped.
@@ -169,15 +223,31 @@ export function ImageViewer({ items, index, onClose }: { items: Attachment[]; in
   const further = here && (!neighbour || settled.has(neighbour.id)) ? items[i + 2 * ahead] : undefined;
   useEffect(() => warm(further), [further]);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
-  const gesture = useRef<{ start: View; dist: number; cx: number; cy: number; moved: boolean } | null>(null);
+  const gesture = useRef<Gesture | null>(null);
   const lastTap = useRef(0);
+
+  /** The distance from one image's resting place to the next. */
+  const stride = () => (bodyRef.current?.clientWidth ?? 0) + slideGap;
+  /** How far the strip is from rest right now, as drawn: not zero while it
+   * is still gliding from the last swipe. */
+  const strayed = () => {
+    const el = trackRef.current;
+    if (!el) return 0;
+    const off = new DOMMatrixReadOnly(getComputedStyle(el).transform).m41 + i * stride();
+    return Math.abs(off) < 1 ? 0 : off;
+  };
+  // Past the first or last image the strip gives a little and no more.
+  const pastEnd = (x: number) => (x > 0 && i === 0) || (x < 0 && i === items.length - 1);
+  const pull = (x: number) => (pastEnd(x) ? x * edgeGive : x);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
-      if (e.key === "ArrowRight") go(1);
-      if (e.key === "ArrowLeft") go(-1);
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      setGlide("");
+      go(e.key === "ArrowRight" ? 1 : -1);
     };
     window.addEventListener("keydown", onKey);
     const { overflow } = document.body.style;
@@ -219,9 +289,16 @@ export function ImageViewer({ items, index, onClose }: { items: Attachment[]; in
     const pts = Array.from(pointers.current.values());
     if (pts.length === 2) {
       const [a, b] = pts as [{ x: number; y: number }, { x: number; y: number }];
-      gesture.current = { start: view, dist: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, moved: true };
+      gesture.current = { start: view, dist: Math.hypot(a.x - b.x, a.y - b.y), cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, moved: true, axis: null, base: 0, vx: 0, px: 0, pt: 0 };
+      setDrag(0); // a second finger turns a drag into a pinch
     } else if (pts.length === 1) {
-      gesture.current = { start: view, dist: 0, cx: e.clientX, cy: e.clientY, moved: false };
+      // A touch while the strip is still gliding catches it where it is.
+      let base = strayed();
+      if (!base) tidy();
+      if (view.scale > 1) base = 0;
+      else if (pastEnd(base)) base /= edgeGive;
+      gesture.current = { start: view, dist: 0, cx: e.clientX, cy: e.clientY, moved: false, axis: base ? "x" : null, base, vx: 0, px: e.clientX, pt: e.timeStamp };
+      if (base) setDrag(pull(base));
     }
   };
 
@@ -237,11 +314,28 @@ export function ImageViewer({ items, index, onClose }: { items: Attachment[]; in
       g.moved = true;
       return;
     }
-    const dx = e.clientX - g.cx;
-    const dy = e.clientY - g.cy;
+    let dx = e.clientX - g.cx;
+    let dy = e.clientY - g.cy;
     if (Math.abs(dx) + Math.abs(dy) > 6) g.moved = true;
-    if (g.start.scale > 1) setView(clamp({ scale: g.start.scale, x: g.start.x + dx, y: g.start.y + dy }));
-    else if (dy > 0) setView({ scale: 1, x: 0, y: dy * 0.6 });
+    if (g.start.scale > 1) {
+      setView(clamp({ scale: g.start.scale, x: g.start.x + dx, y: g.start.y + dy }));
+      return;
+    }
+    if (!g.axis && Math.abs(dx) + Math.abs(dy) > 10) {
+      g.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+      // Measure from here, so nothing jumps by the distance it took to tell.
+      g.cx = e.clientX;
+      g.cy = e.clientY;
+      dx = dy = 0;
+    }
+    if (g.axis === "x") {
+      const dt = e.timeStamp - g.pt;
+      if (dt > 0) g.vx = 0.7 * ((e.clientX - g.px) / dt) + 0.3 * g.vx;
+      g.px = e.clientX;
+      g.pt = e.timeStamp;
+      // One image either way is as far as there is anything to show.
+      setDrag(pull(between(g.base + dx, -stride(), stride())));
+    } else if (g.axis === "y" && dy > 0) setView({ scale: 1, x: 0, y: dy * 0.6 });
   };
 
   const onPointerUp = (e: React.PointerEvent) => {
@@ -251,23 +345,44 @@ export function ImageViewer({ items, index, onClose }: { items: Attachment[]; in
     if (pointers.current.size > 0) {
       // One finger left: continue as a pan from here.
       const rest = Array.from(pointers.current.values())[0] as { x: number; y: number };
-      gesture.current = { start: view, dist: 0, cx: rest.x, cy: rest.y, moved: true };
+      gesture.current = { start: view, dist: 0, cx: rest.x, cy: rest.y, moved: true, axis: null, base: 0, vx: 0, px: rest.x, pt: e.timeStamp };
       return;
     }
     gesture.current = null;
+    if (g.axis === "x") {
+      // Let go of the strip and it glides to rest, `step` images on from i.
+      // A touch the system took away says nothing of where it ended: the
+      // strip settles from where it was last seen.
+      const taken = e.type === "pointercancel";
+      const dx = (taken ? g.px : e.clientX) - g.cx;
+      const total = between(g.base + dx, -stride(), stride());
+      const shown = pull(total);
+      // A finger that stopped before lifting did not flick.
+      const v = taken || e.timeStamp - g.pt > 100 ? 0 : g.vx;
+      const at = -total / stride(); // where the strip is, in images from i
+      let step = 0; // untouched but for the catch, it carries on to i
+      if (g.moved) {
+        // Let go at a standstill, it settles on the image nearer the middle.
+        if (Math.abs(v) <= 0.3) step = Math.round(at);
+        // A flick goes one on from i that way, wherever the strip had got
+        // to: a second flick before the first has landed is not lost.
+        else if (Math.sign(dx) === Math.sign(v)) step = v < 0 ? 1 : -1;
+        // Dragged one way and flicked back the other: the move is off.
+        else step = v < 0 ? Math.ceil(at) : Math.floor(at);
+      }
+      if (!items[i + step]) step = 0;
+      const rest = -step * stride();
+      const speed = Math.max(0, v * Math.sign(rest - shown)) * (shown === total ? 1 : edgeGive);
+      setGlide(glideTo(Math.abs(rest - shown), speed));
+      setDrag(0);
+      if (step) go(step);
+      return;
+    }
     if (g.start.scale === 1 && view.y > 90) {
       onClose();
       return;
     }
-    // At rest, a horizontal swipe pages through the message's images.
-    const dx = e.clientX - g.cx;
-    const dy = e.clientY - g.cy;
-    if (g.start.scale === 1 && view.scale === 1 && Math.abs(dx) > 60 && Math.abs(dy) < 60) {
-      setView({ scale: 1, x: 0, y: 0 });
-      go(dx < 0 ? 1 : -1);
-      return;
-    }
-    if (g.start.scale === 1 && view.scale === 1) setView({ scale: 1, x: 0, y: 0 });
+    if (g.start.scale === 1 && view.scale === 1) setView(atRest);
     if (!g.moved) {
       // Single tap on the backdrop (outside the image) dismisses the viewer.
       const t = e.target as HTMLElement | null;
@@ -321,10 +436,17 @@ export function ImageViewer({ items, index, onClose }: { items: Attachment[]; in
         </button>
       </div>
       <div ref={bodyRef} className="viewer-body" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} onWheel={onWheel}>
-        {[i - 1, i, i + 1].map((n) => {
-          const it = items[n];
-          return it ? <Slide key={it.id} item={it} current={n === i} load={n === i || here} from={from} view={n === i ? view : atRest} moving={n === i && gesture.current !== null} onSettled={onSettled} /> : null;
-        })}
+        <div
+          ref={trackRef}
+          className="viewer-track"
+          style={{ transform: `translateX(calc(${-i} * (100% + ${slideGap}px) + ${drag}px))`, transition: gesture.current ? "none" : glide || undefined }}
+          // At rest again: the images that slid away can go.
+          onTransitionEnd={(e) => e.target === e.currentTarget && tidy()}
+        >
+          {items.map((it, n) =>
+            n < span[0] || n > span[1] ? null : <Slide key={it.id} item={it} at={n} current={n === i} load={n === i || here} view={n === i ? view : atRest} moving={n === i && gesture.current !== null} onSettled={onSettled} />,
+          )}
+        </div>
       </div>
       {here && view.scale === 1 && <div className="viewer-hint">{items.length > 1 ? "Swipe for the next image · " : ""}Double-tap or pinch to zoom · swipe down to close</div>}
     </div>
