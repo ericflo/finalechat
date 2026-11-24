@@ -1407,7 +1407,8 @@ def finish_question(question: dict, as_json: bool) -> int:
               f"resume with `finalechat wait-answer {question.get('id')}`", file=sys.stderr)
         return EXIT_TIMEOUT
     if status == "dismissed":
-        print(f"The user dismissed question {question.get('id')}; do not ask it again.", file=sys.stderr)
+        print(f"The user dismissed question {question.get('id')} without answering. Nothing was decided: "
+              "do not ask it again or choose for them; wait for their next message.", file=sys.stderr)
     else:
         print(f"Question {question.get('id')} was {status}.", file=sys.stderr)
     return EXIT_RESOLVED
@@ -2378,8 +2379,14 @@ def phone_question_answer(client, tool_input, ref, title, agent):
         parts.append(f"{label}: {answer_summary(question)}")
     reason = ("The user answered from their phone via Finalechat instead of the terminal. Answers: "
               + "; ".join(parts) + ". Use these answers and do not ask again.")
-    if unanswered:
-        missing = ", ".join((item["header"] or item["question"]) for item, _ in unanswered)
+    dismissed = [item for item, question in unanswered if question.get("status") == "dismissed"]
+    silent = [item for item, question in unanswered if question.get("status") != "dismissed"]
+    if dismissed:
+        closed = ", ".join((item["header"] or item["question"]) for item in dismissed)
+        reason += (f" The user dismissed without answering: {closed}. Nothing was decided there: "
+                   "do not choose for them and do not ask again; leave it until they say.")
+    if silent:
+        missing = ", ".join((item["header"] or item["question"]) for item in silent)
         reason += f" The user did not answer: {missing}; decide those yourself or ask again later."
     reason += answer_attachment_hints(client, ref, created)
     return reason
@@ -2746,6 +2753,10 @@ def mcp_call(client: Client, name: str, arguments: dict, metadata=None):
             return f"Answer: {selected or text}"
         if status == "pending":
             return f"No answer within {timeout} seconds; question {question.get('id')} still pending."
+        if status == "dismissed":
+            return ("The user dismissed the question without answering. Nothing was decided: do not ask it "
+                    "again, do not choose for them, and do not go ahead with what it was holding up. "
+                    "Wait for their next message.")
         return f"The question was {status} before it was answered."
 
     if name == "finalechat_retitle":

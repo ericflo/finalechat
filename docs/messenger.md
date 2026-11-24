@@ -22,9 +22,10 @@ Once linked, open the chat with the Page in Messenger.
   Files are named on a `📎 name (size)` line and then sent: images show
   inline, other files as download cards.
 - **Questions.** They arrive with a numbered list, one button per option,
-  and **Skip**. Tap a button, or type the number (`1, 3` for several), or
-  type a free answer when the question takes one. Skip is the app's
-  dismiss: the agent is told to use its judgement.
+  and **Dismiss**. Tap a button, or type the number (`1, 3` for several), or
+  type a free answer when the question takes one. Dismiss does what it does
+  on the card in the app: the question closes and nothing is sent to the
+  agent, so what you type next is an ordinary message.
 - **Replies.** Plain text goes to the thread that last spoke to you. When
   that is not where your previous reply went, the Page says `→ [#2 title]`
   so you notice. If that thread has a question open, what you type answers
@@ -41,7 +42,7 @@ Once linked, open the chat with the Page in Messenger.
 | `/read 3` | The last few messages of #3 (or of the current thread) |
 | `/new` | Start an eagent session: pick the project and folder, then send the first message. `/new fix the flaky test` starts one right away in the project root. `/new codex fix the flaky test` (or `claude`, or any relay profile the project offers) has eagent start that agent to do the work |
 | `/interrupt`, `/autopilot until 10:00`, `/relay` … | eagent's controls for a Codex or Claude it runs; they go to the thread as typed, never as an answer |
-| `/skip` | Decline the current thread's open question |
+| `/dismiss` | Close the current thread's open question without answering (also `/skip`) |
 | `/more` | The rest of a long message |
 | `/quiet`, `/loud` | Only questions and important messages, or everything |
 | `/pause`, `/resume` | Stop the relay while you are back at your desk, and start it again when you leave; the link stays. Resuming starts from that moment and re-sends the questions still waiting on you |

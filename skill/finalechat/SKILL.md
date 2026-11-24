@@ -140,8 +140,12 @@ session adopted them. See the CLI's subcommand help and the repository's
   the id is printed to stderr. Resume with `finalechat wait-answer <id>` if
   you can keep waiting, otherwise say so and proceed with a sensible default
   (tell the user which one you took).
-- `4`: the question was cancelled or expired. Do not retry the same
-  question; continue with your best judgement and say so.
+- `4`: the question was dismissed, cancelled or expired. Do not retry the
+  same question. Dismissed (stderr says so) means the user closed it without
+  answering: nothing was decided, so do not choose for them and do not go
+  ahead with what the question was holding up; stop there and wait for what
+  they write next. Cancelled or expired: continue with your best judgement
+  and say so.
 
 ## Without the CLI
 

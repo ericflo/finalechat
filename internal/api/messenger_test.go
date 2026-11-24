@@ -416,7 +416,7 @@ func TestMessengerQuestions(t *testing.T) {
 		return sub(a.must(http.StatusOK, "GET", "/api/v1/questions/"+id, nil), "question")
 	}
 
-	// Buttons: one per option plus Skip.
+	// Buttons: one per option plus Dismiss.
 	q1 := ask(map[string]any{"title": "deploy", "prompt": "Promote to **production**?", "options": []map[string]any{{"label": "Ship it", "description": "same image"}, {"label": "Hold"}}})
 	from := g.mark()
 	relay(t)
@@ -425,7 +425,7 @@ func TestMessengerQuestions(t *testing.T) {
 		t.Fatalf("question text: %+v", sent)
 	}
 	quick := sent[0].Quick
-	if len(quick) != 3 || quick[1].Payload != "a:"+q1+":1" || quick[2].Title != "Skip" {
+	if len(quick) != 3 || quick[1].Payload != "a:"+q1+":1" || quick[2].Title != "Dismiss" {
 		t.Fatalf("quick replies: %+v", quick)
 	}
 	tap(t, psid, quick[1].Title, quick[1].Payload)

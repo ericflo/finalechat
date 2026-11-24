@@ -16,7 +16,8 @@ const (
 	QuestionAnswered  = "answered"
 	QuestionCancelled = "cancelled"
 	QuestionExpired   = "expired"
-	// QuestionDismissed means the user declined to answer.
+	// QuestionDismissed means the user closed the question without answering:
+	// nothing is decided and nothing is sent to the agent.
 	QuestionDismissed = "dismissed"
 )
 
@@ -295,7 +296,8 @@ func (s *Store) CancelQuestion(ctx context.Context, userID, id uuid.UUID) (*Ques
 	return s.resolveQuestion(ctx, userID, id, QuestionCancelled)
 }
 
-// DismissQuestion records that the user declined to answer.
+// DismissQuestion records that the user closed the question without
+// answering.
 func (s *Store) DismissQuestion(ctx context.Context, userID, id uuid.UUID) (*Question, error) {
 	return s.resolveQuestion(ctx, userID, id, QuestionDismissed)
 }

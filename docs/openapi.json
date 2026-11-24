@@ -3084,8 +3084,8 @@
         "tags": [
           "Questions"
         ],
-        "summary": "Decline to answer (the app's counterpart of cancel)",
-        "description": "The user declines; status becomes dismissed and the agent's wait returns. Emits question.dismissed.",
+        "summary": "Close a question without answering (the app's counterpart of cancel)",
+        "description": "The user closes the question without answering; status becomes dismissed and the agent's wait returns. Nothing is sent to the agent, which has no answer and no go-ahead: it waits for the user's next message. Emits question.dismissed.",
         "parameters": [
           {
             "name": "id",

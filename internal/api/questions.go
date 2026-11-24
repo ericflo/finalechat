@@ -458,7 +458,8 @@ func (s *Server) handleCancelQuestion(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/v1/questions/{id}/dismiss
 //
-// The user declines to answer; the agent sees status "dismissed".
+// The user closes the question without answering; the agent sees status
+// "dismissed", which is no answer and no go-ahead.
 func (s *Server) handleDismissQuestion(w http.ResponseWriter, r *http.Request) {
 	s.resolveQuestion(w, r, store.QuestionDismissed)
 }

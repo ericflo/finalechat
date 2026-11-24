@@ -308,7 +308,7 @@ const messengerHelp = `Commands:
 /read 3 — recent messages in #3
 /new — start an eagent session
 /new antigravity … — start a relay (also codex or claude, if set up)
-/skip — decline the open question
+/dismiss — close the open question without answering
 /more — rest of a long message
 /quiet, /loud — only questions and important messages, or everything
 /pause, /resume — stop or restart the relay (keeps the link)
@@ -699,7 +699,7 @@ func (c *mchat) dismiss(thread *store.Thread, q *store.Question) error {
 	}
 	c.s.bus.Publish(context.WithoutCancel(c.ctx), bus.Event{Type: bus.QuestionDismissed, UserID: c.user.ID.String(), ThreadID: thread.ID.String(), QuestionID: dq.ID.String()})
 	_ = c.s.store.SetMessengerLastThread(c.ctx, c.link.UserID, thread.ID)
-	c.sayAbout(thread.ID, c.s.messengerTag(c.ctx, c.link.UserID, thread)+" Skipped; the agent will use its judgement.", nil)
+	c.sayAbout(thread.ID, c.s.messengerTag(c.ctx, c.link.UserID, thread)+" Dismissed. Nothing was sent to the agent.", nil)
 	return nil
 }
 

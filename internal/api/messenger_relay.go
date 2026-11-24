@@ -607,7 +607,7 @@ func (s *Server) messengerSendFiles(ctx context.Context, link *store.MessengerLi
 }
 
 // messengerSendQuestion sends a question with numbered options, one quick
-// reply per option and Skip.
+// reply per option and Dismiss.
 func (s *Server) messengerSendQuestion(ctx context.Context, link *store.MessengerLink, thread *store.Thread, q *store.Question) error {
 	var b strings.Builder
 	b.WriteString("❓ " + s.messengerTag(ctx, link.UserID, thread) + "\n" + strings.TrimSpace(messenger.Markdown(q.Prompt)))
@@ -631,9 +631,9 @@ func (s *Server) messengerSendQuestion(ctx context.Context, link *store.Messenge
 	if q.AllowFreeform {
 		hints = append(hints, "Or just type an answer.")
 	}
-	hints = append(hints, "Skip to let the agent decide.")
+	hints = append(hints, "Dismiss closes it and sends nothing.")
 	b.WriteString("\n\n" + strings.Join(hints, " "))
-	quick = append(quick, messenger.QuickReply{Title: "Skip", Payload: "d:" + q.ID.String()})
+	quick = append(quick, messenger.QuickReply{Title: "Dismiss", Payload: "d:" + q.ID.String()})
 
 	pieces := messenger.Chunk(b.String(), messenger.MaxTextRunes)
 	for i, text := range pieces {

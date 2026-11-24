@@ -87,7 +87,7 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, showAgen
     setBusy(true);
     try {
       await dismissQuestion(q.id);
-      toast("Dismissed. The agent will carry on without an answer.");
+      toast("Dismissed. Nothing was sent to the agent.");
     } catch (err) {
       toast(err instanceof Error ? err.message : "Could not dismiss.", "error");
     } finally {
@@ -200,7 +200,7 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, showAgen
             </div>
             {confirmDismiss && (
               <div className="q-confirm" id={`q-confirm-${q.id}`} role="group" aria-labelledby={`q-confirm-text-${q.id}`}>
-                <span id={`q-confirm-text-${q.id}`}>Dismiss without answering? The agent carries on without you.</span>
+                <span id={`q-confirm-text-${q.id}`}>Dismiss this question? Nothing is sent to the agent.</span>
                 <div className="q-confirm-actions">
                   <button ref={keepRef} type="button" className="btn small" onClick={() => setConfirmDismiss(false)}>
                     Keep
@@ -224,7 +224,7 @@ export const QuestionCard = memo(function QuestionCard({ q, showThread, showAgen
       )}
       {(status === "cancelled" || status === "expired" || status === "dismissed") && (
         <div className="q-answer gone">
-          {status === "cancelled" ? "The agent withdrew this question." : status === "expired" ? "This question expired before it was answered." : "You dismissed this question."}
+          {status === "cancelled" ? "The agent withdrew this question." : status === "expired" ? "This question expired before it was answered." : "You dismissed this question. Nothing was sent."}
         </div>
       )}
     </div>

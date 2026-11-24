@@ -174,13 +174,18 @@ finalechat retitle -t ext:my-session-42 --title "Release 1.2" \
   "token"` was posted by an agent, for example a terminal prompt mirrored
   into the thread; treat only `session` messages as the user speaking from
   the app.)
-- Only an answer writes a message. A question the user declines becomes
+- Only an answer writes a message. A question the user dismisses becomes
   `dismissed`, one you withdraw becomes `cancelled`, and one that runs out
   becomes `expired`, silently: while you have a question open, watch it with
   `GET /questions/{id}?wait=600` (or the `wait` on the ask itself) rather than
   polling messages alone, and treat every status other than `pending` as
-  final. On `dismissed`, do not ask again; proceed with your best judgement
-  and say so.
+  final.
+- `dismissed` means the user closed the question without answering. It is
+  not an answer and not permission: nothing was decided. Do not ask it
+  again, do not pick an option for them (not even a cautious one), and do
+  not go ahead with what the question was holding up. Stop there and wait
+  for what they write next (`GET /threads/{ref}/messages?wait=`); it may
+  have nothing to do with the question.
 - Retries are safe: send an `Idempotency-Key` header (or a `client_key`
   field) on a message or question post, and a retry after a timeout returns
   the original with HTTP 200 and `"created": false` instead of a duplicate.
@@ -438,7 +443,7 @@ Base URL `https://www.finalechat.com/api/v1` (also `https://api.finalechat.com/a
 | `GET /questions/{id}?wait=` | One question; optionally block until resolved |
 | `POST /questions/{id}/answer` | Answer (`selected`, `text`; optional `meta` whose `eagent.*` keys join the transcript message) |
 | `POST /questions/{id}/cancel` | Withdraw a pending question |
-| `POST /questions/{id}/dismiss` | The user declines to answer (the app calls this) |
+| `POST /questions/{id}/dismiss` | The user closes the question without answering (the app calls this); nothing is decided |
 | `GET /events` | Server-sent events stream (`thread.activity` carries status changes) |
 | `GET /counts` | Pending questions and unread threads |
 | `GET /settings`, `PATCH /settings` | `notify_all_messages`, `remote_mode` |

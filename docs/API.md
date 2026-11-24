@@ -329,7 +329,7 @@ fields. `url` and `thumb_url` are relative to the base URL. `message_id` is
 }
 ```
 
-`status` is `pending`, `answered`, `cancelled`, `expired` or `dismissed` (the user declined; `answer` stays null and `answered_at` is set). `answer` is
+`status` is `pending`, `answered`, `cancelled`, `expired` or `dismissed` (the user closed it without answering; `answer` stays null and `answered_at` is set). `answer` is
 `null` until answered; `selected` lists chosen option labels in the order
 chosen and `text` is the free-form reply (absent when empty). `answered_at`
 is set whenever the question leaves `pending`, including on cancel or expiry.
@@ -1018,8 +1018,11 @@ polling messages see what context the answering client supplies. A question that
 
 ### POST /questions/{id}/dismiss
 
-The user declines to answer: `status` becomes `dismissed`, the agent's wait
-returns, and the question stops counting as pending. Returns
+The user closes the question without answering: `status` becomes
+`dismissed`, the agent's wait returns, and the question stops counting as
+pending. No message is written and nothing is sent to the agent. An agent
+that sees `dismissed` has no answer and no go-ahead: it does not ask again,
+does not choose for the user, and waits for what they write next. Returns
 `{"question": {...}}` and emits `question.dismissed`. `409 already_resolved`
 if the question is no longer pending.
 
@@ -1060,7 +1063,7 @@ data: {"at":"…","thread":{…},"message":{…},"counts":{…}}
 | `thread.created`, `thread.updated` | `{at, thread, counts}` |
 | `thread.deleted` | `{at, thread_id, counts}` |
 | `thread.activity` | `{at, thread_id, activity}`; `activity` is the new status or `null`. No thread object and no counts: statuses are frequent and never change badges. |
-| `question.dismissed` | `{at, thread, question, counts}` when the user declines a question |
+| `question.dismissed` | `{at, thread, question, counts}` when the user closes a question without answering |
 | `ping` | `{at}` every 20 seconds; a client that sees none for 45 seconds should reconnect |
 | `message.created` | `{at, thread, message, counts}` |
 | `message.deleted` | `{at, thread, message_id, counts}` |

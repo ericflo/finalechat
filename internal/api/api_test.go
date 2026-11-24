@@ -1278,6 +1278,14 @@ func TestDismissAndProvenance(t *testing.T) {
 	if got := str(sub(a.must(http.StatusOK, "GET", "/api/v1/questions/"+qid, nil), "question"), "status"); got != "dismissed" {
 		t.Fatalf("agent should see dismissed, got %s", got)
 	}
+	// A dismissal sends nothing: no message is written for the agent to read,
+	// and the question carries no answer.
+	if msgs := a.must(http.StatusOK, "GET", "/api/v1/threads/"+thread+"/messages", nil)["messages"].([]any); len(msgs) != 0 {
+		t.Fatalf("a dismissal must not write a message, got %v", msgs)
+	}
+	if ans := sub(a.must(http.StatusOK, "GET", "/api/v1/questions/"+qid, nil), "question")["answer"]; ans != nil {
+		t.Fatalf("a dismissed question must have no answer, got %v", ans)
+	}
 
 	// An agent posting sender=user (a terminal mirror) is recorded with token
 	// origin and does not mark the thread read; the app's own reply does.
