@@ -8,14 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/color"
+	"image/draw"
 	"image/gif"
 	"image/jpeg"
 	"image/png"
 	"io"
 	"math"
 
-	"golang.org/x/image/draw"
 	"golang.org/x/image/webp"
 )
 
@@ -47,8 +46,8 @@ var ImageTypes = map[string]bool{
 // MaxPixels bounds decode work so a tiny file cannot declare a huge canvas.
 // 300 MP admits everything realistic (50 MP phone sensors, 8K stills at
 // ~33 MP, large scans and panoramas) while still rejecting absurd
-// gigapixel headers that would exhaust memory. Concurrent decodes are
-// additionally capped (see the decoding semaphore in internal/api).
+// gigapixel headers outright. Whether the server has the memory for a
+// particular image is a separate question, answered by Estimate.
 const MaxPixels = 300_000_000
 
 // checkDimensions rejects non-positive sizes and pixel counts above
@@ -112,10 +111,19 @@ func decode(contentType string, r io.Reader) (image.Image, error) {
 	return nil, ErrUnsupported
 }
 
-// DisplayPixels caps the display rendition at a 4K frame (3840×2160).
-// Screenshots up to that size keep every pixel, so text stays sharp when
-// zoomed; anything larger (phone photos, 5K captures) is scaled down to it.
+// DisplayPixels is the size a display rendition is brought down to: a 4K
+// frame's worth (3840×2160). Screenshots up to that size keep every pixel,
+// so text stays sharp when zoomed; a phone photo or a 5K capture is scaled
+// to it.
 const DisplayPixels = 3840 * 2160
+
+// displayShort is the short side a display rendition is never taken below.
+// A long screenshot is many megapixels and only a phone's width across:
+// scaled by its pixel count alone it would come out too narrow to read.
+const displayShort = 2160
+
+// jpegMaxSide is the longest side a JPEG can have.
+const jpegMaxSide = 65535
 
 // JPEG qualities. The display rendition is what the app shows full screen,
 // so it is compressed gently; a thumbnail is seen small.
@@ -131,7 +139,12 @@ const (
 func Thumbnail(img image.Image, maxSide, orientation int) ([]byte, Info, error) {
 	b := img.Bounds()
 	w, h := thumbnailSize(b.Dx(), b.Dy(), maxSide)
-	return render(img, w, h, orientation, thumbQuality)
+	var out bytes.Buffer
+	info, err := render(&out, img, w, h, orientation, thumbQuality, false)
+	if err != nil {
+		return nil, Info{}, err
+	}
+	return out.Bytes(), info, nil
 }
 
 // thumbnailSize fits w×h within a square of maxSide, never enlarging.
@@ -146,112 +159,166 @@ func thumbnailSize(w, h, maxSide int) (int, int) {
 }
 
 // Display renders the copy of an image the app shows full screen: a JPEG at
-// the image's own resolution up to DisplayPixels, upright per the EXIF
-// orientation. The caller keeps it only when it is worth having (it can come
-// out larger than an already well-compressed original).
-func Display(img image.Image, orientation int) ([]byte, Info, error) {
+// the image's own resolution, or scaled to displaySize, upright per the EXIF
+// orientation. It is worth having only while it is smaller than the
+// original, so it gives up with an error once it passes maxBytes.
+//
+// Display may fill the image's transparent pixels in place to save copying
+// it: img is not to be used afterwards.
+func Display(img image.Image, orientation, maxBytes int) ([]byte, Info, error) {
 	b := img.Bounds()
 	w, h := displaySize(b.Dx(), b.Dy())
-	return render(img, w, h, orientation, displayQuality)
-}
-
-// displaySize keeps w×h unless it is over the display budget, and then
-// scales it to the budget.
-func displaySize(w, h int) (int, int) {
-	if pixels := int64(w) * int64(h); pixels > DisplayPixels {
-		f := math.Sqrt(float64(DisplayPixels) / float64(pixels))
-		return int(float64(w) * f), int(float64(h) * f)
+	if max(w, h) > jpegMaxSide {
+		return nil, Info{}, fmt.Errorf("a side of %d pixels is longer than a JPEG can be", max(w, h))
 	}
-	return w, h
-}
-
-// render draws the image at w×h on white (so transparent screenshots do not
-// turn black in JPEG), turns it upright, and encodes it.
-func render(img image.Image, w, h, orientation, quality int) ([]byte, Info, error) {
-	b := img.Bounds()
-	w, h = max(w, 1), max(h, 1)
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	draw.Draw(dst, dst.Bounds(), image.White, image.Point{}, draw.Src)
-	switch {
-	case w == b.Dx() && h == b.Dy():
-		draw.Draw(dst, dst.Bounds(), img, b.Min, draw.Over)
-	case kernelFits(w, h, b.Dx(), b.Dy()):
-		draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Over, nil)
-	default:
-		shrink(dst, img)
-	}
-	dst = orient(dst, orientation)
-	var buf bytes.Buffer
-	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality}); err != nil {
+	out := &capped{limit: maxBytes}
+	info, err := render(out, img, w, h, orientation, displayQuality, true)
+	if err != nil {
 		return nil, Info{}, err
 	}
-	return buf.Bytes(), Info{Width: dst.Bounds().Dx(), Height: dst.Bounds().Dy()}, nil
+	return out.bytes(), info, nil
 }
 
-// While it works, a kernel scaler such as draw.CatmullRom holds every pixel
-// of (destination width × source height) as four float64s. For the
-// thumbnail of a screenshot that is some tens of megabytes. For a
-// 12-megapixel photo brought down to the display budget it is over 300 MB,
-// more than the server has, so past kernelBudget an image is scaled by
-// shrink instead.
-const (
-	kernelBytes  = 32
-	kernelBudget = 32 << 20
-)
-
-// kernelFits reports whether scaling sw×sh to w×h with the kernel scaler
-// stays within its budget. shrink only scales down, so an enlargement (which
-// nothing here asks for) is the kernel scaler's whatever it costs.
-func kernelFits(w, h, sw, sh int) bool {
-	return w > sw || h > sh || int64(w)*int64(sh)*kernelBytes <= kernelBudget
+// displaySize is the size of an image's display rendition: its own while it
+// is within DisplayPixels or no more than displayShort on its short side,
+// and otherwise scaled down to whichever of the two it reaches first.
+func displaySize(w, h int) (int, int) {
+	pixels, short := int64(w)*int64(h), min(w, h)
+	if pixels <= DisplayPixels || short <= displayShort {
+		return w, h
+	}
+	f := max(math.Sqrt(float64(DisplayPixels)/float64(pixels)), float64(displayShort)/float64(short))
+	return int(float64(w) * f), int(float64(h) * f)
 }
 
-// Cost estimates how many bytes decoding the image and rendering its
-// thumbnail and display copy allocate between them, from its header alone,
-// so that the caller can keep many images from being worked on at once. It
-// is 0 for an image Decode would refuse.
-func Cost(contentType string, data []byte, thumbSide int) int64 {
-	cfg, err := decodeConfig(contentType, bytes.NewReader(data))
-	if err != nil || checkDimensions(cfg.Width, cfg.Height) != nil {
-		return 0
-	}
-	// What the decoders hand back: three planes at most for a JPEG, one or
-	// two bytes for grey, four for colour with alpha, eight at 16 bits.
-	perPixel := int64(4)
-	switch cfg.ColorModel {
-	case color.YCbCrModel:
-		perPixel = 3
-	case color.GrayModel:
-		perPixel = 1
-	case color.Gray16Model:
-		perPixel = 2
-	case color.RGBA64Model, color.NRGBA64Model:
-		perPixel = 8
-	}
-	orientation := Orientation(contentType, data)
-	cost := int64(cfg.Width) * int64(cfg.Height) * perPixel
-	w, h := thumbnailSize(cfg.Width, cfg.Height, thumbSide)
-	cost += renderCost(w, h, cfg.Width, cfg.Height, orientation)
-	w, h = displaySize(cfg.Width, cfg.Height)
-	return cost + renderCost(w, h, cfg.Width, cfg.Height, orientation)
+// capped collects what is written to it and fails once that passes its
+// limit. It keeps what it is given in pieces, so that a long output is not
+// copied over and over as it grows.
+type capped struct {
+	pieces [][]byte
+	size   int
+	limit  int
 }
 
-// renderCost is what render allocates to make a w×h rendition of a sw×sh
-// image: the canvas, a second one if it has to be turned, and whatever the
-// scaler works in.
-func renderCost(w, h, sw, sh, orientation int) int64 {
-	cost := int64(max(w, 1)) * int64(max(h, 1)) * 4
-	if orientation > 1 {
-		cost *= 2
+const cappedPiece = 256 << 10
+
+var errNoSmaller = errors.New("the rendition is no smaller than the image")
+
+func (c *capped) Write(p []byte) (int, error) {
+	if c.size+len(p) > c.limit {
+		return 0, errNoSmaller
 	}
-	switch {
-	case w == sw && h == sh:
-	case kernelFits(w, h, sw, sh):
-		cost += int64(w) * int64(sh) * kernelBytes
-	default:
-		cost += int64(sw)*(shrinkRows*4+8) + int64(w)*48
+	for rest := p; len(rest) > 0; {
+		if n := len(c.pieces); n == 0 || len(c.pieces[n-1]) == cap(c.pieces[n-1]) {
+			c.pieces = append(c.pieces, make([]byte, 0, cappedPiece))
+		}
+		last := &c.pieces[len(c.pieces)-1]
+		n := min(len(rest), cap(*last)-len(*last))
+		*last = append(*last, rest[:n]...)
+		rest = rest[n:]
 	}
-	return cost
+	c.size += len(p)
+	return len(p), nil
+}
+
+// bytes is everything written, in one piece.
+func (c *capped) bytes() []byte {
+	out := make([]byte, 0, c.size)
+	for _, p := range c.pieces {
+		out = append(out, p...)
+	}
+	return out
+}
+
+// render writes img to out as a w×h JPEG, upright, on white where it is
+// transparent. With consume set it may alter img instead of copying it.
+func render(out io.Writer, img image.Image, w, h, orientation, quality int, consume bool) (Info, error) {
+	b := img.Bounds()
+	w, h = max(w, 1), max(h, 1)
+	opts := &jpeg.Options{Quality: quality}
+	if consume && !turned(orientation) && w == b.Dx() && h == b.Dy() {
+		// Nothing to scale or turn: the encoder reads the decoded image as it
+		// is, and no canvas is needed at all.
+		if flat := flatten(img); flat != nil {
+			return Info{Width: w, Height: h}, jpeg.Encode(out, flat, opts)
+		}
+	}
+	c, err := newCanvas(w, h)
+	if err != nil {
+		return Info{}, err
+	}
+	defer func() { c.free() }()
+	if w == b.Dx() && h == b.Dy() {
+		draw.Draw(c.RGBA, c.Rect, image.White, image.Point{}, draw.Src)
+		draw.Draw(c.RGBA, c.Rect, img, b.Min, draw.Over)
+	} else {
+		shrink(c.RGBA, img)
+	}
+	if turned(orientation) {
+		upright, err := orient(c, orientation)
+		if err != nil {
+			return Info{}, err
+		}
+		c.free()
+		c = upright
+	}
+	if err := jpeg.Encode(out, c.RGBA, opts); err != nil {
+		return Info{}, err
+	}
+	return Info{Width: c.Rect.Dx(), Height: c.Rect.Dy()}, nil
+}
+
+// turned reports whether an EXIF orientation asks for the pixels to be
+// moved at all.
+func turned(orientation int) bool { return orientation >= 2 && orientation <= 8 }
+
+// flatten returns img in a form the JPEG encoder reads directly, with any
+// transparency filled in white, without copying it; nil for a kind of image
+// that has to be drawn onto a canvas first. The filling is done in place.
+func flatten(img image.Image) image.Image {
+	switch m := img.(type) {
+	case *image.YCbCr:
+		return m
+	case *image.Gray:
+		return m
+	case *image.RGBA:
+		// Colour is stored already multiplied by alpha: over white it gains
+		// what the alpha leaves uncovered.
+		eachRow(m.Pix, m.Stride, m.Rect, func(row []uint8) {
+			for i := 0; i < len(row); i += 4 {
+				if a := row[i+3]; a != 0xff {
+					rest := int(0xff - a)
+					row[i] = uint8(min(int(row[i])+rest, 0xff))
+					row[i+1] = uint8(min(int(row[i+1])+rest, 0xff))
+					row[i+2] = uint8(min(int(row[i+2])+rest, 0xff))
+					row[i+3] = 0xff
+				}
+			}
+		})
+		return m
+	case *image.NRGBA:
+		eachRow(m.Pix, m.Stride, m.Rect, func(row []uint8) {
+			for i := 0; i < len(row); i += 4 {
+				if a := uint32(row[i+3]); a != 0xff {
+					white := 0xff*(0xff-a) + 0x7f
+					row[i] = uint8((uint32(row[i])*a + white) / 0xff)
+					row[i+1] = uint8((uint32(row[i+1])*a + white) / 0xff)
+					row[i+2] = uint8((uint32(row[i+2])*a + white) / 0xff)
+					row[i+3] = 0xff
+				}
+			}
+		})
+		// Fully opaque, the two layouts are the same bytes.
+		return &image.RGBA{Pix: m.Pix, Stride: m.Stride, Rect: m.Rect}
+	}
+	return nil
+}
+
+// eachRow calls fn with each row of a four-bytes-a-pixel image.
+func eachRow(pix []uint8, stride int, r image.Rectangle, fn func(row []uint8)) {
+	for y := 0; y < r.Dy(); y++ {
+		fn(pix[y*stride : y*stride+r.Dx()*4])
+	}
 }
 
 // shrinkRows is how many source rows shrink converts at a time.
@@ -261,6 +328,13 @@ const shrinkRows = 32
 // averaging the source pixels that lie under each destination pixel. It
 // reads the source a few rows at a time, so it needs the same small amount
 // of memory however large the image is.
+//
+// The kernel scalers in x/image/draw (CatmullRom and the rest) are not used:
+// while they work they hold every pixel of (destination width × source
+// height) as four float64s. For the thumbnail of a 1080p screenshot that is
+// 22 MB; for a 12-megapixel photo brought down to the display budget it is
+// over 300 MB, more than the server has. Side by side, thumbnails made the
+// two ways are not told apart.
 //
 // The sums are exact: lengths are measured in units where a source pixel is
 // dw wide and a destination pixel sw wide, so every overlap is a whole
@@ -334,37 +408,64 @@ func shrink(dst *image.RGBA, src image.Image) {
 // decoded pixels has to apply it too or a portrait photo comes out sideways.
 // Other formats, and files without the tag, are 1.
 func Orientation(contentType string, data []byte) int {
-	if contentType != "image/jpeg" || len(data) < 4 || data[0] != 0xFF || data[1] != 0xD8 {
-		return 1
+	orientation := 1
+	if contentType != "image/jpeg" {
+		return orientation
 	}
-	for i := 2; i+4 <= len(data); {
-		if data[i] != 0xFF {
-			return 1
+	jpegSegments(data, func(marker byte, seg []byte) bool {
+		if marker != 0xE1 || !bytes.HasPrefix(seg, []byte("Exif\x00\x00")) {
+			return true
 		}
-		marker := data[i+1]
-		switch {
-		case marker == 0xFF: // fill byte
-			i++
-			continue
-		case marker == 0x01 || marker >= 0xD0 && marker <= 0xD8: // no payload
-			i += 2
-			continue
-		case marker == 0xDA || marker == 0xD9: // image data: the metadata is behind us
-			return 1
-		}
-		size := int(data[i+2])<<8 | int(data[i+3])
-		if size < 2 || i+2+size > len(data) {
-			return 1
-		}
-		if seg := data[i+4 : i+2+size]; marker == 0xE1 && bytes.HasPrefix(seg, []byte("Exif\x00\x00")) {
-			return exifOrientation(seg[6:])
-		}
-		i += 2 + size
-	}
-	return 1
+		orientation = exifOrientation(seg[6:])
+		return false
+	})
+	return orientation
 }
 
-// exifOrientation finds tag 0x0112 in the first IFD of a TIFF block.
+// jpegSegments calls fn with each marker segment of a JPEG that comes before
+// its image data, until fn returns false. It reads the file exactly as the
+// decoder does, passing over stray bytes between segments, fill bytes and
+// misplaced restart markers, so that what is learned here holds for what the
+// decoder goes on to do.
+func jpegSegments(data []byte, fn func(marker byte, payload []byte) bool) {
+	if len(data) < 2 || data[0] != 0xFF || data[1] != 0xD8 {
+		return
+	}
+	for i := 2; i+2 <= len(data); {
+		lead, marker := data[i], data[i+1]
+		i += 2
+		for lead != 0xFF {
+			if i == len(data) {
+				return
+			}
+			lead, marker = marker, data[i]
+			i++
+		}
+		if marker == 0 {
+			continue
+		}
+		for marker == 0xFF {
+			if i == len(data) {
+				return
+			}
+			marker = data[i]
+			i++
+		}
+		if marker >= 0xD0 && marker <= 0xD7 {
+			continue
+		}
+		// The image data, or the end: the headers are behind us.
+		if marker == 0xDA || marker == 0xD9 || i+2 > len(data) {
+			return
+		}
+		size := int(data[i])<<8 | int(data[i+1])
+		if size < 2 || i+size > len(data) || !fn(marker, data[i+2:i+size]) {
+			return
+		}
+		i += size
+	}
+}
+
 func exifOrientation(tiff []byte) int {
 	if len(tiff) < 8 {
 		return 1
@@ -403,18 +504,18 @@ func exifOrientation(tiff []byte) int {
 	return 1
 }
 
-// orient applies an EXIF orientation to stored pixels. 2-4 mirror or turn
-// the image in place; 5-8 also swap its width and height.
-func orient(src *image.RGBA, orientation int) *image.RGBA {
-	if orientation < 2 || orientation > 8 {
-		return src
-	}
-	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
+// orient applies an EXIF orientation to stored pixels, on a new canvas. 2-4
+// mirror or turn the image in place; 5-8 also swap its width and height.
+func orient(src *canvas, orientation int) (*canvas, error) {
+	sw, sh := src.Rect.Dx(), src.Rect.Dy()
 	dw, dh := sw, sh
 	if orientation >= 5 {
 		dw, dh = sh, sw
 	}
-	dst := image.NewRGBA(image.Rect(0, 0, dw, dh))
+	dst, err := newCanvas(dw, dh)
+	if err != nil {
+		return nil, err
+	}
 	for y := 0; y < dh; y++ {
 		for x := 0; x < dw; x++ {
 			var sx, sy int
@@ -439,5 +540,5 @@ func orient(src *image.RGBA, orientation int) *image.RGBA {
 			d[0], d[1], d[2], d[3] = s[0], s[1], s[2], s[3]
 		}
 	}
-	return dst
+	return dst, nil
 }

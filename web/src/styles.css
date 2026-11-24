@@ -648,6 +648,8 @@ code, pre, kbd { font-family: var(--mono); font-size: 0.92em; }
 .upload-remove svg { width: 12px; height: 12px; }
 .upload-name { position: absolute; left: 0; right: 0; bottom: 0; font-size: 11px; font-weight: 500; padding: 1px 4px; background: rgba(0,0,0,0.55); color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .upload-item.image .upload-name { display: none; }
+.upload-item.error { cursor: pointer; }
+.upload-item.image.error .upload-name { display: block; text-align: center; background: color-mix(in srgb, var(--red) 82%, #000); }
 .composer .attach-btn { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--text-2); flex: none; }
 .composer .attach-btn:hover { background: var(--accent-soft); color: var(--accent); }
 .composer .attach-btn svg { width: 22px; height: 22px; }

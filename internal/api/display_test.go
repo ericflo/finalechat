@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"image/gif"
@@ -11,7 +12,11 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/ericflo/finalechat/internal/imaging"
 )
 
 // heavyPNG is a screenshot-like picture that PNG stores badly and JPEG
@@ -214,4 +219,121 @@ func TestDisplayBackfill(t *testing.T) {
 	if found, _ := testAPI.backfillDisplay(ctx); found {
 		t.Fatal("nothing should be left to backfill")
 	}
+}
+
+// The server works on images in a fixed amount of memory. One that needs
+// more than that to decode is refused before any of it is read, with an
+// error that says what the limit comes to; a file that is merely an odd
+// shape is not.
+func TestOversizedImagesAreRefusedAndLongOnesAreNot(t *testing.T) {
+	_, a := setup(t)
+
+	// A PNG header that claims 9000×9000 with alpha: 81 MP, 309 MiB decoded.
+	huge := heavyPNG(t, 64, 64*200)
+	binary.BigEndian.PutUint32(huge[16:], 9000)
+	binary.BigEndian.PutUint32(huge[20:], 9000)
+	huge[25] = 6
+	status, out := postFiles(t, a.token, "/api/v1/threads/ext:oversized:1/messages", map[string]string{"body": "too big"}, map[string][]byte{"huge.png": huge})
+	if status != http.StatusRequestEntityTooLarge || str(sub(out, "error"), "code") != "image_too_large" {
+		t.Fatalf("an 81 MP PNG: got %d %v, want 413 image_too_large", status, out)
+	}
+	msg := str(sub(out, "error"), "message")
+	for _, want := range []string{"9000×9000", "81 MP", "up to about 37 MP", "zip it"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the message should say %q: %s", want, msg)
+		}
+	}
+	// One past what any decoder here would take on is refused the same way.
+	binary.BigEndian.PutUint32(huge[16:], 60000)
+	binary.BigEndian.PutUint32(huge[20:], 60000)
+	if status, out := postFiles(t, a.token, "/api/v1/threads/ext:oversized:1/messages", map[string]string{"body": "far too big"}, map[string][]byte{"huge.png": huge}); status != http.StatusRequestEntityTooLarge || str(sub(out, "error"), "code") != "image_too_large" {
+		t.Fatalf("a 3600 MP PNG: got %d %v, want 413 image_too_large", status, out)
+	}
+	// Nothing of a refused message is kept.
+	if status, got := a.do("GET", "/api/v1/threads/ext:oversized:1", nil); status != http.StatusNotFound {
+		t.Errorf("a refused upload left a thread behind: %d %v", status, got)
+	}
+
+	// A long screenshot, a phone's width and many screens tall, is 13 MP of
+	// an unusual shape. It is accepted, and its display copy keeps its width:
+	// scaled to a 4K frame's worth of pixels it would be too narrow to read.
+	long := heavyPNG(t, 1080, 12000)
+	status, out = postFiles(t, a.token, "/api/v1/threads/ext:long:1/messages", map[string]string{"body": "a long screenshot"}, map[string][]byte{"long.png": long})
+	if status != http.StatusCreated {
+		t.Fatalf("a 1080×12000 screenshot: %d %v", status, out)
+	}
+	att := onlyAttachment(t, out)
+	if att["width"].(float64) != 1080 || att["height"].(float64) != 12000 {
+		t.Errorf("reported as %vx%v", att["width"], att["height"])
+	}
+	if att["display_width"] != float64(1080) || att["display_height"] != float64(12000) {
+		t.Errorf("its display copy is %vx%v; it should be 1080x12000", att["display_width"], att["display_height"])
+	}
+	if att["thumb_width"] != float64(57) || att["thumb_height"] != float64(640) {
+		t.Errorf("its thumbnail is %vx%v", att["thumb_width"], att["thumb_height"])
+	}
+}
+
+// Image work is let in by the memory it needs. Once the budget is spoken
+// for, the next image waits, and goes ahead when room is given back.
+func TestImageWorkWaitsForMemory(t *testing.T) {
+	s := testAPI
+	admit := func(ctx context.Context, memory, scratch int64) (func(), error) {
+		return s.admitImage(ctx, imaging.Cost{Base: memory, Scratch: scratch}, 0, true)
+	}
+	half, err := admit(context.Background(), s.imageMemory/2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rest, err := admit(context.Background(), s.imageMemory/2, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	if _, err := admit(short, 1<<20, 0); err == nil {
+		t.Fatal("a third image was let in with the memory all spoken for")
+	}
+	cancel()
+	half()
+	// More than there is in all is let in alone rather than never.
+	whole := make(chan func(), 1)
+	go func() {
+		done, err := admit(context.Background(), 4*s.imageMemory, 0)
+		if err == nil {
+			whole <- done
+		}
+	}()
+	select {
+	case <-whole:
+		t.Fatal("an image that needs everything was let in beside another")
+	case <-time.After(50 * time.Millisecond):
+	}
+	rest()
+	select {
+	case done := <-whole:
+		done()
+	case <-time.After(5 * time.Second):
+		t.Fatal("an image that needs everything was never let in")
+	}
+
+	// The disk their canvases take is shared out the same way, and an image
+	// that gives up waiting for it gives its memory back.
+	disk, err := admit(context.Background(), 1<<20, imageScratchBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, cancel = context.WithTimeout(context.Background(), 50*time.Millisecond)
+	if _, err := admit(short, s.imageMemory, 1<<20); err == nil {
+		t.Fatal("an image was let in with the scratch disk all spoken for")
+	}
+	cancel()
+	if s.roomForDisplay(imaging.Cost{Base: 1 << 20, Scratch: imageScratchBytes + 1}) {
+		t.Error("a display copy that needs more scratch disk than there is should not be made")
+	}
+	disk()
+	all, err := admit(context.Background(), s.imageMemory, imageScratchBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all()
 }

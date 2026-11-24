@@ -78,6 +78,7 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | 409 | `no_subscriptions` | Test push with no subscribed device |
 | 413 | `too_large` | JSON body over 1 MiB, an attachment over 25 MiB, or a multipart request over the combined limit |
 | 413 | `storage_quota` | The account's attachment (or artifact) storage is full; delete threads or messages that carry files to free space |
+| 413 | `image_too_large` | An image that takes more memory to decode than the server has for it (see [Limits](#limits)); `message` gives its size and what an image of its kind can be. Scale it down, or send it inside an archive, which is stored as a file |
 | 422 | `validation_failed` | A field failed validation; `message` says which |
 | 429 | `rate_limited` (login attempts per address; token writes beyond about 120 messages, 30 questions, 30 uploads or 300 statuses a minute; honour `Retry-After`) | Too many login attempts (20 per minute per IP) or registrations (5 per minute per IP) |
 | 502 | `storage_unavailable` | Object storage rejected an upload or download; retry |
@@ -102,6 +103,7 @@ endpoints and `GET /push/vapid` receive `401 unauthorized`.
 | `timeout_seconds` | 1 to 604800 (7 days) |
 | `limit` | threads 1 to 200 (default 50); messages and questions 1 to 500 (default 100) |
 | Attachment | 25 MiB per file, 8 per message or upload request; `filename` 200 characters |
+| Image | Limited by the memory decoding it takes, not by its shape: a long screenshot is fine. With the 144 MiB a 256 MiB server gives image work, about 95 megapixels of ordinary JPEG, 37 of PNG in colour, and 19 of progressive JPEG or 16-bit PNG. Past that, `413 image_too_large` |
 | Attachment storage | 5 GiB per account by default (`FINALECHAT_ATTACHMENT_QUOTA_BYTES`); `GET /me` reports `storage` |
 | Activity `text` / `ttl_seconds` | 200 characters on one line / 1 to 600 seconds (default 45) |
 
@@ -322,9 +324,10 @@ A heavy image also has a display rendition, a compressed copy for viewing:
 }
 ```
 
-It is a JPEG at the image's own resolution (scaled down only past 3840×2160
-pixels' worth), made for images over 512 KiB and kept when it is at most
-three quarters of the original's size. Animated GIFs and images that are
+It is a JPEG at the image's own resolution, scaled down only past 3840×2160
+pixels' worth and never to under 2160 pixels on its shorter side, so a long
+screenshot keeps its width. It is made for images over 512 KiB and kept when
+it is at most three quarters of the original's size. Animated GIFs and images that are
 already well compressed have none, and then the fields are absent. The app
 shows it full screen and downloads from `url`, which is always the original,
 byte for byte.
@@ -898,6 +901,7 @@ Status `201`. Then pass the ids in a message's `attachments` field. Each
 upload attaches to exactly one message; a pending upload that is not
 attached within 24 hours is deleted. `413 storage_quota` when the account's
 attachment storage is full. `413 too_large` for a file over 25 MiB,
+`413 image_too_large` for an image the server has not the memory to decode,
 `422 validation_failed` for an empty file or an undecodable image, and
 `502 storage_unavailable` when the object store fails.
 

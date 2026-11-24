@@ -2053,7 +2053,7 @@
             }
           },
           "413": {
-            "description": "Body too large",
+            "description": "The body or a file is too large (too_large), the account's storage is full (storage_quota), or an attached image takes more memory to decode than the server has for it (image_too_large)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3607,7 +3607,7 @@
             }
           },
           "413": {
-            "description": "A file is over 25 MiB or the request is too large",
+            "description": "A file is over 25 MiB or the request is too large (too_large), the account's storage is full (storage_quota), or an image takes more memory to decode than the server has for it (image_too_large; the message gives its size and the limit for its kind)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3877,7 +3877,7 @@
           "Attachments"
         ],
         "summary": "Download an image's display rendition",
-        "description": "The compressed copy of a heavy image, for viewing: a JPEG at the image's own resolution, scaled down only past 3840×2160 pixels' worth. Images over 512 KiB get one when it is at most three quarters of the original's size; animated GIFs never do. For an attachment without one the original bytes are returned, so this path always works for viewing.",
+        "description": "The compressed copy of a heavy image, for viewing: a JPEG at the image's own resolution, scaled down only past 3840×2160 pixels' worth and never to under 2160 pixels on its shorter side (a long screenshot keeps its width). Images over 512 KiB get one when it is at most three quarters of the original's size; animated GIFs never do. For an attachment without one the original bytes are returned, so this path always works for viewing.",
         "parameters": [
           {
             "name": "id",
@@ -7129,6 +7129,7 @@
                   "email_taken",
                   "no_subscriptions",
                   "too_large",
+                  "image_too_large",
                   "validation_failed",
                   "rate_limited",
                   "push_disabled",

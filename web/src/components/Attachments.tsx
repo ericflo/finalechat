@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { Attachment } from "../lib/types";
+import { toast } from "../lib/store";
 import { IconBack, IconClose, IconDownload, IconFile } from "./Icons";
 
 export function humanSize(n: number): string {
@@ -45,13 +46,16 @@ export function AttachmentList({ items, onOpen }: { items: Attachment[]; onOpen:
           {shown.map((a, i) => {
             const w = a.thumb_width || a.width || 4;
             const h = a.thumb_height || a.height || 3;
+            // A long screenshot or a panorama shows its start, in a tile no
+            // taller than a phone screen's shape and no flatter than 3:1.
+            const shape = between(w / h, 9 / 20, 3);
             const last = i === shown.length - 1 && extra > 0;
             return (
               <button
                 key={a.id}
                 type="button"
                 className="att-image"
-                style={images.length === 1 ? { aspectRatio: `${w} / ${h}` } : undefined}
+                style={images.length === 1 ? { aspectRatio: `${shape}` } : undefined}
                 onClick={() => onOpen(images, i)}
                 aria-label={last ? `Open ${a.filename} and ${extra} more` : `Open ${a.filename}`}
               >
@@ -259,8 +263,28 @@ export function ImageViewer({ items, index, onClose }: { items: Attachment[]; in
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClose, i]);
 
+  /** How image `item` sits in the viewer: `fill` is the zoom at which it is
+   * as wide as the viewer (more than 1 only for an image much taller than
+   * the screen, such as a long screenshot), and `most` how far it zooms: 5×,
+   * or for a long or wide image far enough to fill the viewer and as much
+   * again, though never past twice its own pixels. */
+  const zoomRange = () => {
+    const el = bodyRef.current;
+    const iw = item.display_width || item.width || 0;
+    const ih = item.display_height || item.height || 0;
+    if (!el || !iw || !ih || !el.clientWidth || !el.clientHeight) return { fill: 1, most: 5 };
+    // The image is fitted inside its slide, which keeps clear of the bottom.
+    const slide = trackRef.current?.querySelector(".viewer-slide");
+    const w = el.clientWidth;
+    const h = el.clientHeight - (slide ? parseFloat(getComputedStyle(slide).paddingBottom) || 0 : 0);
+    const fit = Math.min(1, w / iw, h / ih);
+    const fill = w / (iw * fit);
+    const cover = Math.max(fill, h / (ih * fit));
+    return { fill: Math.min(fill, 1 / fit), most: Math.max(5, Math.min(2 * cover, 2 / fit)) };
+  };
+
   const clamp = (v: View): View => {
-    const scale = Math.min(5, Math.max(1, v.scale));
+    const scale = Math.min(zoomRange().most, Math.max(1, v.scale));
     if (scale === 1) return { scale: 1, x: 0, y: 0 };
     const el = bodyRef.current;
     const w = el?.clientWidth ?? 0;
@@ -392,9 +416,10 @@ export function ImageViewer({ items, index, onClose }: { items: Attachment[]; in
       }
       const now = Date.now();
       if (now - lastTap.current < 320) {
-        // Double tap: zoom in around the tap, or back out.
+        // Double tap: zoom in around the tap, or back out. A long screenshot
+        // goes to the width of the screen, where it can be read.
         if (view.scale > 1) setView({ scale: 1, x: 0, y: 0 });
-        else zoomAt(2.5, e.clientX, e.clientY);
+        else zoomAt(Math.max(2.5, zoomRange().fill), e.clientX, e.clientY);
         lastTap.current = 0;
       } else {
         lastTap.current = now;
@@ -468,10 +493,24 @@ export function UploadTray({ items, onRemove }: { items: PendingUpload[]; onRemo
   return (
     <div className="upload-tray">
       {items.map((u) => (
-        <div key={u.key} className={`upload-item ${u.error ? "error" : ""} ${u.previewURL ? "image" : ""}`} title={u.error ?? u.file.name}>
+        <div
+          key={u.key}
+          className={`upload-item ${u.error ? "error" : ""} ${u.previewURL ? "image" : ""}`}
+          title={u.error ?? u.file.name}
+          // The reason is a toast that has gone by the time it is wanted again.
+          onClick={u.error ? () => toast(u.error ?? "", "error") : undefined}
+        >
           {u.previewURL ? <img src={u.previewURL} alt="" /> : <IconFile />}
           {!u.attachment && !u.error && <div className="upload-progress" style={{ width: `${Math.round(u.progress * 100)}%` }} />}
-          <button type="button" className="upload-remove" aria-label={`Remove ${u.file.name}`} onClick={() => onRemove(u.key)}>
+          <button
+            type="button"
+            className="upload-remove"
+            aria-label={`Remove ${u.file.name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove(u.key);
+            }}
+          >
             <IconClose />
           </button>
           <span className="upload-name">{u.error ? "Failed" : u.file.name}</span>

@@ -206,7 +206,8 @@ let toastSeq = 0;
 export function toast(text: string, kind: Toast["kind"] = "info", action?: Toast["action"]): number {
   const id = ++toastSeq;
   set((s) => ({ toasts: [...s.toasts.slice(-2), { id, text, kind, action }] }));
-  window.setTimeout(() => dismissToast(id), action ? 8000 : kind === "error" ? 6000 : 3200);
+  // An error stays long enough to be read: some say what to do about it.
+  window.setTimeout(() => dismissToast(id), action ? 8000 : kind === "error" ? Math.max(6000, 2000 + text.length * 55) : 3200);
   return id;
 }
 

@@ -44,6 +44,13 @@ type Config struct {
 	// AttachmentQuotaBytes caps the total size of one account's attachments;
 	// zero removes the cap.
 	AttachmentQuotaBytes int64
+	// MemoryLimit is the memory the server may use, in bytes: its
+	// container's limit, or its systemd unit's, read from its cgroup. Zero
+	// when there is none.
+	MemoryLimit int64
+	// ImageMemory is how much memory image work may hold at once (see
+	// ImageMemoryFor). An image that needs more to decode is refused.
+	ImageMemory int64
 	// B2KeyID, B2Key and B2Bucket configure attachment storage in Backblaze
 	// B2. Attachments are disabled unless all three are set, or BlobStore is
 	// "memory" for local development.
@@ -145,6 +152,15 @@ func Load(version string) (Config, error) {
 		return cfg, fmt.Errorf("FINALECHAT_ATTACHMENT_QUOTA_BYTES is invalid: %w", err)
 	}
 	cfg.AttachmentQuotaBytes = quota
+	cfg.MemoryLimit = memoryLimit("/proc/self/cgroup", "/sys/fs/cgroup")
+	cfg.ImageMemory = ImageMemoryFor(cfg.MemoryLimit)
+	if v := os.Getenv("FINALECHAT_IMAGE_MEMORY"); v != "" {
+		n, err := parseBytes(v)
+		if err != nil || n < 16<<20 {
+			return cfg, errors.New("FINALECHAT_IMAGE_MEMORY is invalid: it is a size of at least 16MiB, such as 144MiB")
+		}
+		cfg.ImageMemory = n
+	}
 	if _, err := url.Parse(cfg.BaseURL); err != nil {
 		return cfg, fmt.Errorf("FINALECHAT_BASE_URL is invalid: %w", err)
 	}

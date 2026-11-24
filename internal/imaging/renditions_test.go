@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"math"
 	"testing"
 )
 
@@ -116,7 +117,7 @@ func TestRenditionsAreUpright(t *testing.T) {
 			if orientation >= 5 {
 				wantW, wantH = 160, 240
 			}
-			display, info, err := Display(img, orientation)
+			display, info, err := Display(img, orientation, math.MaxInt)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -173,11 +174,11 @@ func TestOrientationIgnoresWhatItCannotRead(t *testing.T) {
 
 func TestDisplayKeepsResolutionUpToItsBudget(t *testing.T) {
 	// A 4K screenshot keeps every pixel.
-	if _, info, err := Display(image.NewGray(image.Rect(0, 0, 3840, 2160)), 1); err != nil || info.Width != 3840 || info.Height != 2160 {
+	if _, info, err := Display(image.NewGray(image.Rect(0, 0, 3840, 2160)), 1, math.MaxInt); err != nil || info.Width != 3840 || info.Height != 2160 {
 		t.Fatalf("4K: got %dx%d, %v", info.Width, info.Height, err)
 	}
 	// A 20 MP photo is scaled to the budget, keeping its shape.
-	_, info, err := Display(image.NewGray(image.Rect(0, 0, 5200, 3900)), 1)
+	_, info, err := Display(image.NewGray(image.Rect(0, 0, 5200, 3900)), 1, math.MaxInt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +192,7 @@ func TestDisplayKeepsResolutionUpToItsBudget(t *testing.T) {
 
 func TestDisplayPutsTransparencyOnWhite(t *testing.T) {
 	// Fully transparent pixels would be black in a JPEG without a backdrop.
-	out, _, err := Display(image.NewNRGBA(image.Rect(0, 0, 32, 32)), 1)
+	out, _, err := Display(image.NewNRGBA(image.Rect(0, 0, 32, 32)), 1, math.MaxInt)
 	if err != nil {
 		t.Fatal(err)
 	}

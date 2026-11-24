@@ -7,6 +7,7 @@ import (
 	"image"
 	"io"
 	"io/fs"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -18,7 +19,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"golang.org/x/sync/semaphore"
 
 	"github.com/ericflo/finalechat/internal/blob"
 	"github.com/ericflo/finalechat/internal/imaging"
@@ -53,19 +53,41 @@ func decorateAttachment(a *store.Attachment) {
 	}
 }
 
-// displayRendition renders the compressed copy of an image that the app
-// shows full screen, or nil when the image is better shown as it is: a small
-// file, an animation (only its first frame would survive), or one that
-// compresses to little less than it already is.
-func displayRendition(contentType string, size int, img image.Image, orientation int) ([]byte, imaging.Info) {
-	if contentType == "image/gif" || size <= displayMinBytes {
-		return nil, imaging.Info{}
-	}
-	out, info, err := imaging.Display(img, orientation)
-	if err != nil || len(out) > size/4*3 {
+// wantsDisplay reports whether an image is given a display rendition, the
+// compressed copy the app shows full screen. A small file is already quick
+// to load, and of an animation only the first frame would survive.
+func wantsDisplay(contentType string, size int) bool {
+	return contentType != "image/gif" && size > displayMinBytes
+}
+
+// displayRendition renders an image's display rendition, or nil when the
+// image is better shown as it is: one that compresses to little less than it
+// already is, or that cannot be a JPEG. It may alter img.
+func displayRendition(size int, img image.Image, orientation int) ([]byte, imaging.Info) {
+	out, info, err := imaging.Display(img, orientation, size/4*3)
+	if err != nil {
 		return nil, imaging.Info{}
 	}
 	return out, info
+}
+
+// errImageTooLarge refuses an image that needs more memory to decode than
+// the server gives image work. The limit is by memory, not by shape or by
+// megapixels alone, so the message says what it comes to for this image.
+func errImageTooLarge(cost imaging.Cost, memory int64) *apiError {
+	pixels := float64(cost.Width) * float64(cost.Height)
+	limit := pixels * float64(memory) / float64(cost.Base)
+	return &apiError{Status: http.StatusRequestEntityTooLarge, Code: "image_too_large", Message: fmt.Sprintf(
+		"This image is too large to process: %d×%d is %s, and an image of this kind can be up to about %s. Scale it down, or zip it to send it as a file.",
+		cost.Width, cost.Height, megapixels(pixels), megapixels(limit))}
+}
+
+// megapixels writes a pixel count as "12 MP", rounded down.
+func megapixels(pixels float64) string {
+	if pixels < 10e6 {
+		return strconv.FormatFloat(math.Floor(pixels/1e5)/10, 'f', -1, 64) + " MP"
+	}
+	return strconv.FormatFloat(math.Floor(pixels/1e6), 'f', 0, 64) + " MP"
 }
 
 func displayKey(id uuid.UUID) string { return fmt.Sprintf("a/%s/display.jpg", id) }
@@ -117,8 +139,15 @@ func (s *Server) storeAttachment(ctx context.Context, userID, threadID uuid.UUID
 		}
 	}
 	if imaging.ImageTypes[contentType] {
+		cost := imaging.Estimate(contentType, data, thumbnailSide)
+		if cost.Base > s.imageMemory {
+			return nil, errImageTooLarge(cost, s.imageMemory)
+		}
+		// The display rendition is made when there is room for that too; the
+		// image is whole without it.
+		withDisplay := wantsDisplay(contentType, len(data)) && s.roomForDisplay(cost)
 		wait, cancel := context.WithTimeout(ctx, 20*time.Second)
-		done, err := admitImage(wait, contentType, data)
+		done, err := s.admitImage(wait, cost, len(data), withDisplay)
 		cancel()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -135,8 +164,8 @@ func (s *Server) storeAttachment(ctx context.Context, userID, threadID uuid.UUID
 			// and the reported size follow it too.
 			orientation := imaging.Orientation(contentType, data)
 			info = info.Upright(orientation)
-			if thumb, tinfo, err = imaging.Thumbnail(img, thumbnailSide, orientation); err == nil {
-				display, dinfo = displayRendition(contentType, len(data), img, orientation)
+			if thumb, tinfo, err = imaging.Thumbnail(img, thumbnailSide, orientation); err == nil && withDisplay {
+				display, dinfo = displayRendition(len(data), img, orientation)
 			}
 		}
 		img = nil
@@ -208,30 +237,45 @@ func humanBytes(n int64) string {
 	return strconv.FormatInt(n, 10) + " bytes"
 }
 
-// imageMemory is how much memory decoding images and rendering their
-// thumbnails and display copies may hold at once, however many uploads
-// arrive together. A screenshot needs a few tens of megabytes and several
-// are worked on side by side; a phone photo needs most of it and others
-// wait their turn. The server is sized to run in 256 MiB.
-const imageMemory = 128 << 20
+// imageScratchBytes is how much disk the canvases of images being worked on
+// may take between them. The temp dir is shared with uploads on their way
+// in, and a container's is often capped.
+const imageScratchBytes = 256 << 20
 
-var imageWork = semaphore.NewWeighted(imageMemory)
+// roomForDisplay reports whether the server can make an image's display
+// rendition as well as decode it.
+func (s *Server) roomForDisplay(cost imaging.Cost) bool {
+	return cost.Base+cost.Display <= s.imageMemory && cost.Scratch <= imageScratchBytes
+}
 
-// admitImage waits for room to work on an image and returns the function
-// that gives the room back. An image that needs more than there is in all
-// is let in alone.
-func admitImage(ctx context.Context, contentType string, data []byte) (done func(), err error) {
-	cost := min(imaging.Cost(contentType, data, thumbnailSide), imageMemory)
-	if err := imageWork.Acquire(ctx, cost); err != nil {
+// admitImage waits for the memory that working on an image takes (decoding
+// it, and rendering its thumbnail and, withDisplay, its display copy), out
+// of what is set aside for image work, and returns the function that gives
+// it back. However many uploads arrive together, what they hold between
+// them stays within that: screenshots, a few megabytes each, are worked on
+// side by side, and a photo that needs most of it has the others wait their
+// turn. The file itself, size bytes in memory for as long, is counted in.
+func (s *Server) admitImage(ctx context.Context, cost imaging.Cost, size int, withDisplay bool) (done func(), err error) {
+	memory, scratch := cost.Base+int64(size), int64(0)
+	if withDisplay {
+		memory, scratch = memory+cost.Display, cost.Scratch
+	}
+	memory = min(memory, s.imageMemory)
+	if err := s.imageWork.Acquire(ctx, memory); err != nil {
+		return nil, err
+	}
+	if err := s.imageScratch.Acquire(ctx, scratch); err != nil {
+		s.imageWork.Release(memory)
 		return nil, err
 	}
 	return func() {
+		s.imageScratch.Release(scratch)
 		// What a large image leaves behind is collected before the next one
 		// is let in, or the two would be in memory together after all.
-		if cost >= imageMemory/8 {
+		if memory >= s.imageMemory/8 {
 			debug.FreeOSMemory()
 		}
-		imageWork.Release(cost)
+		s.imageWork.Release(memory)
 	}, nil
 }
 
@@ -639,20 +683,20 @@ func (s *Server) backfillDisplay(ctx context.Context) (found bool, saved int64) 
 		s.log.Warn("display backfill: read original", "id", a.ID, "err", err)
 		return true, 0
 	}
-	// An upload too large for the image budget is worked on alone while its
-	// sender waits. Nothing is waiting on this, so such an image is left as
-	// it is rather than given the whole server.
-	if imaging.Cost(a.ContentType, data, thumbnailSide) > imageMemory {
+	// An image the server has no room to work on (one accepted when it had
+	// more, say) is left as it is.
+	cost := imaging.Estimate(a.ContentType, data, thumbnailSide)
+	if !s.roomForDisplay(cost) {
 		return true, 0
 	}
-	done, err := admitImage(ctx, a.ContentType, data)
+	done, err := s.admitImage(ctx, cost, len(data), true)
 	if err != nil {
 		return true, 0
 	}
 	var display []byte
 	var info imaging.Info
 	if img, _, err := imaging.Decode(a.ContentType, data); err == nil {
-		display, info = displayRendition(a.ContentType, len(data), img, imaging.Orientation(a.ContentType, data))
+		display, info = displayRendition(len(data), img, imaging.Orientation(a.ContentType, data))
 	}
 	done()
 	if display == nil {

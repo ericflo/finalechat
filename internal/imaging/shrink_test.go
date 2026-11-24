@@ -1,13 +1,9 @@
 package imaging
 
 import (
-	"bytes"
-	"encoding/binary"
 	"image"
 	"image/color"
 	"image/draw"
-	"image/jpeg"
-	"image/png"
 	"math"
 	"math/rand"
 	"runtime"
@@ -30,86 +26,40 @@ func allocated(fn func()) uint64 {
 // (draw.CatmullRom needed 414 MiB for the display copy of this one.)
 func TestRenditionsOfALargePhotoStayWithinMemory(t *testing.T) {
 	photo := image.NewYCbCr(image.Rect(0, 0, 4608, 3456), image.YCbCrSubsampleRatio420) // 16 MP
-	for name, fn := range map[string]func() ([]byte, Info, error){
-		"display":   func() ([]byte, Info, error) { return Display(photo, 6) },
-		"thumbnail": func() ([]byte, Info, error) { return Thumbnail(photo, 640, 6) },
-	} {
-		var err error
-		got := allocated(func() { _, _, err = fn() })
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
+	for _, disk := range []bool{true, false} {
+		if disk && !DiskScratch() {
+			continue
 		}
-		t.Logf("%s of a 16 MP photo allocated %d MiB", name, got>>20)
-		// Two canvases at the display budget (one drawn, one turned upright)
-		// are 64 MiB; nothing should scale with the photo beyond that.
-		if got > 80<<20 {
-			t.Errorf("%s of a 16 MP photo allocated %d MiB; want at most 80", name, got>>20)
+		scratchOnDisk(t, disk)
+		// In memory, the two canvases at the display budget (one drawn, one
+		// turned upright) are 64 MiB. On disk they are not the server's at all.
+		limit := uint64(80 << 20)
+		if disk {
+			limit = 4 << 20
+		}
+		for name, fn := range map[string]func() ([]byte, Info, error){
+			"display":   func() ([]byte, Info, error) { return Display(photo, 6, math.MaxInt) },
+			"thumbnail": func() ([]byte, Info, error) { return Thumbnail(photo, 640, 6) },
+		} {
+			var err error
+			got := allocated(func() { _, _, err = fn() })
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			t.Logf("canvases on disk %v: %s of a 16 MP photo allocated %d KiB", disk, name, got>>10)
+			if got > limit {
+				t.Errorf("canvases on disk %v: %s of a 16 MP photo allocated %d MiB; want at most %d", disk, name, got>>20, limit>>20)
+			}
 		}
 	}
 }
 
-// Cost is what the server budgets image work by, so it has to cover what the
-// work allocates, without being so far over that images wait for nothing.
-func TestCostCoversWhatTheWorkAllocates(t *testing.T) {
-	encode := func(contentType string, img image.Image) []byte {
-		var buf bytes.Buffer
-		var err error
-		if contentType == "image/png" {
-			err = (&png.Encoder{CompressionLevel: png.BestSpeed}).Encode(&buf, img)
-		} else {
-			err = jpeg.Encode(&buf, img, nil)
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		return buf.Bytes()
-	}
-	for _, c := range []struct {
-		name        string
-		contentType string
-		img         image.Image
-		orientation int
-	}{
-		{"a 1080p screenshot", "image/png", image.NewNRGBA(image.Rect(0, 0, 1920, 1080)), 1},
-		{"a phone screenshot", "image/png", image.NewRGBA(image.Rect(0, 0, 1440, 3120)), 1},
-		{"a 4K still", "image/png", image.NewNRGBA(image.Rect(0, 0, 3840, 2160)), 1},
-		{"a 16-bit render", "image/png", image.NewNRGBA64(image.Rect(0, 0, 2000, 1500)), 1},
-		{"a 12 MP photo", "image/jpeg", image.NewYCbCr(image.Rect(0, 0, 4000, 3000), image.YCbCrSubsampleRatio420), 1},
-		{"a 12 MP photo on its side", "image/jpeg", image.NewYCbCr(image.Rect(0, 0, 4000, 3000), image.YCbCrSubsampleRatio420), 6},
-		{"a 24 MP photo", "image/jpeg", image.NewYCbCr(image.Rect(0, 0, 6000, 4000), image.YCbCrSubsampleRatio444), 1},
-		{"a grey scan", "image/jpeg", image.NewGray(image.Rect(0, 0, 3000, 4000)), 1},
-		{"an icon", "image/png", image.NewNRGBA(image.Rect(0, 0, 64, 64)), 1},
-	} {
-		data := encode(c.contentType, c.img)
-		if c.orientation != 1 {
-			data = withOrientation(t, data, binary.BigEndian, c.orientation)
-		}
-		cost := Cost(c.contentType, data, 640)
-		used := allocated(func() {
-			img, _, err := Decode(c.contentType, data)
-			if err != nil {
-				t.Fatal(err)
-			}
-			orientation := Orientation(c.contentType, data)
-			if _, _, err := Thumbnail(img, 640, orientation); err != nil {
-				t.Fatal(err)
-			}
-			if _, _, err := Display(img, orientation); err != nil {
-				t.Fatal(err)
-			}
-		})
-		t.Logf("%s: budgeted %d MiB, allocated %d MiB", c.name, cost>>20, used>>20)
-		// A megabyte or two of decoder and encoder state is not counted.
-		if int64(used) > cost+cost/10+(3<<20) {
-			t.Errorf("%s: allocated %d MiB but budgeted only %d", c.name, used>>20, cost>>20)
-		}
-		if cost > 3*int64(used)+(3<<20) {
-			t.Errorf("%s: budgeted %d MiB for work that allocates %d", c.name, cost>>20, used>>20)
-		}
-	}
-	if got := Cost("image/png", []byte("not an image"), 640); got != 0 {
-		t.Errorf("an unreadable image costs %d, want 0", got)
-	}
+// scratchOnDisk settles, for one test, whether large canvases go to disk.
+func scratchOnDisk(t *testing.T, disk bool) {
+	t.Helper()
+	was := DiskScratch()
+	scratch.disk = disk
+	t.Cleanup(func() { scratch.disk = was })
 }
 
 // The largest image the server accepts must not need more than the photo
@@ -204,7 +154,7 @@ func TestShrinkAveragesWhatLiesUnderEachPixel(t *testing.T) {
 func TestLargeRenditionsAreUprightAndOnWhite(t *testing.T) {
 	photo := quadrants(4000, 3000)
 	for _, orientation := range []int{1, 6, 8} {
-		out, info, err := Display(photo, orientation)
+		out, info, err := Display(photo, orientation, math.MaxInt)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -219,35 +169,11 @@ func TestLargeRenditionsAreUprightAndOnWhite(t *testing.T) {
 		}
 	}
 	blank := image.NewNRGBA(image.Rect(0, 0, 4000, 3000))
-	out, _, err := Display(blank, 1)
+	out, _, err := Display(blank, 1, math.MaxInt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, _, got := corners(t, out); !near(got[0], color.RGBA{255, 255, 255, 255}) || !near(got[3], color.RGBA{255, 255, 255, 255}) {
 		t.Errorf("a transparent image came out %v, want white", got)
-	}
-}
-
-// Thumbnails of ordinary images are made as they always were; only an image
-// whose scaling would not fit the budget takes the other path.
-func TestOrdinaryThumbnailsKeepTheKernelScaler(t *testing.T) {
-	for _, c := range []struct {
-		w, h   int
-		kernel bool
-	}{
-		{1920, 1080, true},
-		{2560, 1440, true},
-		{1440, 3120, true},  // a phone screenshot
-		{3840, 2160, false}, // a 4K still
-		{4000, 3000, false}, // a 12 MP photo
-		{3000, 4000, false},
-	} {
-		tw, th := 640, c.h*640/c.w
-		if c.h > c.w {
-			tw, th = c.w*640/c.h, 640
-		}
-		if got := kernelFits(tw, th, c.w, c.h); got != c.kernel {
-			t.Errorf("%dx%d to %dx%d: kernel scaler %v, want %v", c.w, c.h, tw, th, got, c.kernel)
-		}
 	}
 }

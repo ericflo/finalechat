@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/semaphore"
 
 	"github.com/ericflo/finalechat/internal/blob"
 	"github.com/ericflo/finalechat/internal/bus"
 	"github.com/ericflo/finalechat/internal/config"
+	"github.com/ericflo/finalechat/internal/imaging"
 	"github.com/ericflo/finalechat/internal/messenger"
 	"github.com/ericflo/finalechat/internal/push"
 	"github.com/ericflo/finalechat/internal/store"
@@ -20,13 +22,19 @@ import (
 
 // Server holds the dependencies shared by every handler.
 type Server struct {
-	cfg         config.Config
-	store       *store.Store
-	bus         *bus.Bus
-	push        *push.Sender
-	blobs       blob.Store
-	log         *slog.Logger
-	authLimiter *rateLimiter
+	cfg   config.Config
+	store *store.Store
+	bus   *bus.Bus
+	push  *push.Sender
+	blobs blob.Store
+	log   *slog.Logger
+	// imageWork is the memory image decoding and rendering may hold at once,
+	// imageMemory bytes of it in all, and imageScratch the disk their
+	// canvases may (see admitImage).
+	imageWork    *semaphore.Weighted
+	imageMemory  int64
+	imageScratch *semaphore.Weighted
+	authLimiter  *rateLimiter
 	// registerLimiter bounds account creation per address more tightly.
 	registerLimiter *rateLimiter
 	// Per-token write budgets (tokens per minute); sessions are not metered.
@@ -90,6 +98,14 @@ func New(cfg config.Config, st *store.Store, b *bus.Bus, p *push.Sender, blobs b
 	}
 	if cfg.MessengerEnabled() {
 		s.messenger = messenger.NewClient(cfg.MessengerGraphURL, cfg.MessengerPageID, cfg.MessengerPageToken)
+	}
+	if s.imageMemory = cfg.ImageMemory; s.imageMemory <= 0 {
+		s.imageMemory = config.ImageMemoryFor(0)
+	}
+	s.imageWork = semaphore.NewWeighted(s.imageMemory)
+	s.imageScratch = semaphore.NewWeighted(imageScratchBytes)
+	if blobs != nil {
+		log.Info("image work", "memory", humanBytes(s.imageMemory), "canvases_on_disk", imaging.DiskScratch())
 	}
 	if blobs != nil && !scratchWritable() {
 		// Uploads still work (see parseMultipart), at the cost of memory.

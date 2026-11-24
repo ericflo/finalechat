@@ -396,7 +396,7 @@ Errors are JSON with a stable `code` and a human `message`:
 | 403 | `forbidden`, `csrf`, `signup_closed`, `invalid_invite` |
 | 404 | `not_found` |
 | 409 | `conflict`, `already_resolved`, `email_taken`, `no_subscriptions` |
-| 413 | `too_large`, `storage_quota` (the account's attachment storage is full; delete threads or messages that carry files) |
+| 413 | `too_large`, `storage_quota` (the account's attachment storage is full; delete threads or messages that carry files), `image_too_large` (an image with too many pixels for the server to decode; the message says how many it can be. Scale it down or zip it) |
 | 422 | `validation_failed` |
 | 429 | `rate_limited` (a token writing faster than about 120 messages, 30 questions, 30 uploads or 300 statuses a minute; wait for the `Retry-After` header) |
 | 502 | `storage_unavailable` |
