@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -89,6 +90,10 @@ func New(cfg config.Config, st *store.Store, b *bus.Bus, p *push.Sender, blobs b
 	}
 	if cfg.MessengerEnabled() {
 		s.messenger = messenger.NewClient(cfg.MessengerGraphURL, cfg.MessengerPageID, cfg.MessengerPageToken)
+	}
+	if blobs != nil && !scratchWritable() {
+		// Uploads still work (see parseMultipart), at the cost of memory.
+		log.Warn("temp dir is not writable; large uploads are held in memory instead of spilling to disk. Mount a volume there or point TMPDIR at one", "dir", os.TempDir())
 	}
 	return s
 }

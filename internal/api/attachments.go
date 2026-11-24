@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -286,17 +288,55 @@ func isMultipart(r *http.Request) bool {
 	return mt == "multipart/form-data"
 }
 
+// multipartMemory is how much file data of one multipart request is parsed
+// into memory; anything past it spills to a file in the temp dir.
+const multipartMemory = 4 << 20
+
+// maxMultipartBody bounds a multipart request: a full set of files plus the
+// form fields.
+const maxMultipartBody = int64(store.MaxAttachmentsPerMessage)*store.MaxAttachmentBytes + maxJSONBody
+
 // parseMultipart bounds the request and parses it.
 func parseMultipart(r *http.Request) (*multipart.Form, error) {
-	r.Body = http.MaxBytesReader(nil, r.Body, int64(store.MaxAttachmentsPerMessage)*store.MaxAttachmentBytes+maxJSONBody)
-	if err := r.ParseMultipartForm(4 << 20); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			return nil, &apiError{Status: http.StatusRequestEntityTooLarge, Code: "too_large", Message: "The request is too large."}
-		}
-		return nil, errBadRequest("Invalid multipart request: %v", err)
+	r.Body = http.MaxBytesReader(nil, r.Body, maxMultipartBody)
+	memory := int64(multipartMemory)
+	if (r.ContentLength < 0 || r.ContentLength > multipartMemory) && !scratchWritable() {
+		// No scratch space (a read-only root filesystem with nothing mounted
+		// at the temp dir): hold the request in memory rather than refuse
+		// every upload past a few megabytes.
+		memory = maxMultipartBody
+	}
+	if err := r.ParseMultipartForm(memory); err != nil {
+		return nil, multipartError(err)
 	}
 	return r.MultipartForm, nil
+}
+
+// multipartError maps a failed parse to a response. Only the request's own
+// faults are the client's: a temp file that cannot be written is ours, and
+// goes to the log as an internal error instead of back as a 400.
+func multipartError(err error) error {
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) || errors.Is(err, multipart.ErrMessageTooLarge) {
+		return &apiError{Status: http.StatusRequestEntityTooLarge, Code: "too_large", Message: "The request is too large."}
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return fmt.Errorf("multipart scratch file: %w", err)
+	}
+	return errBadRequest("Invalid multipart request: %v", err)
+}
+
+// scratchWritable reports whether the temp dir accepts new files, which is
+// where multipart parsing spills large uploads.
+func scratchWritable() bool {
+	f, err := os.CreateTemp("", "finalechat-scratch-")
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	_ = os.Remove(f.Name())
+	return true
 }
 
 // POST /api/v1/threads/{thread}/attachments
