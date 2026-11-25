@@ -1,5 +1,7 @@
 # Implementation and validation record
 
+> Historical note: this predates eagent's single-loop design. Its orchestrator, task workers, narrator and their settings (such as task concurrency and narrator timing) are gone; every eagent session now relays to an external coding agent. Current behaviour is in [integrations.md](../integrations.md).
+
 Status: implemented, validated and committed locally. September 8, 2026. The production deployment and existing user services have not been changed.
 
 The implementation replaces the proposed localhost proxy with durable session websites and an independently paired settings command channel. See [setup and operating details](../integrations.md), [artifact design](session-artifacts.md), [interactive settings design](interactive-settings.md), and [the API reference](../API.md).

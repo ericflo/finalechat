@@ -10,12 +10,13 @@ import { IconBell, IconChevron, IconClock, IconCopy, IconCpu, IconExpand, IconRe
 import { relayName, relayProfiles } from "./NewSession";
 import { SettingsForm, startModel, type FormModel } from "./SettingsForm";
 
-// eagent can start Codex or Claude Code in a terminal it owns and pass the
-// user's messages on (a relay). While one runs, eagent keeps thread meta
-// `relay` current; the controls here are its slash commands, sent as
-// ordinary messages so they show in the conversation like anything else.
+// A host agent (eagent) can start a coding agent (any relay profile it
+// publishes) in a terminal it owns and pass the user's messages on (a
+// relay). While one runs, the host keeps thread meta `relay` current; the
+// controls here are its slash commands, sent as ordinary messages so they
+// show in the conversation like anything else.
 
-/** The relay eagent reports on a thread, or null when there is none. */
+/** The relay the host reports on a thread, or null when there is none. */
 export function threadRelay(t: Thread | undefined): ThreadRelay | null {
   const raw = t?.meta.relay;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -44,7 +45,7 @@ export function threadRelay(t: Thread | undefined): ThreadRelay | null {
 
 const receiptStates: readonly string[] = ["sent", "delivered", "held", "eagent", "failed"];
 
-/** eagent's receipts for the user's recent messages, by message id; empty
+/** The host's receipts for the user's recent messages, by message id; empty
  * outside a relay thread. */
 export function relayReceipts(t: Thread | undefined): Record<string, RelayReceipt> {
   const raw = t?.meta.relay_receipts;
@@ -56,7 +57,8 @@ export function relayReceipts(t: Thread | undefined): Record<string, RelayReceip
   return out;
 }
 
-/** "Codex" or "Claude" for the agents eagent relays to, else the name as given. */
+/** "Codex" or "Claude" for older hosts, whose relays carry only the agent's
+ * command name; otherwise the label's head or the name, capitalised ("Pi"). */
 export function agentName(agent: string, fallback = ""): string {
   const a = agent.toLowerCase();
   if (a.startsWith("codex")) return "Codex";
@@ -67,6 +69,12 @@ export function agentName(agent: string, fallback = ""): string {
 
 export function relayAgent(r: ThreadRelay): string {
   return agentName(r.agent || r.name, r.label.split(" · ")[0] || r.name);
+}
+
+/** The host agent's name as the thread gives it ("eagent"), for the route
+ * pip and receipts; "Host" when the thread names none. */
+export function relayHost(t: Thread | undefined): string {
+  return t?.agent?.trim() || "Host";
 }
 
 /** Older hosts offered one switch destination for each built-in relay. */

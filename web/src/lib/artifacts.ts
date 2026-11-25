@@ -6,6 +6,9 @@ export interface Artifact { id: string; thread_id: string | null; resource_id?: 
 export interface ArtifactRevision { id: string; artifact_id: string; manifest: ArtifactManifest; manifest_sha256: string; created_at: string }
 export interface RevisionInfo { id: string; created_at: string; captured_at: string; producer: ArtifactManifest["producer"]; dataset: Record<string, unknown> }
 export interface Grant { key: string; label: string; scope: string; operations: string[]; classes: string[] }
+/** A connector's provider as people call it: "Claude Code" for
+ * "claude-code"; a provider FinaleChat does not know is shown as given. */
+export const providerName = (p: string) => (p === "claude-code" ? "Claude Code" : p === "codex" ? "Codex" : p === "antigravity" ? "Antigravity" : p);
 export interface Connector { id: string; name: string; provider: string; state: "pending" | "active" | "revoked"; requested_grants: Grant[]; grants: Grant[]; last_seen_at: string | null; expires_at: string }
 export interface Shape { type: "string" | "boolean" | "integer" | "number" | "array" | "object"; enum?: unknown[]; minimum?: number; maximum?: number; max_length?: number; items?: Shape; properties?: Record<string, Shape>; required?: string[] }
 export interface Suggest { list: string; group_by?: string }

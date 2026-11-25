@@ -8891,6 +8891,17 @@
                       },
                       "default": {
                         "description": "The value the action uses when the input is left out, shown so the user knows what leaving it alone means. Must fit the parameter's schema."
+                      },
+                      "when": {
+                        "type": "object",
+                        "description": "Limits the input to some values of other parameters: it applies only while each parameter named holds one of the values listed, where a parameter left out holds \"\". A client asks only for the inputs that apply and sends only theirs. At most 8 parameters, each another parameter of the action, with 1 to 64 values it can take.",
+                        "maxProperties": 8,
+                        "additionalProperties": {
+                          "type": "array",
+                          "minItems": 1,
+                          "maxItems": 64,
+                          "items": {}
+                        }
                       }
                     },
                     "required": [

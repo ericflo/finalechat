@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Sheet } from "../components/Common";
 import { IconChevron, IconFolder, IconSend, IconSettings } from "../components/Icons";
-import { directoryChoices, relayName, relayProfiles, startSession, useSessionStarters } from "../components/NewSession";
+import { directoryChoices, relayName, relayProfiles, startSession, starterHost, startsWithoutRelay, useSessionStarters } from "../components/NewSession";
 import { RunningRelays, agentName, runningRelays } from "../components/Relay";
 import { ResourceSettingsSheet } from "../components/ThreadSettings";
 import { SettingsForm, formSummary, startModel, startParameters, type FormModel } from "../components/SettingsForm";
@@ -14,6 +14,8 @@ const fromHome = (p: string, root: string) => {
   const h = root.match(/^\/(?:home|Users)\/[^/]+/)?.[0];
   return h && /^~(\/|$)/.test(p) ? h + p.slice(1) : p;
 };
+/** "eagent" stays as written; "the agent" starts a sentence as "The agent". */
+const cap = (s: string) => (s.startsWith("the ") ? "T" + s.slice(1) : s);
 const base = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
 
 /** An agent and folder a relay session started with from this device. */
@@ -40,9 +42,10 @@ function rememberRecent(key: string, r: RecentRelay) {
 }
 
 /** A new session before it exists. The page is a short form: who does the
- * work (eagent itself, or an agent eagent starts and relays to), what it
- * runs with, and the folder it starts in; under it, what is already running
- * on that machine, so the user can go there instead. The message box at the
+ * work (an agent the integration starts and relays to, or, when the
+ * integration offers it, the integration itself), what it runs with, and
+ * the folder it starts in; under it, what is already running on that
+ * machine, so the user can go there instead. The message box at the
  * bottom is all that stays in reach of the thumb, and the first message is
  * what starts the session, born with everything already chosen. Nothing is
  * created until then. */
@@ -66,9 +69,12 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
   const [error, setError] = useState<string | null>(null);
   const cancelled = useRef(false);
   const ref = useRef<HTMLTextAreaElement>(null);
-  // Who does the work: "" is eagent, otherwise a relay profile's name. The
-  // last choice is remembered per connector.
+  // Who does the work: a relay profile's name, or "" for the integration
+  // itself when its session.start accepts no relay. The last choice is
+  // remembered per connector.
   const profiles = useMemo(() => (starter ? relayProfiles(starter.resource) : []), [starter]);
+  const host = starter ? starterHost(starter) : "the agent";
+  const canSelf = starter ? startsWithoutRelay(starter.resource) : true;
   // Agents already running on that machine, so the user can go to one
   // instead of starting another.
   const running = useMemo(() => (starter ? runningRelays(starter.resource) : []), [starter]);
@@ -81,8 +87,10 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
     }
   }, [agentKey]);
   const [picked, setPicked] = useState<string | null>(null);
-  const relay = profiles.find((p) => p.name === (picked ?? remembered)) ?? null;
-  const who = relay ? relayName(relay) : "eagent";
+  // An integration that always relays starts the remembered profile, else
+  // the first it lists (its default).
+  const relay = profiles.find((p) => p.name === (picked ?? remembered)) ?? (canSelf ? null : (profiles[0] ?? null));
+  const who = relay ? relayName(relay) : host;
   const pickAgent = (name: string) => {
     setPicked(name);
     try {
@@ -91,7 +99,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
       // ignore
     }
   };
-  const agents = [{ name: "", short: "eagent", title: "eagent does the work" }, ...profiles.map((p) => ({ name: p.name, short: relayName(p), title: `eagent starts ${p.label} and passes your messages on` }))];
+  const agents = [...(canSelf ? [{ name: "", short: host, title: `${host} does the work` }] : []), ...profiles.map((p) => ({ name: p.name, short: relayName(p), title: `${host} starts ${p.label} and passes your messages on` }))];
   // Agent and folder pairs this device started relays with, still offered.
   const recentKey = starter ? `fc.draft.${starter.connector.id}.recent` : "";
   const recent = useMemo(
@@ -129,7 +137,8 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
   const built = starter && startAction?.inputs?.length ? startModel(starter.resource.descriptor, startAction, options, saveOptions, { relay: relay?.name ?? "" }) : null;
   const form = built && built.items.length ? built : null;
   const summary = form ? formSummary(form) : [];
-  // A relayed agent may start with nothing to do yet; eagent needs a task.
+  // A relayed agent may start with nothing to do yet; without one the
+  // integration needs a task.
   const ready = !!text.trim() || !!relay;
   // Set again on mount: StrictMode's dev remount would otherwise leave it true.
   useEffect(() => {
@@ -196,12 +205,12 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
         {loaded && !starter && (
           <div className="empty">
             <h2>Not connected</h2>
-            <p>Start eagent in the project (serve, a session, or connector run) and come back.</p>
+            <p>Start the agent&rsquo;s connector in the project and come back.</p>
           </div>
         )}
         {starter && !status && (
           <>
-            {!starter.online && <p className="draft-warn">This project&rsquo;s eagent is offline right now. Start it there, then send.</p>}
+            {!starter.online && <p className="draft-warn">This project&rsquo;s {host} is offline right now. Start it there, then send.</p>}
             {profiles.length > 0 && (
               <section>
                 <h2 className="draft-label" id="draft-agent">
@@ -211,7 +220,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
                   {agents.map((o) => {
                     const active = (relay?.name ?? "") === o.name;
                     return (
-                      <button key={o.name || "eagent"} type="button" className={`agent-option${active ? " active" : ""}`} aria-pressed={active} title={o.title} disabled={busy} onClick={() => pickAgent(o.name)}>
+                      <button key={o.name || "-self"} type="button" className={`agent-option${active ? " active" : ""}`} aria-pressed={active} title={o.title} disabled={busy} onClick={() => pickAgent(o.name)}>
                         {o.short}
                       </button>
                     );
@@ -234,7 +243,7 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
                   <IconChevron aria-hidden="true" />
                 </button>
               </div>
-              <p className="draft-note">{relay ? `eagent starts ${who} in this folder and passes your messages on.` : "eagent does the work itself, starting in this folder."}</p>
+              <p className="draft-note">{relay ? `${cap(host)} starts ${who} in this folder and passes your messages on.` : `${cap(host)} does the work itself, starting in this folder.`}</p>
             </section>
             {recent.length > 0 && (
               <section>
@@ -311,16 +320,16 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
           </form>
         </div>
       )}
-      {picking && choices && <DirectorySheet choices={choices} current={dir} who={relay ? who : null} onChoose={choose} onClose={() => setPicking(false)} />}
+      {picking && choices && <DirectorySheet choices={choices} current={dir} who={relay ? who : null} host={host} onChoose={choose} onClose={() => setPicking(false)} />}
       {settingsOpen && <ResourceSettingsSheet resourceId={resourceId} onClose={() => setSettingsOpen(false)} />}
       {optionsOpen && form && <StartOptionsSheet form={form} onReset={() => form.reset(form.items.map((i) => i.key))} onClose={() => setOptionsOpen(false)} />}
     </div>
   );
 }
 
-function DirectorySheet({ choices, current, who, onChoose, onClose }: { choices: ReturnType<typeof directoryChoices>; current: string; who: string | null; onChoose: (p: string) => void; onClose: () => void }) {
+function DirectorySheet({ choices, current, who, host, onChoose, onClose }: { choices: ReturnType<typeof directoryChoices>; current: string; who: string | null; host: string; onChoose: (p: string) => void; onClose: () => void }) {
   const [custom, setCustom] = useState("");
-  // An absolute path, or ~/… (eagent reads ~ as the machine's home).
+  // An absolute path, or ~/… (read as the home folder on the project's machine).
   const typed = fromHome(custom.trim(), choices.root).replace(/(.)\/+$/, "$1");
   const isPath = /^(\/|~(\/|$))/.test(typed);
   // Anything else typed narrows the lists: "snow" finds ~/Development/snowdown.
@@ -344,7 +353,7 @@ function DirectorySheet({ choices, current, who, onChoose, onClose }: { choices:
     <Sheet onClose={onClose} label="Start in">
       <div style={{ padding: "4px 6px" }}>
         <h2 style={{ fontSize: 18, marginBottom: 6 }}>{who ? `Where ${who} works` : "Start in"}</h2>
-        <p style={{ marginBottom: 10 }}>{who ? `eagent starts ${who} in this folder; the session\u2019s settings and logs stay with the project.` : "The session\u2019s first commands run here; its settings and logs stay with the project."}</p>
+        <p style={{ marginBottom: 10 }}>{who ? `${cap(host)} starts ${who} in this folder; the session\u2019s settings and logs stay with the project.` : "The session\u2019s first commands run here; its settings and logs stay with the project."}</p>
         <form
           onSubmit={(e) => {
             e.preventDefault();

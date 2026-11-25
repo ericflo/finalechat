@@ -622,6 +622,13 @@ func TestMessengerNewRelaySession(t *testing.T) {
 		return claim(from), g.texts(from)
 	}
 
+	// /help names the agents connected projects offer.
+	from0 := g.mark()
+	say(t, psid, "/help")
+	if txt := lastText(t, g, from0); !strings.Contains(txt, "/new ") || !strings.Contains(txt, "codex") || !strings.Contains(txt, "claude") {
+		t.Fatalf("/help: %q", txt)
+	}
+
 	params, sent := start("/new codex Fix the flaky test")
 	if params["relay"] != "codex" || params["prompt"] != "Fix the flaky test" || params["cwd"] != nil {
 		t.Fatalf("relay start parameters: %v", params)
@@ -651,10 +658,10 @@ func TestMessengerNewRelaySession(t *testing.T) {
 	b.must(200, "DELETE", "/api/v1/connectors/"+id, nil)
 }
 
-// eagent's relay controls are slash commands Messenger does not own: they
+// An agent's relay controls are slash commands Messenger does not own: they
 // reach the pinned relay thread exactly as typed, even while a question
 // waits there or a /new is asking for a folder, and Messenger's own
-// commands stay its own.
+// commands stay its own. So does any other /word Messenger does not know.
 func TestMessengerRelayCommands(t *testing.T) {
 	b, a := setup(t)
 	g := withMessenger(t)
@@ -687,6 +694,7 @@ func TestMessengerRelayCommands(t *testing.T) {
 	for _, cmd := range []string{
 		"/interrupt", "/autopilot until 10:00", "/autopilot until 10:00 finish the migration, then open a PR", "/autopilot off",
 		"/switch claude", "/updates 15m", "/restart", "/upgrade", "/relay", "/stop-relay",
+		"/model gpt-6-astra high", "/model openrouter/qwen3-coder default", "/screen", "/notify-done", "/switch pi", "/some-new-command now",
 	} {
 		say(t, psid, cmd)
 		m := lastUser()
@@ -721,7 +729,7 @@ func TestMessengerRelayCommands(t *testing.T) {
 	}
 	from = g.mark()
 	say(t, psid, "/help")
-	if txt := lastText(t, g, from); !strings.Contains(txt, "/interrupt, /autopilot, /relay") {
+	if txt := lastText(t, g, from); !strings.Contains(txt, "/new — start a session") || !strings.Contains(txt, "goes to the thread's agent") || strings.Contains(txt, "eagent") || strings.Contains(txt, "/tasks") {
 		t.Fatalf("/help: %q", txt)
 	}
 
@@ -754,9 +762,11 @@ func TestMessengerRelayCommands(t *testing.T) {
 	if body := lastUser()["body"]; body != "dev" {
 		t.Fatalf("/new reached the thread: %v", body)
 	}
-	say(t, psid, "/interrupt")
-	if body := lastUser()["body"]; body != "/interrupt" {
-		t.Fatalf("/interrupt during /new: %v", body)
+	for _, cmd := range []string{"/interrupt", "/model gpt-6-astra high", "/screen", "/notify-done", "/some-new-command now"} {
+		say(t, psid, cmd)
+		if body := lastUser()["body"]; body != cmd {
+			t.Fatalf("%s during /new: %v", cmd, body)
+		}
 	}
 	from = g.mark()
 	say(t, psid, "/home/eric/relay/api")

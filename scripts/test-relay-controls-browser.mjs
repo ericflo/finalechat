@@ -6,7 +6,8 @@
 // Restart and the stops at the bottom, each asking first. It has no
 // Interrupt, Status or Updates. Interrupting is the small stop button in
 // the message field, there only while the agent works, and it leaves the
-// field free to type.
+// field free to type. A fourth profile (pi, whose models are named
+// provider/model) is offered and controlled like the others.
 //
 //   FINALECHAT_PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs node scripts/test-relay-controls-browser.mjs
 import assert from 'node:assert/strict';
@@ -24,7 +25,7 @@ await mkdir(shots, { recursive: true });
 const now = () => new Date().toISOString();
 const ago = (min) => new Date(Date.now() - min * 60000).toISOString();
 const user = { id: 'u1', email: 'u@example.com', display_name: 'U', settings: { notify_all_messages: false, remote_mode: false }, created_at: ago(9000) };
-const relayMeta = (state, extra = {}) => ({ name: 'claude', agent: 'claude', profile: 'claude', label: 'Claude Code · Fable 5.2 xhigh', model: 'fable', effort: 'xhigh', state, autopilot: false, autopilot_until: '', target: 'eagent-relay-1-claude', attach: 'eagent relays attach eagent-relay-1-claude', notify_done: false, switch_profiles: ['antigravity', 'codex'], ...extra });
+const relayMeta = (state, extra = {}) => ({ name: 'claude', agent: 'claude', profile: 'claude', label: 'Claude Code · Fable 5.2 xhigh', model: 'fable', effort: 'xhigh', state, autopilot: false, autopilot_until: '', target: 'eagent-relay-1-claude', attach: 'eagent relays attach eagent-relay-1-claude', notify_done: false, switch_profiles: ['antigravity', 'codex', 'pi'], ...extra });
 const thread = (id, meta) => ({
   id, external_id: `eagent:${id}`, title: 'Search ranking', agent: 'eagent', meta, created_at: ago(600), updated_at: ago(1), last_activity_at: ago(1), last_read_at: ago(0),
   archived_at: null, muted: false, preview: 'Claude is editing rank.go.', preview_sender: 'agent', unread_count: 0, pending_questions: 0,
@@ -37,26 +38,29 @@ const project = {
   descriptor: { format: 'finalechat.settings/v1', schema_version: 'eagent.settings/v1', adapter_version: '1', fields: [],
     actions: [{ operation: 'session.start', label: 'Start a new session', class: 'cost',
       parameters: { type: 'object', required: ['prompt'], properties: {
-        prompt: { type: 'string' }, relay: { type: 'string', enum: ['', 'antigravity', 'claude', 'codex'] }, config: { type: 'string' },
+        prompt: { type: 'string' }, relay: { type: 'string', enum: ['claude', 'antigravity', 'codex', 'pi'] },
         relay_claude_model: { type: 'string', max_length: 200 }, relay_claude_effort: efforts('low', 'medium', 'high', 'xhigh', 'max'),
         relay_codex_model: { type: 'string', max_length: 200 }, relay_codex_effort: efforts('low', 'medium', 'high', 'xhigh', 'ultra'),
         relay_antigravity_model: { type: 'string', max_length: 200 }, relay_antigravity_effort: efforts('low', 'high'),
+        relay_pi_model: { type: 'string', max_length: 200 }, relay_pi_effort: efforts('low', 'medium', 'high', 'xhigh'),
       } },
       inputs: [
-        { name: 'config', label: 'Configuration', suggest: { list: 'configs' }, default: 'glm', when: { relay: [''] } },
         { name: 'relay_claude_model', label: 'Model', group: 'Claude Code', suggest: { list: 'claude_models' }, default: 'fable', when: { relay: ['claude'] } },
         { name: 'relay_claude_effort', label: 'Reasoning effort', group: 'Claude Code', default: 'medium', when: { relay: ['claude'] } },
         { name: 'relay_codex_model', label: 'Model', group: 'Codex', suggest: { list: 'codex_models' }, default: 'gpt-6.2-astra', when: { relay: ['codex'] } },
         { name: 'relay_codex_effort', label: 'Reasoning effort', group: 'Codex', default: 'xhigh', when: { relay: ['codex'] } },
         { name: 'relay_antigravity_model', label: 'Model', group: 'Antigravity', suggest: { list: 'antigravity_models' }, default: 'Gemini 3.1 Pro', when: { relay: ['antigravity'] } },
         { name: 'relay_antigravity_effort', label: 'Reasoning effort', group: 'Antigravity', default: 'high', when: { relay: ['antigravity'] } },
+        { name: 'relay_pi_model', label: 'Model', group: 'Pi', suggest: { list: 'pi_models' }, when: { relay: ['pi'] } },
+        { name: 'relay_pi_effort', label: 'Reasoning effort', group: 'Pi', when: { relay: ['pi'] } },
       ] }],
-    suggestions: { configs: models('glm'), claude_models: models('fable', 'opus', 'sonnet', 'haiku'), codex_models: models('gpt-6.2-astra', 'gpt-6.2-sol'), antigravity_models: models('Gemini 3.1 Pro', 'Gemini 3.1 Flash') } },
+    suggestions: { pi_models: models('openrouter/qwen3-coder', 'anthropic/claude-sonnet-5-5'), claude_models: models('fable', 'opus', 'sonnet', 'haiku'), codex_models: models('gpt-6.2-astra', 'gpt-6.2-sol'), antigravity_models: models('Gemini 3.1 Pro', 'Gemini 3.1 Flash') } },
   snapshot: { version: 'p1', context: '/home/u/Development', saved: {}, effective: {}, runtime_known: false, details: {
     relay_profiles: [
-      { name: 'antigravity', agent: 'antigravity', label: 'Antigravity · Gemini 3.1 Pro high', model: 'Gemini 3.1 Pro', effort: 'high' },
       { name: 'claude', agent: 'claude', label: 'Claude Code · Fable 5.2 medium', model: 'fable', effort: 'medium' },
+      { name: 'antigravity', agent: 'antigravity', label: 'Antigravity · Gemini 3.1 Pro high', model: 'Gemini 3.1 Pro', effort: 'high' },
       { name: 'codex', agent: 'codex', label: 'Codex · GPT-6.2-Astra xhigh', model: 'gpt-6.2-astra', effort: 'xhigh' },
+      { name: 'pi', agent: 'pi', label: 'Pi · openrouter/qwen3-coder high', model: 'openrouter/qwen3-coder', effort: 'high' },
     ] } },
 };
 const connector = { id: 'c1', name: 'eagent · Development', provider: 'eagent', state: 'active', grants: [], requested_grants: [], last_seen_at: now(), expires_at: now() };
@@ -68,7 +72,7 @@ const browser = await chromium.launch({ headless: true });
 const errors = [];
 try {
   for (const [name, width, height] of [['phone', 390, 844], ['desktop', 1280, 900]]) {
-    const threads = { work: thread('work', { relay: relayMeta('working') }), idle: thread('idle', { relay: relayMeta('idle', { pending: 'opus at high' }) }), old: thread('old', { relay: { name: 'codex', agent: 'codex', label: 'Codex · GPT-6 Astra xhigh', state: 'working' } }) };
+    const threads = { work: thread('work', { relay: relayMeta('working') }), idle: thread('idle', { relay: relayMeta('idle', { pending: 'opus at high' }) }), old: thread('old', { relay: { name: 'codex', agent: 'codex', label: 'Codex · GPT-6 Astra xhigh', state: 'working' } }), pi: thread('pi', { relay: { name: 'pi', agent: 'pi', profile: 'pi', label: 'Pi · openrouter/qwen3-coder high', model: 'openrouter/qwen3-coder', effort: 'high', state: 'idle', switch_profiles: ['claude', 'antigravity', 'codex'] } }) };
     const sent = [];
     let projectSettings = true;
     const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2, serviceWorkers: 'block' });
@@ -122,6 +126,17 @@ try {
     assert.equal(await page.locator('.composer textarea').inputValue(), 'also keep the old weights behind a flag', 'stopping keeps what was typed');
     await page.getByRole('button', { name: 'Send to Claude' }).click();
     assert.equal(await lastSent(2), 'also keep the old weights behind a flag');
+    // Who gets the next message: the relayed agent, or the host by the
+    // thread's own name for it.
+    await page.locator('.route-pip').click();
+    const pop = page.getByRole('menu', { name: 'Who gets your message' });
+    await pop.getByText('Kept for eagent: status, settings, questions.').waitFor();
+    await settle();
+    await page.screenshot({ path: `${shots}/${name}-route-pip.png` });
+    await pop.getByRole('menuitemradio', { name: /^eagent/ }).click();
+    await page.getByPlaceholder('Message eagent…').waitFor();
+    await page.locator('.route-pip').click();
+    await pop.getByRole('menuitemradio', { name: /^Claude/ }).click();
 
     // The controls, in order: what it runs first, what ends or restarts it last.
     await page.locator('.relay-badge').click();
@@ -131,7 +146,7 @@ try {
     const sheetText = await page.locator('.relay-sheet .sheet').textContent();
     for (const gone of ['Interrupt', 'Status', 'Updates', '15m']) assert.ok(!sheetText.includes(gone), `${gone} is no longer in the sheet`);
     assert.match(await page.getByRole('button', { name: /^Model/ }).textContent(), /Fable 5\.2 xhigh/);
-    assert.match(await page.getByRole('button', { name: /^Switch agent/ }).textContent(), /Antigravity or Codex/);
+    assert.match(await page.getByRole('button', { name: /^Switch agent/ }).textContent(), /Antigravity or Codex or Pi/);
     await page.screenshot({ path: `${shots}/${name}-relay-sheet.png` });
 
     // Restart asks first; cancelling sends nothing.
@@ -207,6 +222,28 @@ try {
     await choose(page, agentSheet, 'Model', 'Gemini 3.1 Flash');
     await agentSheet.getByRole('button', { name: 'Switch to Antigravity' }).click();
     assert.equal(await lastSent(9), '/switch antigravity "Gemini 3.1 Flash" default');
+    await page.locator('.relay-badge').click();
+    await page.getByRole('button', { name: /^Switch agent/ }).click();
+    await agentSheet.getByRole('radio', { name: 'Pi' }).click();
+    await choose(page, agentSheet, 'Model', 'openrouter/qwen3-coder');
+    await agentSheet.getByRole('button', { name: 'Switch to Pi' }).click();
+    assert.equal(await lastSent(10), '/switch pi openrouter/qwen3-coder default');
+
+    // A pi relay: named from its label, its own models, sent as typed.
+    await page.goto(base + '/t/pi');
+    await page.locator('.relay-badge').getByText('Pi · idle').waitFor();
+    await page.locator('.relay-badge').click();
+    assert.match(await page.getByRole('button', { name: /^Model/ }).textContent(), /openrouter\/qwen3-coder high/);
+    assert.match(await page.getByRole('button', { name: /^Switch agent/ }).textContent(), /Claude or Antigravity or Codex/);
+    await page.getByRole('button', { name: /^Model/ }).click();
+    await agentSheet.getByRole('heading', { name: "Pi's model" }).waitFor();
+    await agentSheet.locator('.sf-row').first().waitFor();
+    await choose(page, agentSheet, 'Model', 'anthropic/claude-sonnet-5-5');
+    await choose(page, agentSheet, 'Reasoning effort', 'xhigh');
+    await settle();
+    await page.screenshot({ path: `${shots}/${name}-pi-model-sheet.png` });
+    await agentSheet.getByRole('button', { name: 'Change', exact: true }).click();
+    assert.equal(await lastSent(11), '/model anthropic/claude-sonnet-5-5 xhigh');
 
     // Idle: no stop button, and a change that waits for the turn shows on the Model row.
     await page.goto(base + '/t/idle');
@@ -224,7 +261,7 @@ try {
     await page.getByRole('button', { name: /^Switch agent/ }).click();
     await agentSheet.getByText('Claude will start with its own model and reasoning effort.').waitFor();
     await agentSheet.getByRole('button', { name: 'Switch to Claude' }).click();
-    assert.equal(await lastSent(10), '/switch claude');
+    assert.equal(await lastSent(12), '/switch claude');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'overflow');
     await page.close();
   }

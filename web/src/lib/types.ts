@@ -34,8 +34,8 @@ export interface Thread {
   external_id: string | null;
   title: string;
   agent: string;
-  /** Free-form. eagent sets `relay` (a {@link ThreadRelay}) on its session
-   * threads while it relays to Codex or Claude Code, and `null` after, and
+  /** Free-form. A host agent (eagent) sets `relay` (a {@link ThreadRelay})
+   * on its session threads while it relays to a coding agent, `null` after, and
    * `relay_receipts` ({@link RelayReceipt} by message id) for the user's
    * recent messages there. */
   meta: Record<string, unknown>;
@@ -72,12 +72,13 @@ export interface LiveSession {
   stop?: { label: string; description?: string };
 }
 
-/** What eagent publishes as thread meta `relay` while an agent it started
- * (Codex, Claude Code) does the session's work. */
+/** What the host publishes as thread meta `relay` while an agent it started
+ * (any of its relay profiles) does the session's work. */
 export interface ThreadRelay {
   /** The relay's name in its session, e.g. "codex". */
   name: string;
-  /** "codex", "claude" or "antigravity". */
+  /** The relayed agent's command name, e.g. "codex"; any name the host
+   * uses ("pi") is shown capitalised. */
   agent: string;
   /** The profile it was started from, e.g. "codex"; "" from older hosts. */
   profile: string;
@@ -102,13 +103,15 @@ export interface ThreadRelay {
   switch_profiles?: string[];
 }
 
-/** What eagent knows about one of the user's messages in a relay thread
- * (thread meta `relay_receipts`, keyed by message id). */
+/** What the host knows about one of the user's messages in a relay thread
+ * (thread meta `relay_receipts`, keyed by message id); "eagent" means the
+ * host kept it. */
 export type RelayReceipt = "sent" | "delivered" | "held" | "eagent" | "failed";
 
-/** Who a message in a relay thread is for: the relayed agent, or eagent. */
+/** Who a message in a relay thread is for: the relayed agent, or the host
+ * ("eagent", the protocol's word for it). */
 export type EagentRoute = "agent" | "eagent";
-/** When the relayed agent gets it: eagent's default, now (interrupting), or after its turn. */
+/** When the relayed agent gets it: the host's default, now (interrupting), or after its turn. */
 export type EagentDelivery = "queue" | "interrupt" | "after_turn";
 
 export type Sender = "agent" | "user" | "system";

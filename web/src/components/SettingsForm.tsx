@@ -58,7 +58,7 @@ export interface FormModel {
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 export const show = (v: unknown): string => (v === undefined || v === null || v === "" ? "—" : typeof v === "boolean" ? (v ? "On" : "Off") : typeof v === "string" ? v : JSON.stringify(v));
-/** "Orchestrator" + "Reasoning effort" reads "Orchestrator reasoning effort". */
+/** "Codex" + "Reasoning effort" reads "Codex reasoning effort". */
 export const fullLabel = (i: { label: string; group?: string }) => (i.group ? `${i.group} ${/^[A-Z][a-z]/.test(i.label) ? i.label.charAt(0).toLowerCase() + i.label.slice(1) : i.label}` : i.label);
 
 /** The suggestion for a value: in its group when grouped, else any. */
@@ -501,7 +501,7 @@ function ChoiceList({ model, item, id, list }: { model: FormModel; item: FormIte
   );
 }
 
-/** "Based on openai-high: Narrator changed", for a preset changed since. */
+/** "Based on openai-high: Summaries changed", for a preset changed since. */
 function customLine(model: FormModel, item: FormItem): string | undefined {
   const st = model.state(item.key);
   if (!st.custom) return undefined;

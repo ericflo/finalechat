@@ -1,5 +1,7 @@
 # Relay threads: affordances worth adding
 
+> Historical note: this predates eagent's single-loop design. Its orchestrator, task workers, narrator and their settings (such as task concurrency and narrator timing) are gone; every eagent session now relays to an external coding agent. Current behaviour is in [integrations.md](../integrations.md).
+
 Scope: relay threads only, where eagent runs Codex or Claude Code for you. The rest of Finalechat stays as it is.
 
 The evidence comes from your 17 relay sessions (805 messages) and builds on what shipped this week: the agent picker, the "Sent to Codex" bubbles, the badge and controls sheet, the To toggle, and hold-to-interrupt.

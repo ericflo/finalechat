@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
-import { controlAPI, type Connector, type SettingsResource } from "../lib/artifacts";
+import { APIError, api } from "../lib/api";
+import { controlAPI, providerName, type Connector, type SettingsCommand, type SettingsResource } from "../lib/artifacts";
 import { navigate } from "../lib/router";
 import { Sheet } from "./Common";
 
@@ -12,7 +12,7 @@ export interface SessionStarter {
 }
 
 /** Every connected integration that advertises `session.start`, refreshed
- * while the page is visible so the button appears when eagent comes up. */
+ * while the page is visible so the button appears when the agent comes up. */
 export function useSessionStarters(): { starters: SessionStarter[]; loaded: boolean } {
   const [starters, setStarters] = useState<SessionStarter[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -61,8 +61,8 @@ export function directoryChoices(resource: SettingsResource): DirectoryChoices {
   return { root: typeof raw?.root === "string" ? raw.root : resource.snapshot.context, recent: list(raw?.recent), children: list(raw?.children), siblings: list(raw?.siblings) };
 }
 
-/** An agent eagent can start to do a session's work instead of doing it
- * itself (Codex, Claude Code), as the integration published it. */
+/** An agent the integration can start and pass the session's messages to
+ * (a relay profile), as the integration published it. */
 export interface RelayProfile {
   name: string;
   agent: string;
@@ -80,6 +80,21 @@ export function relayProfiles(resource: SettingsResource): RelayProfile[] {
     .map((p) => ({ name: text(p.name), agent: text(p.agent), label: text(p.label) || text(p.name), model: text(p.model), effort: text(p.effort) }));
 }
 
+/** Who starts the session, as people call it: the connector's provider
+ * ("eagent", "Claude Code"), else "the agent". */
+export function starterHost(starter: SessionStarter): string {
+  return providerName(starter.connector.provider.trim()) || "the agent";
+}
+
+/** Whether a session may start without a relay profile, the agent doing the
+ * work itself. True unless the action's `relay` parameter is an enum that
+ * leaves out "" (an agent that always relays), or there is nothing to pick. */
+export function startsWithoutRelay(resource: SettingsResource): boolean {
+  if (!relayProfiles(resource).length) return true;
+  const relay = resource.descriptor.actions?.find((a) => a.operation === "session.start")?.parameters?.properties?.relay;
+  return !relay || !Array.isArray(relay.enum) || relay.enum.includes("");
+}
+
 /** "Codex" from "Codex · GPT-6 Astra xhigh". */
 export function relayName(p: RelayProfile): string {
   return p.label.split(" · ")[0]?.trim() || p.name;
@@ -93,35 +108,45 @@ export function relayDetail(p: RelayProfile): string {
 
 /** Starts a session through the trusted command channel and resolves to the
  * id of its thread once the integration's mirror has created it. With a
- * relay profile, eagent starts that agent to do the work. */
+ * relay profile, the integration starts that agent to do the work. */
 export async function startSession(starter: SessionStarter, prompt: string, cwd: string | null, relay: RelayProfile | null, options: Record<string, unknown>, onStatus: (s: string) => void, cancelled: () => boolean): Promise<string> {
-  onStatus(relay ? `Asking eagent to start ${relayName(relay)}…` : "Asking eagent to start the session…");
-  // The connector republishes its settings whenever they change; take the
-  // version it holds now, not the one the page loaded a while ago.
-  const r = (await controlAPI.resource(starter.resource.id)).resource;
-  // The options the agent asks for (its declared inputs), as the user set
-  // them; only inputs the action still declares are sent.
-  const inputs = new Set(r.descriptor.actions?.find((a) => a.operation === "session.start")?.inputs?.map((i) => i.name));
-  const parameters: Record<string, unknown> = Object.fromEntries(Object.entries(options).filter(([k, v]) => inputs.has(k) && v !== undefined && v !== ""));
-  parameters.prompt = prompt.trim();
-  if (cwd && cwd !== directoryChoices(r).root) parameters.cwd = cwd;
-  if (relay) {
-    if (!relayProfiles(r).some((p) => p.name === relay.name)) throw new Error(`This project no longer offers ${relayName(relay)}.`);
-    parameters.relay = relay.name;
+  const host = starterHost(starter);
+  onStatus(relay ? `Asking ${host} to start ${relayName(relay)}…` : `Asking ${host} to start the session…`);
+  let current: SettingsCommand | null = null;
+  // The connector republishes its settings whenever they change (a relay
+  // starting or ending elsewhere is enough), so the version read here can be
+  // stale by the time the start arrives; one fresh try covers that.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const r = (await controlAPI.resource(starter.resource.id)).resource;
+    // The options the agent asks for (its declared inputs), as the user set
+    // them; only inputs the action still declares are sent.
+    const inputs = new Set(r.descriptor.actions?.find((a) => a.operation === "session.start")?.inputs?.map((i) => i.name));
+    const parameters: Record<string, unknown> = Object.fromEntries(Object.entries(options).filter(([k, v]) => inputs.has(k) && v !== undefined && v !== ""));
+    parameters.prompt = prompt.trim();
+    if (cwd && cwd !== directoryChoices(r).root) parameters.cwd = cwd;
+    if (relay) {
+      if (!relayProfiles(r).some((p) => p.name === relay.name)) throw new Error(`This project no longer offers ${relayName(relay)}.`);
+      parameters.relay = relay.name;
+    }
+    try {
+      ({ command: current } = await controlAPI.createCommand(r.id, {
+        client_key: crypto.randomUUID(),
+        proposal: { operation: "session.start", schema_version: r.descriptor.schema_version, expected_version: r.snapshot.version, generation: r.generation, parameters },
+        ttl_seconds: 300,
+      }));
+    } catch (e) {
+      if (attempt === 0 && e instanceof APIError && e.status === 409 && e.code === "conflict") continue;
+      throw e;
+    }
+    while (["queued", "executing"].includes(current.status)) {
+      if (cancelled()) throw new Error("cancelled");
+      await sleep(1500);
+      current = (await controlAPI.command(current.id)).command;
+    }
+    if (current.status !== "conflicted") break;
   }
-  const { command } = await controlAPI.createCommand(r.id, {
-    client_key: crypto.randomUUID(),
-    proposal: { operation: "session.start", schema_version: r.descriptor.schema_version, expected_version: r.snapshot.version, generation: r.generation, parameters },
-    ttl_seconds: 300,
-  });
-  let current = command;
-  while (["queued", "executing"].includes(current.status)) {
-    if (cancelled()) throw new Error("cancelled");
-    await sleep(1500);
-    current = (await controlAPI.command(command.id)).command;
-  }
-  if (current.status !== "succeeded") {
-    const message = typeof current.result?.message === "string" ? current.result.message : `eagent did not start the session (${current.status}).`;
+  if (!current || current.status !== "succeeded") {
+    const message = typeof current?.result?.message === "string" ? current.result.message : `The session did not start (${current?.status ?? "no answer"}).`;
     throw new Error(message);
   }
   const ref = typeof current.result?.thread === "string" ? current.result.thread : null;
@@ -141,7 +166,7 @@ export async function startSession(starter: SessionStarter, prompt: string, cwd:
   throw new Error("The session started, but its thread has not appeared yet. It will show up in the inbox shortly.");
 }
 
-/** Picks the project for a new session when more than one eagent is connected. */
+/** Picks the project for a new session when more than one agent can start one. */
 export function ProjectPickerSheet({ starters, onClose }: { starters: SessionStarter[]; onClose: () => void }) {
   return (
     <Sheet onClose={onClose} label="New session">

@@ -3,7 +3,7 @@ import { Sheet } from "./Common";
 import { IconClose, IconEdit } from "./Icons";
 import { toast, updateThread, useStore } from "../lib/store";
 import { SettingsForm, resourceModel } from "./SettingsForm";
-import { artifactAPI, controlAPI, effectLabel, validateProposal, type ArtifactRevision, type SettingEdit, type SettingsDescriptor, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
+import { artifactAPI, controlAPI, effectLabel, providerName, validateProposal, type ArtifactRevision, type SettingEdit, type SettingsDescriptor, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
 import { connectArtifactFrame } from "../lib/artifact-bridge";
 import "./thread-settings.css";
 
@@ -35,7 +35,7 @@ export function ThreadSettingsPanel({ thread, onClose }: { thread: string; onClo
     {closing && <div className="ts-discard">You have unsaved changes.<button className="btn small" onClick={() => setClosing(false)}>Keep editing</button><button className="btn small" onClick={onClose}>Discard changes</button></div>}
     {error && <p className="ts-message" role="alert">{error}</p>}
     {links === null && !error && <p className="ts-message">Loading your agent’s settings…</p>}
-    {links?.length === 0 && <div className="ts-empty"><h3>Settings will appear here</h3><p>When your agent connects, you can change its models and behavior right here in the conversation.</p><p>Keep eagent’s server or your native CLI companion running. This panel updates automatically.</p></div>}
+    {links?.length === 0 && <div className="ts-empty"><h3>Settings will appear here</h3><p>When your agent connects, you can change its models and behavior right here in the conversation.</p><p>Keep your agent or the native CLI companion running. This panel updates automatically.</p></div>}
     {!!links?.length && project && <nav className="ts-scope" aria-label="Which settings">
       <button aria-pressed={scope === "session"} disabled={dirty} onClick={() => setScope("session")}>This session</button>
       <button aria-pressed={scope === "project"} disabled={dirty} onClick={() => setScope("project")}>Project defaults</button>
@@ -143,7 +143,6 @@ function ThreadSummaryBlock({ id }: { id: string }) {
   );
 }
 
-const providerName = (p: string) => p === "eagent" ? "eagent" : p === "claude-code" ? "Claude Code" : p === "codex" ? "Codex" : p === "antigravity" ? "Antigravity" : p;
 
 /** One resource's settings in FinaleChat's own form. When the agent also
  * published an editor page for the resource, it can be opened instead; it
@@ -239,9 +238,9 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
   </>;
 }
 
-/** What unsaved edits touch, by card: "Task: model, provider · Work: tasks
- * at once". A preset chosen says what it sets: "Configuration: preset
- * anthropic-high (sets Orchestrator, Task, Narrator)". */
+/** What unsaved edits touch, by card: "Model: model, provider · Work:
+ * timeout". A preset chosen says what it sets: "Configuration: preset
+ * anthropic-high (sets Model, Summaries)". */
 function changeList(descriptor: SettingsDescriptor | undefined, edits: SettingEdit[]): { length: number; summary: string } {
   const fields = descriptor?.fields ?? [];
   const byGroup = new Map<string, string[]>();
