@@ -247,8 +247,11 @@ transcript shows the message), `held` (waits for the end of its turn),
 under the message, with Retry on `failed`. Two more agent message kinds:
 `relay_report` is the relayed agent's own final message for a turn,
 verbatim, with `duration_ms`, `tools`, `interrupted` and `images` in its
-meta, which the app folds to "Codex's report" with a Reply that quotes it;
-`relay_screen` is a snapshot of its terminal as a fenced block, shown
+meta, which the app folds to "Codex's report" with a Reply that quotes it.
+A report too long for one post comes as several, each with meta `part`
+(from 1) and `parts` and the turn's figures on the last; the app labels
+each card "part 2 of 3" and leaves out a closing `_(part 2 of 3)_` line.
+A `relay_screen` is a snapshot of its terminal as a fenced block, shown
 unwrapped. Two more commands: `/screen` posts such a snapshot, and
 `/notify-done` arms the buzz (the bell beside the badge sends it). In relay
 threads the composer shows who gets the next message as a small avatar in

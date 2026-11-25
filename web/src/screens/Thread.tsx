@@ -8,6 +8,7 @@ import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
 import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
 import { renderMarkdown, renderText } from "../lib/markdown";
+import { reportPart, reportText } from "../lib/reports";
 import { goBack, navigate } from "../lib/router";
 import { AlreadyPostedError, deleteThread, loadOlderMessages, loadThread, markRead, onMessageRemoved, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
@@ -878,10 +879,14 @@ function reportStats(meta: Record<string, unknown>): string {
 function RelayReportBubble({ m, grouped, showMeta, inspectThread, onReply }: BubbleProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const html = useMemo(() => (open ? renderMarkdown(m.body) : ""), [open, m.body]);
+  // A report too long for one post comes as several; each card says which
+  // part it is, so the body's own closing marker is not shown again.
+  const part = reportPart(m.meta);
+  const text = reportText(m.body, part);
+  const html = useMemo(() => (open ? renderMarkdown(text) : ""), [open, text]);
   const who = agentName(metaText(m.meta.agent) || metaText(m.meta.relay));
   const stats = reportStats(m.meta);
-  const line = leadLine(m.body);
+  const line = leadLine(text);
   const collapse = () => {
     setOpen(false);
     requestAnimationFrame(() => ref.current?.scrollIntoView({ block: "nearest" }));
@@ -893,6 +898,7 @@ function RelayReportBubble({ m, grouped, showMeta, inspectThread, onReply }: Bub
         <button type="button" className="report-toggle" aria-expanded={open} onClick={() => (open ? collapse() : setOpen(true))}>
           <span className="report-head">
             <span className="report-title">{who}&rsquo;s report</span>
+            {part && <span className="report-part">part {part.part} of {part.parts}</span>}
             {stats && <span className={`report-stats${m.meta.interrupted === true ? " interrupted" : ""}`}>{stats}</span>}
             <IconChevron className="relay-chevron" aria-hidden="true" />
           </span>
@@ -917,7 +923,7 @@ function RelayReportBubble({ m, grouped, showMeta, inspectThread, onReply }: Bub
               <IconReply aria-hidden="true" /> Reply
             </button>
           )}
-          <CopyButton text={m.body} className="message-action" label="Copy report" />
+          <CopyButton text={text} className="message-action" label={part ? `Copy part ${part.part} of ${part.parts}` : "Copy report"} />
           {inspectThread && <InspectMessage message={m} thread={inspectThread} />}
         </div>
       </div>

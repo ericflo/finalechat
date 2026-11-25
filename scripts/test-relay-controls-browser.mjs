@@ -80,6 +80,14 @@ try {
     // Turn reports: one the user asked to hear about (important), one not.
     const report = (id, body, importance, min) => ({ id, thread_id: 'blocked', sender: 'agent', body, format: 'markdown', importance, meta: { eagent: 'relay', kind: 'relay_report', relay: 'claude', agent: 'claude', duration_ms: 95000, tools: 7, interrupted: false, images: [] }, origin: 'token', attachments: [], created_at: ago(min) });
     const blockedMessages = [report('r1', 'Exported January. Moving on to February.', 'normal', 9), report('r2', 'Done: all twelve months are exported to exports/.\n\nThe totals match the ledger.', 'important', 4)];
+    // A report too long for one post: three posts, the turn's figures on the
+    // last, each closing with a marker for its own numbers.
+    const part = (i, body, min) => { const r = report('p' + i, `${body}\n\n_(part ${i} of 3)_`, 'normal', min); r.meta = { ...r.meta, part: i, parts: 3 }; if (i < 3) { delete r.meta.duration_ms; delete r.meta.tools; delete r.meta.interrupted; } return r; };
+    blockedMessages.push(
+      part(1, 'Audit of every invoice export since 2024.\n\n```go\nfunc export(m Month) error {', 3),
+      part(2, '```go\n\treturn write(m)\n}\n```\n\nMarch and April needed a second pass.', 2.9),
+      part(3, 'All twelve months now match the ledger.', 2.8),
+    );
     const sent = [];
     let projectSettings = true;
     const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2, serviceWorkers: 'block' });
@@ -295,7 +303,27 @@ try {
     assert.equal(await reports.nth(0).locator('.important-chip').count(), 0);
     await reports.nth(1).locator('.important-chip', { hasText: 'Important' }).waitFor();
     assert.match(await reports.nth(1).getAttribute('class'), /\bimportant\b/);
+    // Each part of the long report says which part it is; the marker is
+    // not shown again, in the card, the quote or what is copied.
+    const parts = page.locator('.relay-report').filter({ has: page.locator('.report-part') });
+    assert.equal(await parts.count(), 3);
+    assert.deepEqual((await parts.locator('.report-part').allTextContents()).map((s) => s.trim()), ['part 1 of 3', 'part 2 of 3', 'part 3 of 3']);
+    assert.equal(await parts.nth(0).locator('.report-stats').count(), 0, 'figures are on the last part only');
+    assert.match(await parts.nth(2).locator('.report-stats').textContent(), /7 tool calls/);
+    assert.equal((await parts.nth(0).locator('.report-line').textContent()).trim(), 'Audit of every invoice export since 2024.');
+    assert.equal((await parts.nth(2).locator('.report-line').textContent()).trim(), 'All twelve months now match the ledger.');
+    await parts.nth(2).locator('.report-toggle').click();
+    await parts.nth(2).locator('.report-body').waitFor();
+    assert.ok(!(await parts.nth(2).locator('.report-body').textContent()).includes('part 3 of 3'), 'the marker is not rendered');
+    await parts.nth(2).getByRole('button', { name: 'Copy part 3 of 3' }).waitFor();
+    await parts.nth(0).getByRole('button', { name: /^Reply to/ }).click();
+    assert.match(await page.locator('.composer textarea').inputValue(), /^> Audit of every invoice export since 2024\./);
+    await page.locator('.composer textarea').fill('');
     await settle();
+    if (name === 'phone' && process.env.FINALECHAT_PARTS_SHOT) {
+      await parts.nth(0).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: process.env.FINALECHAT_PARTS_SHOT });
+    }
     await page.screenshot({ path: `${shots}/${name}-blocked-thread.png` });
     // In the inbox, the row says so under its summary, in amber; a relay
     // that is only ready says nothing there.
@@ -304,6 +332,16 @@ try {
     await row.locator('.foot-text.live.blocked', { hasText: 'Claude is stopped on a prompt on its screen' }).waitFor();
     assert.equal(await page.locator('.thread-row .foot-text.live').count(), 1, 'only the blocked row');
     assert.ok(!(await row.getAttribute('class')).includes('working'), 'a blocked agent is not working');
+    // It waits on the user, so it needs them: the marker, the Needs you
+    // shortcut, and the top of the list.
+    assert.match(await row.getAttribute('class'), /\bneeds-you\b/);
+    assert.equal(await page.locator('.thread-row.needs-you').count(), 1, 'only the blocked row');
+    await page.goto(base + '/?filter=needs-you');
+    await page.locator('.thread-row', { hasText: 'Billing export' }).waitFor();
+    assert.equal(await page.locator('.thread-row').count(), 1, 'only the blocked thread needs you');
+    assert.equal(await page.getByText('All caught up').count(), 0);
+    await page.goto(base + '/');
+    await row.waitFor();
     await settle();
     await page.screenshot({ path: `${shots}/${name}-blocked-inbox.png` });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'overflow');
