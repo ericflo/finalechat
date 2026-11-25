@@ -42,14 +42,32 @@ const session={id:'session',connector_id:'connector',key:'project-x-session-1',l
   saved:{'/config':'anthropic-med','/turn_timeout_minutes':30,'/summary_seconds':30,'/routes/agent/provider':'anthropic','/routes/agent/model':'claude-opus-5-5','/routes/agent/effort':'xhigh','/routes/summarizer/provider':'openrouter','/routes/summarizer/model':'z-ai/glm-5.3','/routes/summarizer/effort':'high'},effective:{}}};
 // Project defaults: each can be set here or left to its default.
 const projectField=(key,label,section,group,schema,extra={})=>({key,label,section,group,schema,writable:true,unset:true,class:'preference',effective_when:'new_or_resumed_session',...extra});
-const project=fixture?JSON.parse(await readFile(path.join(fixture,'settings/state.json'),'utf8')):{
- descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.project/v1',adapter_version:'1',suggestions:{presets:[{value:'glm',group:'Together AI',detail:'GLM-5.3 working, DeepSeek V4.1 Flash summarizing',implies:{'/agent/model':'zai-org/GLM-5.3','/agent/base_url':'https://api.together.xyz/v1'}},{value:'anthropic-med',group:'Anthropic',detail:'Claude Opus 5.5 working, Claude Haiku 4.5 summarizing',implies:{'/agent/model':'claude-opus-5-5','/agent/base_url':'https://api.anthropic.com/v1'}}]},fields:[
+// The project's model is a card named for what it holds ("Model", whose
+// setting is also "Model"). Each model it suggests implies the route it is
+// reached by, like a preset implies its models; on the desktop run the
+// suggestions are also grouped by that route (group_by). The summarizer's
+// own model is offered only once it is dedicated, after the agent
+// republishes.
+const routes={together:{label:'Together AI',url:'https://api.together.xyz/v1',protocol:'openai-chat'},anthropic:{label:'Anthropic',url:'https://api.anthropic.com/v1',protocol:'anthropic'}};
+const projectModels=grouped=>[['zai-org/GLM-5.3','GLM-5.3','together'],['moonshotai/kimi-k3','Kimi K3','together'],['claude-opus-5-5','Claude Opus 5.5','anthropic'],['claude-sonnet-5-5','Claude Sonnet 5.5','anthropic']]
+ .map(([value,label,r])=>({value,label,group:grouped?routes[r].url:routes[r].label,implies:{'/model/base_url':routes[r].url,'/model/protocol':routes[r].protocol}}));
+const projectFixture=grouped=>({
+ descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.project/v1',adapter_version:'1',suggestions:{
+   presets:[{value:'glm',group:'Together AI',detail:'GLM-5.3 working, DeepSeek V4.1 Flash summarizing',implies:{'/model/model':'zai-org/GLM-5.3','/model/base_url':routes.together.url}},{value:'anthropic-med',group:'Anthropic',detail:'Claude Opus 5.5 working, Claude Haiku 4.5 summarizing',implies:{'/model/model':'claude-opus-5-5','/model/base_url':routes.anthropic.url}}],
+   models:projectModels(grouped),
+   ...(grouped?{base_urls:Object.values(routes).map(r=>({value:r.url,label:r.label}))}:{}),
+  },fields:[
   projectField('/preset','Preset','Models','Configuration',{type:'string',enum:['glm','anthropic-med']},{suggest:{list:'presets'}}),
-  projectField('/agent/model','Model','Models','Agent',{type:'string',max_length:200}),
-  projectField('/agent/base_url','Base URL','Models','Agent',{type:'string',max_length:8192},{advanced:true}),
+  projectField('/model/model','Model','Models','Model',{type:'string',max_length:200},{suggest:grouped?{list:'models',group_by:'/model/base_url'}:{list:'models'}}),
+  projectField('/model/base_url','Base URL','Models','Model',{type:'string',max_length:8192},{advanced:true,...(grouped?{suggest:{list:'base_urls'}}:{})}),
+  projectField('/model/protocol','Protocol','Models','Model',{type:'string',enum:['openai-chat','anthropic']},{advanced:true}),
   projectField('/turn_timeout_minutes','Turn timeout (minutes)','Behavior','Work',{type:'integer',minimum:1,maximum:1440}),
+  projectField('/summarizer/mode','Mode','Behavior','Summaries',{type:'string',enum:['inline','dedicated']}),
  ]},
- snapshot:{version:'p1',context:'Development',saved:{'/preset':'glm','/agent/model':'muse-spark-1.3-contributor'},effective:{'/preset':'glm','/agent/model':'muse-spark-1.3-contributor','/agent/base_url':'https://api.together.xyz/v1','/turn_timeout_minutes':30},runtime_known:false}};
+ snapshot:{version:'p1',context:'Development',saved:{'/preset':'glm','/model/model':'muse-spark-1.3-contributor','/model/protocol':'openai-chat'},effective:{'/preset':'glm','/model/model':'muse-spark-1.3-contributor','/model/base_url':routes.together.url,'/model/protocol':'openai-chat','/turn_timeout_minutes':30,'/summarizer/mode':'inline'},runtime_known:false}});
+// What the agent publishes once the summarizer is dedicated.
+const summarizerModel=projectField('/summarizer/model/model','Model','Behavior','Summaries',{type:'string',max_length:200});
+const project=fixture?JSON.parse(await readFile(path.join(fixture,'settings/state.json'),'utf8')):projectFixture(false);
 Object.assign(project,{id:'project',connector_id:'connector',key:'project-x',label:'Development',scope:'project',generation:'',updated_at:new Date().toISOString()});
 const manifest=fixture?JSON.parse(await readFile(path.join(fixture,'manifest.json'),'utf8')):null;
 const website=fixture?await readFile(path.join(fixture,'settings/index.html'),'utf8'):'';
@@ -63,6 +81,7 @@ const errors=[];const commands=[];
 try {
  for(const [name,width,height] of [['phone',390,844],['desktop',1440,1000]]) {
   for(const running of [true,false]) {
+   if(!fixture) resources.project=Object.assign(projectFixture(name==='desktop'),{id:'project',connector_id:'connector',key:'project-x',label:'Development',scope:'project',generation:'',updated_at:new Date().toISOString()});
    const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:1});
    page.on('pageerror',e=>errors.push(String(e)));
    await page.route('**/*',async route=>{
@@ -89,8 +108,11 @@ try {
     if(cmd) {
      const body=route.request().postDataJSON();const r=resources[cmd[1]];commands.push({resource:cmd[1],...body});
      if(cmd[1]==='session') for(const e of body.proposal.edits || []) if(e.key==='/config') Object.assign(r.snapshot.saved,configs.find(c=>c.value===e.value).implies);
-     for(const e of body.proposal.edits || []) {if(e.op==='set') r.snapshot.saved[e.key]=e.value;else delete r.snapshot.saved[e.key];}
-     r.snapshot.version+='-saved';
+     const apply=()=>{for(const e of body.proposal.edits || []) {if(e.op==='set') r.snapshot.saved[e.key]=e.value;else delete r.snapshot.saved[e.key];} r.snapshot.version+='-saved';};
+     // Like a real connector, the agent republishes a moment after it
+     // acknowledges; a dedicated summarizer then offers its own model.
+     if(!fixture&&cmd[1]==='project'&&(body.proposal.edits||[]).some(e=>e.key==='/summarizer/mode')) setTimeout(()=>{apply();r.snapshot.effective['/summarizer/mode']=r.snapshot.saved['/summarizer/mode'];if(r.snapshot.saved['/summarizer/mode']==='dedicated'&&!r.descriptor.fields.some(f=>f.key===summarizerModel.key)) r.descriptor.fields.push(summarizerModel);},1500);
+     else apply();
      return json({created:true,command:{id:'command',resource_id:cmd[1],status:'succeeded',proposal:body.proposal,result:{effects:[{effective_when:cmd[1]==='session'?'next_turn':'new_or_resumed_session'}]}}});
     }
     if(p.endsWith('/read')) return json({ok:true});
@@ -191,41 +213,89 @@ try {
    await page.getByText('Development · project defaults',{exact:true}).waitFor();
    await page.getByText('Defaults for new or resumed sessions.',{exact:true}).waitFor();
    await page.waitForTimeout(700); await page.screenshot({path:`${shots}/${name}-${running?'':'idle-'}project.png`});
-   if(!fixture && running && name==='phone') {
+   if(!fixture && running) {
+    const grouped=name==='desktop';
     // The project's own model on top of its preset reads as Custom.
     const presets=page.getByRole('region',{name:'Configuration',exact:true});
-    await presets.getByRole('radio',{name:'Custom Based on glm: Agent changed',checked:true}).waitFor();
+    await presets.getByRole('radio',{name:'Custom Based on glm: Model changed',checked:true}).waitFor();
+    // A card and setting with the same name read once, never "Model model".
+    const modelPick=page.getByRole('button',{name:/^Model: /});
+    assert.match(await modelPick.getAttribute('aria-label'),/^Model: muse-spark-1\.3-contributor/);
+    assert.equal(await page.getByText(/model model/i).count(),0,'a doubled name');
     // Another preset puts the model back to the preset's own.
     await presets.getByRole('radio',{name:/^anthropic-med/}).click();
     await page.getByText('2 unsaved changes',{exact:true}).waitFor();
-    await page.getByText('Configuration: preset anthropic-med (sets Agent) · Agent: model',{exact:true}).waitFor();
-    assert.equal(await page.getByLabel('Model',{exact:true}).getAttribute('placeholder'),'claude-opus-5-5');
-    await card('Agent').locator('.sf-badge',{hasText:'Unsaved'}).waitFor();
+    await page.getByText('Configuration: preset anthropic-med (sets Model) · Model',{exact:true}).waitFor();
+    assert.match(await modelPick.getAttribute('aria-label'),/^Model: Claude Opus 5\.5/);
+    await card('Model').locator('.sf-badge',{hasText:'Unsaved'}).waitFor();
     await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-project-preset.png`});
     // A project default set here goes back to the default from the same list.
     assert.equal(await presets.getByRole('radio',{name:/^Default/}).isEnabled(),true);
     await presets.getByRole('radio',{name:/^Default/}).click();
-    await page.getByText('Configuration: preset · Agent: model',{exact:true}).waitFor();
+    await page.getByText('Configuration: preset · Model',{exact:true}).waitFor();
     await page.getByRole('button',{name:'Save',exact:true}).click();
     await page.getByText('Saved · new or resumed sessions',{exact:true}).waitFor();
-    assert.deepEqual(commands[commands.length-1].proposal.edits,[{op:'unset',key:'/preset'},{op:'unset',key:'/agent/model'}]);
-    // Rarely changed settings wait behind a link.
-    assert.equal(await page.getByLabel('Base URL').count(),0);
-    await page.getByRole('button',{name:'Show 1 advanced setting',exact:true}).click();
-    await page.getByLabel('Base URL').waitFor();
+    assert.deepEqual(commands[commands.length-1].proposal.edits,[{op:'unset',key:'/preset'},{op:'unset',key:'/model/model'}]);
+    // A model from another provider brings the route it is reached by, as
+    // its suggestion implies: shown before saving, and what was set apart
+    // from it goes back to it.
+    await modelPick.click();
+    const picker=page.locator('.sf-picker');
+    await picker.getByRole('heading',{name:'Model',exact:true}).waitFor();
+    await picker.getByRole('searchbox',{name:'Search Model',exact:true}).waitFor();
+    // Grouped by provider, by the suggestions' own groups or by group_by.
+    await picker.locator('.sf-options-title',{hasText:'Anthropic'}).waitFor();
+    await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-project-model-picker.png`});
+    await picker.getByRole('button',{name:/^Claude Opus 5\.5/}).click();
+    assert.match(await modelPick.getAttribute('aria-label'),grouped?/^Model: Claude Opus 5\.5 at Anthropic\./:/^Model: Claude Opus 5\.5\./);
+    const more=page.getByRole('button',{name:/^Show \d+ advanced setting/});
+    if(await more.count()) await more.click();
+    // Grouped by it, the route is chosen with the model (the "at Anthropic"
+    // above); otherwise its field shows what the model brings.
+    if(!grouped) assert.equal(await page.getByLabel('Base URL',{exact:true}).getAttribute('placeholder'),routes.anthropic.url);
+    await card('Model').getByRole('radio',{name:'anthropic',exact:true,checked:true}).waitFor();
+    await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-project-model-route.png`});
+    await page.getByRole('button',{name:'Save',exact:true}).click();
+    await page.getByText('Saved · new or resumed sessions',{exact:true}).waitFor();
+    assert.deepEqual(commands[commands.length-1].proposal.edits,[
+     {op:'set',key:'/model/model',value:'claude-opus-5-5'},
+     {op:'unset',key:'/model/protocol'},
+     ...(grouped?[{op:'set',key:'/model/base_url',value:routes.anthropic.url}]:[]),
+    ]);
+    // Dedicated summaries: their own model appears as soon as the agent
+    // republishes, not at the next periodic refresh.
+    await page.getByRole('button',{name:'Behavior',exact:true}).click();
+    await card('Summaries').getByRole('radio',{name:'dedicated',exact:true}).click();
+    await page.getByText('Summaries: mode',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Save',exact:true}).click();
+    await page.getByText('Saved · new or resumed sessions',{exact:true}).waitFor();
+    const savedAt=Date.now();
+    await card('Summaries').getByLabel('Model',{exact:true}).waitFor({timeout:5000});
+    assert.ok(Date.now()-savedAt<5000,'the newly offered setting waited for the periodic refresh');
+    await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-project-summaries.png`});
    }
    if(fixture && running) {
     // The agent's own editor, opened on request; one Save still submits.
+    // The page is the agent's, so nothing here depends on its wording: it
+    // connects, reads the settings and proposes through FinaleChat's SDK.
     await page.getByRole('button',{name:'Open eagent’s own editor',exact:true}).click();
-    const frame=page.frameLocator('iframe[title="eagent settings"]');
-    await frame.getByRole('heading',{name:'Choose how your agent thinks'}).waitFor();
+    const handle=await page.locator('iframe[title="eagent settings"]').elementHandle();
+    const frame=await handle.contentFrame();
+    await frame.waitForFunction(()=>window.finale?.connected===true);
+    assert.ok((await frame.locator('body').innerText()).trim().length>0,'the agent page shows something');
     assert.equal(await page.getByRole('button',{name:'Save',exact:true}).count(),1);
-    await frame.getByRole('button',{name:'Behavior',exact:true}).click();
-    const input=frame.locator('input[type=number]').first();
-    await input.fill(name==='phone'?'6':'7'); await input.press('Tab');
+    const edit=await frame.evaluate(async()=>{
+     const {resource:r}=await window.finale.settings.read();
+     const f=r.descriptor.fields.find(f=>f.writable&&f.schema.type==='integer');
+     const now=r.snapshot.saved[f.key]??r.snapshot.effective[f.key]??f.schema.minimum??1;
+     const value=now<(f.schema.maximum??Infinity)?now+1:now-1;
+     await window.finale.settings.propose({operation:'settings.apply',schema_version:r.descriptor.schema_version,expected_version:r.snapshot.version,generation:r.generation,edits:[{op:'set',key:f.key,value}]});
+     return {op:'set',key:f.key,value};
+    });
     await page.getByRole('button',{name:'Save',exact:true}).click();
     await page.getByText('Saved · new or resumed sessions',{exact:true}).waitFor();
     assert.equal(commands[commands.length-1].surface_lease_id,'lease');
+    assert.deepEqual(commands[commands.length-1].proposal.edits,[edit]);
     await page.waitForTimeout(700); await page.screenshot({path:`${shots}/${name}-agent-editor.png`});
    }
    await page.getByRole('button',{name:'Close settings'}).click();
@@ -234,6 +304,6 @@ try {
    await page.close();
   }
  }
- assert.equal(commands.length,fixture?6:5);assert.deepEqual(errors,[]);
+ assert.equal(commands.length,fixture?6:10);assert.deepEqual(errors,[]);
  console.log(`PASS thread settings: session first, project on request${fixture?', agent editor optional':''}; screenshots in ${shots}`);
 } finally {await browser.close();await server.close();}

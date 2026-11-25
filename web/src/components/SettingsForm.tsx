@@ -58,8 +58,17 @@ export interface FormModel {
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 export const show = (v: unknown): string => (v === undefined || v === null || v === "" ? "—" : typeof v === "boolean" ? (v ? "On" : "Off") : typeof v === "string" ? v : JSON.stringify(v));
-/** "Codex" + "Reasoning effort" reads "Codex reasoning effort". */
-export const fullLabel = (i: { label: string; group?: string }) => (i.group ? `${i.group} ${/^[A-Z][a-z]/.test(i.label) ? i.label.charAt(0).toLowerCase() + i.label.slice(1) : i.label}` : i.label);
+/** A setting's label as it reads after its group's name: "Reasoning effort"
+ * after "Codex" is "reasoning effort"; a label that only repeats the group
+ * ("Model" in "Model") adds nothing and is "". */
+export const labelInGroup = (i: { label: string; group?: string }): string => {
+  if (!i.group) return i.label;
+  if (i.label.trim().toLowerCase() === i.group.trim().toLowerCase()) return "";
+  return /^[A-Z][a-z]/.test(i.label) ? i.label.charAt(0).toLowerCase() + i.label.slice(1) : i.label;
+};
+/** "Codex" + "Reasoning effort" reads "Codex reasoning effort"; "Model" +
+ * "Model" reads "Model". */
+export const fullLabel = (i: { label: string; group?: string }) => (i.group ? [i.group, labelInGroup(i)].filter(Boolean).join(" ") : i.label);
 
 /** The suggestion for a value: in its group when grouped, else any. */
 function suggestion(list: Suggestion[] | undefined, value: unknown, group?: unknown): Suggestion | undefined {
@@ -92,9 +101,11 @@ export function resourceModel(r: SettingsResource, proposal: SettingsProposal | 
   const base = (k: string) => (saved(k) ? r.snapshot.saved[k] : r.snapshot.effective[k]);
   const editOf = (k: string) => edits.find((x) => x.key === k);
   const governs: Record<string, string[]> = {};
-  // A choice that sets others is listed before what it sets.
+  // A choice that sets others is listed before what it sets, also when what
+  // it sets sets others in turn (a preset, then the model it runs).
   const commit = (next: SettingEdit[]) => {
-    next = [...next.filter((e) => governs[e.key]), ...next.filter((e) => !governs[e.key])];
+    const rank = (e: SettingEdit) => (!governs[e.key] ? 2 : next.some((x) => x.key !== e.key && governs[x.key]?.includes(e.key)) ? 1 : 0);
+    next = [0, 1, 2].flatMap((n) => next.filter((e) => rank(e) === n));
     onProposal(next.length ? { operation: "settings.apply", schema_version: proposal?.schema_version || r.descriptor.schema_version, expected_version: proposal?.expected_version || r.snapshot.version, generation: proposal?.generation ?? r.generation, edits: next } : null);
   };
   const without = (keys: string[]) => edits.filter((e) => !keys.includes(e.key));
@@ -103,7 +114,13 @@ export function resourceModel(r: SettingsResource, proposal: SettingsProposal | 
     for (const sug of f.suggest ? (lists[f.suggest.list] ?? []) : []) for (const k of Object.keys(sug.implies ?? {})) if (k !== f.key && fields.some((x) => x.key === k)) keys.add(k);
     if (keys.size) governs[f.key] = [...keys];
   }
-  const governor = (k: string) => Object.keys(governs).find((g) => governs[g]!.includes(k));
+  // A field more than one choice implies (a model's route, implied by the
+  // preset and by the model picked) follows the choice made last, else the
+  // first that implies it.
+  const governor = (k: string) => {
+    const by = Object.keys(governs).filter((g) => governs[g]!.includes(k));
+    return [...edits].reverse().find((e) => e.op === "set" && by.includes(e.key))?.key ?? by[0];
+  };
   // What the governing choice, as it stands with edits, gives a field.
   const implied = (g: string, k: string, value?: unknown) => {
     const e = editOf(g);

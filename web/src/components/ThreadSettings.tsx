@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Sheet } from "./Common";
 import { IconClose, IconEdit } from "./Icons";
 import { toast, updateThread, useStore } from "../lib/store";
-import { SettingsForm, resourceModel } from "./SettingsForm";
+import { SettingsForm, labelInGroup, resourceModel } from "./SettingsForm";
 import { artifactAPI, controlAPI, effectLabel, providerName, validateProposal, type ArtifactRevision, type SettingEdit, type SettingsDescriptor, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
 import { connectArtifactFrame } from "../lib/artifact-bridge";
 import "./thread-settings.css";
@@ -215,9 +215,25 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
       const effects = Array.isArray(command.result?.effects) ? command.result.effects as { effective_when?: string }[] : [];
       const timing = [...new Set(effects.map(e => effectLabel[e.effective_when || ""]?.toLowerCase()).filter(Boolean))];
       setStatus(timing.length ? `Saved · ${timing.join(", ")}` : "Saved");
-      setView(await controlAPI.resource(link.id));
+      const saved = await controlAPI.resource(link.id);
+      if (alive.current) setView(saved);
+      // The agent republishes its settings after it acknowledges the save,
+      // and what they offer can change with it (a setting that only applies
+      // in the mode just chosen); look again shortly until it has.
+      if (saved.resource.snapshot.version === view.resource.snapshot.version) void followRepublish(view.resource.snapshot.version);
     } catch (e) { if (alive.current) { setError(e instanceof Error ? e.message : "Could not save settings."); setStatus(""); } }
     finally { if (alive.current) setBusy(false); }
+  };
+  const followRepublish = async (from: string) => {
+    for (let n = 0; n < 16 && alive.current; n++) {
+      await new Promise(resolve => setTimeout(resolve, 600));
+      if (!alive.current) return;
+      try {
+        const v = await controlAPI.resource(link.id);
+        if (!alive.current) return;
+        if (v.resource.snapshot.version !== from) { setView(v); return; }
+      } catch { /* the 10 s refresh keeps trying */ }
+    }
   };
   const session = link.scope === "session";
   const unavailable = !view?.online || session && !view.resource.snapshot.runtime_known;
@@ -247,13 +263,17 @@ function changeList(descriptor: SettingsDescriptor | undefined, edits: SettingEd
   for (const e of edits) {
     const f = fields.find(x => x.key === e.key);
     const group = f?.group ?? "";
-    let label = f ? (f.group && /^[A-Z][a-z]/.test(f.label) ? f.label.charAt(0).toLowerCase() + f.label.slice(1) : f.label) : e.key;
+    let label = f ? labelInGroup(f) : e.key;
     const s = e.op === "set" && f?.suggest ? descriptor?.suggestions?.[f.suggest.list]?.find(x => x.value === e.value) : undefined;
     if (s?.implies) {
-      const sets = [...new Set(fields.filter(g => Object.hasOwn(s.implies!, g.key)).map(g => g.group || g.label))];
-      label += ` ${s.label || s.value}${sets.length ? ` (sets ${sets.join(", ")})` : ""}`;
+      // What it sets in other cards; its own card's settings go with it.
+      const sets = [...new Set(fields.filter(g => Object.hasOwn(s.implies!, g.key) && (!group || g.group !== group)).map(g => g.group || g.label))];
+      label = [label, `${s.label || s.value}${sets.length ? ` (sets ${sets.join(", ")})` : ""}`].filter(Boolean).join(" ");
     }
-    byGroup.set(group, [...(byGroup.get(group) ?? []), label]);
+    const labels = byGroup.get(group) ?? [];
+    if (!labels.includes(label)) labels.push(label);
+    byGroup.set(group, labels);
   }
-  return { length: edits.length, summary: [...byGroup].map(([g, labels]) => (g ? `${g}: ${labels.join(", ")}` : labels.join(", "))).join(" · ") };
+  // "Model" alone when the card's only change is the setting it is named for.
+  return { length: edits.length, summary: [...byGroup].map(([g, labels]) => { const named = labels.filter(Boolean); return g ? (named.length ? `${g}: ${named.join(", ")}` : g) : named.join(", "); }).join(" · ") };
 }
