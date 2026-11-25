@@ -3,6 +3,7 @@ package control
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -76,12 +77,27 @@ func TestDescriptorSuggestions(t *testing.T) {
 	if err := d.Validate(g); err != nil {
 		t.Fatal(err)
 	}
+	// Sixteen lists fit: presets, bundles and one model catalogue per agent.
+	full := d
+	full.Suggestions = map[string][]Suggestion{"models": d.Suggestions["models"]}
+	for n := 1; n < 16; n++ {
+		full.Suggestions[fmt.Sprintf("list_%d", n)] = []Suggestion{{Value: "v"}}
+	}
+	if err := full.Validate(g); err != nil {
+		t.Fatalf("16 suggestion lists: %v", err)
+	}
 	for name, mutate := range map[string]func(*Descriptor){
 		"unknown list":     func(d *Descriptor) { d.Fields[1].Suggest = &Suggest{List: "nope"} },
 		"unknown group_by": func(d *Descriptor) { d.Fields[1].Suggest = &Suggest{List: "models", GroupBy: "/missing"} },
 		"non-string field": func(d *Descriptor) { d.Fields[1].Shape = Shape{Type: "integer"} },
 		"empty value":      func(d *Descriptor) { d.Suggestions = map[string][]Suggestion{"models": {{Value: ""}}} },
 		"too many":         func(d *Descriptor) { d.Suggestions = map[string][]Suggestion{"models": make([]Suggestion, 5001)} },
+		"too many lists": func(d *Descriptor) {
+			d.Suggestions = map[string][]Suggestion{"models": d.Suggestions["models"]}
+			for n := 1; n <= 16; n++ {
+				d.Suggestions[fmt.Sprintf("list_%d", n)] = []Suggestion{{Value: "v"}}
+			}
+		},
 	} {
 		bad := d
 		bad.Fields = append([]Field{}, d.Fields...)

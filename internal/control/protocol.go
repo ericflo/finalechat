@@ -293,7 +293,7 @@ func (d Descriptor) Validate(g Grant) error {
 			return fmt.Errorf("%s: %w", f.Key, err)
 		}
 	}
-	if len(d.Suggestions) > 8 {
+	if len(d.Suggestions) > 16 {
 		return fmt.Errorf("too many suggestion lists")
 	}
 	entries := 0

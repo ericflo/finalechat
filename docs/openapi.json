@@ -8923,7 +8923,8 @@
           },
           "suggestions": {
             "type": "object",
-            "description": "Named lists of values that string fields and action inputs may offer as choices; any value the schema allows can still be entered. At most 8 lists and 5000 entries.",
+            "description": "Named lists of values that string fields and action inputs may offer as choices; any value the schema allows can still be entered. At most 16 lists and 5000 entries, within the descriptor's 256 KiB.",
+            "maxProperties": 16,
             "additionalProperties": {
               "type": "array",
               "items": {
