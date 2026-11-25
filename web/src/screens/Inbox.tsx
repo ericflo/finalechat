@@ -52,6 +52,7 @@ import {
   inboxViewPath,
   inView,
   isWorking,
+  needsUser,
   relayBlocked,
   threadSummary,
   threadTitle,
@@ -219,7 +220,7 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
     const latest = all
       // A search looks everywhere, archived threads included.
       .filter((t) => (q ? true : inView(t, view, now, live)))
-      .filter((t) => !needsYou || t.pending_questions > 0)
+      .filter((t) => !needsYou || needsUser(t, now, live))
       .filter(
         (t) =>
           !q ||
@@ -230,7 +231,7 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
           threadSummary(t).toLowerCase().includes(q) ||
           (t.external_id ?? "").toLowerCase().includes(q),
       )
-      .sort(byAttentionThenActivity);
+      .sort((a, b) => byAttentionThenActivity(a, b, now, live));
     orderHold = heldOrder(
       orderHold,
       `${view}|${needsYou ? "needs" : ""}|${q}`,
@@ -464,7 +465,8 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
             </div>
           </>
         ) : (
-          needsYou && (
+          needsYou &&
+          list.length === 0 && (
             <div className="empty compact">
               <div className="glyph ok">
                 <IconCheck />
@@ -774,7 +776,9 @@ function ThreadRow({
   const pressTimer = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false);
   const summary = threadSummary(t);
-  const state = needs ? "needs-you" : activity && !blocked ? "working" : unread ? "unread" : "";
+  // A blocked agent waits on the user as a question does: amber marker,
+  // listed under Needs you and sorted with the questions.
+  const state = needs || blocked ? "needs-you" : activity ? "working" : unread ? "unread" : "";
 
   // Long-press (or right-click) opens the row's actions. The click that the
   // finger's lift produces is swallowed once; any later pointer resets that.

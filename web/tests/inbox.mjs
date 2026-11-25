@@ -7,7 +7,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-const { agentsDiffer, busyFor, byAttentionThenActivity, heldOrder, inboxViewPath, inView, isWorking, orderHoldMs, parseInboxView, relayBlocked, rowState, sameOrder, threadSummary, threadTitle } = await import("../src/lib/inbox.ts");
+const { agentsDiffer, busyFor, byAttentionThenActivity, heldOrder, inboxViewPath, inView, isWorking, needsUser, orderHoldMs, parseInboxView, relayBlocked, rowState, sameOrder, threadSummary, threadTitle } = await import("../src/lib/inbox.ts");
 
 const now = Date.parse("2026-11-23T12:00:00Z");
 const iso = (ms) => new Date(ms).toISOString();
@@ -37,6 +37,35 @@ describe("a relayed agent stopped on its screen", () => {
   });
   it("is still not working", () => {
     assert.equal(isWorking(thread({ meta: { relay: { state: "blocked" } }, activity: busy("waiting") }), now), false);
+  });
+});
+
+describe("a thread that needs you", () => {
+  const blocked = (over = {}) => thread({ meta: { relay: { name: "claude", state: "blocked" } }, activity: busy("waiting"), ...over });
+  const live = { t1: { thread_id: "t1" } };
+
+  it("is one with a question waiting, or a running agent stopped on its screen", () => {
+    assert.equal(needsUser(thread({ pending_questions: 1 }), now), true);
+    assert.equal(needsUser(blocked(), now, live), true);
+    assert.equal(rowState(blocked(), now, live), "needs-you");
+  });
+
+  it("is not one whose agent is only ready, or whose blocked state is left over", () => {
+    assert.equal(needsUser(thread({ meta: { relay: { state: "idle" } }, activity: busy("waiting") }), now, live), false);
+    // No session running: the relay state is what the last session left.
+    assert.equal(needsUser(blocked(), now, {}), false);
+    // The waiting status lapsed.
+    assert.equal(needsUser(blocked({ activity: busy("waiting", -1) }), now, live), false);
+    assert.equal(needsUser(blocked({ archived_at: iso(now) }), now, live), false);
+    assert.equal(rowState(blocked(), now, {}), "idle");
+  });
+
+  it("comes first in the order, like a question", () => {
+    const a = thread({ id: "a", last_activity_at: iso(now - 1000) });
+    const b = blocked({ id: "b", last_activity_at: iso(now - 5000) });
+    const lives = { b: { thread_id: "b" } };
+    assert.deepEqual([a, b].sort((x, y) => byAttentionThenActivity(x, y, now, lives)).map((t) => t.id), ["b", "a"]);
+    assert.deepEqual([a, b].sort((x, y) => byAttentionThenActivity(x, y, now, {})).map((t) => t.id), ["a", "b"]);
   });
 });
 
