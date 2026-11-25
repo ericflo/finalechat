@@ -77,6 +77,11 @@ export function relayHost(t: Thread | undefined): string {
   return t?.agent?.trim() || "Host";
 }
 
+/** "Codex", "Antigravity or Codex", "Antigravity, Codex or Pi". */
+export function orList(names: string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}` : (names[0] ?? "");
+}
+
 /** Older hosts offered one switch destination for each built-in relay. */
 function switchProfiles(r: ThreadRelay): string[] {
   if (r.switch_profiles) return r.switch_profiles;
@@ -211,7 +216,7 @@ export function RelaySheet({ thread, relay, onClose, onSend, stopSession }: { th
       {!stopped && <Item icon={IconCpu} label="Model" hint={relay.pending ? `${runs ? `${runs}. ` : ""}Next: ${relay.pending}, when this turn ends` : runs || "Its model and reasoning effort"} onClick={() => setView("model")} />}
       {relay.state === "working" && <Item icon={IconBell} label="Tell me when it's done" hint={relay.notify_done ? "You'll get a buzz" : "One buzz when this turn ends"} disabled={relay.notify_done} onClick={() => send("/notify-done")} />}
       {!stopped && <Item icon={IconTerminal} label="Screen" hint="Show its terminal here" onClick={() => send("/screen")} />}
-      {!stopped && others.length > 0 && <Item icon={IconSwap} label="Switch agent…" hint={`Hand the work to ${others.map((p) => agentName(p)).join(" or ")}`} onClick={() => setView("switch")} />}
+      {!stopped && others.length > 0 && <Item icon={IconSwap} label="Switch agent…" hint={`Hand the work to ${orList(others.map((p) => agentName(p)))}`} onClick={() => setView("switch")} />}
       {!ended(relay) && <Item icon={IconRepeat} label="Autopilot…" hint={relay.autopilot ? `On: ${relayStatus(relay)}` : "Keep it working on its own"} onClick={() => setView("autopilot")} />}
       {relay.attach && <Item icon={IconCopy} label="Copy attach command" onClick={() => void copyAttach()} />}
       {(!stopped || stopSession) && <div className="sheet-sep" role="separator" />}

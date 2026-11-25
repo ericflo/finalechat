@@ -61,6 +61,7 @@ const project = {
       { name: 'antigravity', agent: 'antigravity', label: 'Antigravity · Gemini 3.1 Pro high', model: 'Gemini 3.1 Pro', effort: 'high' },
       { name: 'codex', agent: 'codex', label: 'Codex · GPT-6.2-Astra xhigh', model: 'gpt-6.2-astra', effort: 'xhigh' },
       { name: 'pi', agent: 'pi', label: 'Pi · openrouter/qwen3-coder high', model: 'openrouter/qwen3-coder', effort: 'high' },
+      { name: 'opencode', agent: 'opencode', label: 'OpenCode · Kimi K3', model: 'kimi-k3', effort: '' },
     ] } },
 };
 const connector = { id: 'c1', name: 'eagent · Development', provider: 'eagent', state: 'active', grants: [], requested_grants: [], last_seen_at: now(), expires_at: now() };
@@ -72,7 +73,13 @@ const browser = await chromium.launch({ headless: true });
 const errors = [];
 try {
   for (const [name, width, height] of [['phone', 390, 844], ['desktop', 1280, 900]]) {
-    const threads = { work: thread('work', { relay: relayMeta('working') }), idle: thread('idle', { relay: relayMeta('idle', { pending: 'opus at high' }) }), old: thread('old', { relay: { name: 'codex', agent: 'codex', label: 'Codex · GPT-6 Astra xhigh', state: 'working' } }), pi: thread('pi', { relay: { name: 'pi', agent: 'pi', profile: 'pi', label: 'Pi · openrouter/qwen3-coder high', model: 'openrouter/qwen3-coder', effort: 'high', state: 'idle', switch_profiles: ['claude', 'antigravity', 'codex'] } }) };
+    const threads = { work: thread('work', { relay: relayMeta('working') }), idle: thread('idle', { relay: relayMeta('idle', { pending: 'opus at high' }) }), old: thread('old', { relay: { name: 'codex', agent: 'codex', label: 'Codex · GPT-6 Astra xhigh', state: 'working' } }), pi: thread('pi', { relay: { name: 'pi', agent: 'pi', profile: 'pi', label: 'Pi · openrouter/qwen3-coder high', model: 'openrouter/qwen3-coder', effort: 'high', state: 'idle', switch_profiles: ['claude', 'antigravity', 'codex', 'opencode'] } }),
+      // Stopped on a prompt on its screen: the session waits, on the user.
+      blocked: { ...thread('blocked', { relay: relayMeta('blocked') }), title: 'Billing export', description: 'Claude is exporting last month\'s invoices.', summary: 'Claude is exporting last month\'s invoices.',
+        activity: { text: 'Claude is stopped on a prompt on its screen', kind: 'waiting', at: ago(0.2), since: ago(3), expires_at: new Date(Date.now() + 600000).toISOString() } } };
+    // Turn reports: one the user asked to hear about (important), one not.
+    const report = (id, body, importance, min) => ({ id, thread_id: 'blocked', sender: 'agent', body, format: 'markdown', importance, meta: { eagent: 'relay', kind: 'relay_report', relay: 'claude', agent: 'claude', duration_ms: 95000, tools: 7, interrupted: false, images: [] }, origin: 'token', attachments: [], created_at: ago(min) });
+    const blockedMessages = [report('r1', 'Exported January. Moving on to February.', 'normal', 9), report('r2', 'Done: all twelve months are exported to exports/.\n\nThe totals match the ledger.', 'important', 4)];
     const sent = [];
     let projectSettings = true;
     const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2, serviceWorkers: 'block' });
@@ -88,7 +95,7 @@ try {
       if (p === '/me') return json({ auth: 'session', user, counts: { pending_questions: 0, unread_threads: 0, attention: 0 }, features: [], push_enabled: false, attachments_enabled: true, version: 'test' });
       if (p === '/threads') return json({ threads: Object.values(threads) });
       if (p === '/questions') return json({ questions: [] });
-      if (p === '/live-sessions') return json({ sessions: [] });
+      if (p === '/live-sessions') return json({ sessions: Object.values(threads).filter((x) => x.meta.relay?.state !== 'exited').map((x) => ({ thread_id: x.id, resource_id: 'r-' + x.id, connector_id: 'c1', label: x.title })) });
       if (p === '/events') return new Promise(() => {});
       const t = p.match(/^\/threads\/(\w+)$/);
       if (t) return json({ thread: threads[t[1]] });
@@ -98,7 +105,7 @@ try {
         sent.push(body.body);
         return json({ message: { id: 'm' + sent.length, thread_id: m[1], sender: 'user', kind: 'message', body: body.body, meta: {}, attachments: [], created_at: now() }, thread: threads[m[1]], created: true }, 201);
       }
-      if (m) return json({ messages: [], has_more: false });
+      if (m) return json({ messages: m[1] === 'blocked' ? blockedMessages : [], has_more: false });
       if (p.endsWith('/questions') || p.endsWith('/artifacts')) return json({ questions: [], artifacts: [] });
       if (p.endsWith('/settings')) return json({ resources: projectSettings ? [{ id: 'r-proj', label: 'Development', scope: 'project', provider: 'eagent', available: true }] : [] });
       if (p === '/settings-resources/r-proj') return json({ resource: project, connector, online: true, website: null });
@@ -146,7 +153,7 @@ try {
     const sheetText = await page.locator('.relay-sheet .sheet').textContent();
     for (const gone of ['Interrupt', 'Status', 'Updates', '15m']) assert.ok(!sheetText.includes(gone), `${gone} is no longer in the sheet`);
     assert.match(await page.getByRole('button', { name: /^Model/ }).textContent(), /Fable 5\.2 xhigh/);
-    assert.match(await page.getByRole('button', { name: /^Switch agent/ }).textContent(), /Antigravity or Codex or Pi/);
+    assert.match(await page.getByRole('button', { name: /^Switch agent/ }).textContent(), /Hand the work to Antigravity, Codex or Pi$/);
     await page.screenshot({ path: `${shots}/${name}-relay-sheet.png` });
 
     // Restart asks first; cancelling sends nothing.
@@ -208,6 +215,8 @@ try {
     await agentSheet.getByRole('button', { name: 'Switch to Codex' }).waitFor();
     await settle();
     await page.screenshot({ path: `${shots}/${name}-switch-sheet.png` });
+    // Every agent keeps its whole name, however many there are.
+    for (const b of await agentSheet.locator('.agent-pick button').all()) assert.ok(await b.evaluate((el) => { const r = document.createRange(); r.selectNodeContents(el); return r.getClientRects().length === 1 && el.scrollWidth <= el.clientWidth; }), `${await b.textContent()} is squeezed onto more than one line`);
     await choose(page, agentSheet, 'Model', 'gpt-6.2-sol');
     await choose(page, agentSheet, 'Reasoning effort', 'ultra');
     await agentSheet.getByRole('button', { name: 'Switch to Codex' }).click();
@@ -234,7 +243,7 @@ try {
     await page.locator('.relay-badge').getByText('Pi · idle').waitFor();
     await page.locator('.relay-badge').click();
     assert.match(await page.getByRole('button', { name: /^Model/ }).textContent(), /openrouter\/qwen3-coder high/);
-    assert.match(await page.getByRole('button', { name: /^Switch agent/ }).textContent(), /Claude or Antigravity or Codex/);
+    assert.match(await page.getByRole('button', { name: /^Switch agent/ }).textContent(), /Hand the work to Claude, Antigravity, Codex or Opencode$/);
     await page.getByRole('button', { name: /^Model/ }).click();
     await agentSheet.getByRole('heading', { name: "Pi's model" }).waitFor();
     await agentSheet.locator('.sf-row').first().waitFor();
@@ -244,6 +253,15 @@ try {
     await page.screenshot({ path: `${shots}/${name}-pi-model-sheet.png` });
     await agentSheet.getByRole('button', { name: 'Change', exact: true }).click();
     assert.equal(await lastSent(11), '/model anthropic/claude-sonnet-5-5 xhigh');
+    // Four agents to switch to: each keeps its whole name on a phone.
+    await page.locator('.relay-badge').click();
+    await page.getByRole('button', { name: /^Switch agent/ }).click();
+    await agentSheet.getByRole('radio', { name: 'OpenCode' }).waitFor();
+    await settle();
+    for (const b of await agentSheet.locator('.agent-pick button').all()) assert.ok(await b.evaluate((el) => { const r = document.createRange(); r.selectNodeContents(el); return r.getClientRects().length === 1 && el.scrollWidth <= el.clientWidth; }), `${await b.textContent()} is squeezed onto more than one line`);
+    assert.ok(await agentSheet.locator('.agent-pick').evaluate((el) => el.scrollWidth <= el.clientWidth && [...el.children].every((b) => b.offsetLeft - el.offsetLeft + b.offsetWidth <= el.offsetWidth)), 'the agents fit the sheet');
+    await page.screenshot({ path: `${shots}/${name}-switch-four.png` });
+    await page.keyboard.press('Escape');
 
     // Idle: no stop button, and a change that waits for the turn shows on the Model row.
     await page.goto(base + '/t/idle');
@@ -262,6 +280,32 @@ try {
     await agentSheet.getByText('Claude will start with its own model and reasoning effort.').waitFor();
     await agentSheet.getByRole('button', { name: 'Switch to Claude' }).click();
     assert.equal(await lastSent(12), '/switch claude');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'overflow');
+
+    // Stopped on its screen: said in amber under the conversation, not as
+    // the faint "ready" line; the report it was asked to buzz about reads
+    // as important, the other does not.
+    projectSettings = true;
+    await page.goto(base + '/t/blocked');
+    const waiting = page.locator('.activity-waiting');
+    await waiting.getByText('Claude is stopped on a prompt on its screen').waitFor();
+    assert.match(await waiting.getAttribute('class'), /\bblocked\b/);
+    const reports = page.locator('.relay-report');
+    await reports.nth(1).waitFor();
+    assert.equal(await reports.nth(0).locator('.important-chip').count(), 0);
+    await reports.nth(1).locator('.important-chip', { hasText: 'Important' }).waitFor();
+    assert.match(await reports.nth(1).getAttribute('class'), /\bimportant\b/);
+    await settle();
+    await page.screenshot({ path: `${shots}/${name}-blocked-thread.png` });
+    // In the inbox, the row says so under its summary, in amber; a relay
+    // that is only ready says nothing there.
+    await page.goto(base + '/');
+    const row = page.locator('.thread-row', { hasText: 'Billing export' });
+    await row.locator('.foot-text.live.blocked', { hasText: 'Claude is stopped on a prompt on its screen' }).waitFor();
+    assert.equal(await page.locator('.thread-row .foot-text.live').count(), 1, 'only the blocked row');
+    assert.ok(!(await row.getAttribute('class')).includes('working'), 'a blocked agent is not working');
+    await settle();
+    await page.screenshot({ path: `${shots}/${name}-blocked-inbox.png` });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'overflow');
     await page.close();
   }

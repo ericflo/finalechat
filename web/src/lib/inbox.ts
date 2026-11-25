@@ -26,6 +26,14 @@ export function isWorking(t: Thread, now: number): boolean {
   return !!a && a.kind !== "waiting" && new Date(a.expires_at).getTime() > now;
 }
 
+/** Whether the agent a thread relays to is stopped on something on its
+ * screen (thread meta `relay.state` "blocked"): the session waits, but on
+ * the user to look, unlike an agent that is only ready for a message. */
+export function relayBlocked(t: Pick<Thread, "meta"> | undefined): boolean {
+  const relay = t?.meta?.relay;
+  return !!relay && typeof relay === "object" && !Array.isArray(relay) && (relay as Record<string, unknown>).state === "blocked";
+}
+
 export function rowState(t: Thread, now: number): RowState {
   if (t.archived_at) return "idle";
   if (t.pending_questions > 0) return "needs-you";

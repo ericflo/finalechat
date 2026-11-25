@@ -17,6 +17,7 @@ import { ThreadSettingsPanel } from "../components/ThreadSettings";
 import { SessionMark, StopSessionSheet } from "../components/Session";
 import { ThreadArtifacts } from "./Artifacts";
 import { InspectMessage } from "../components/InspectMessage";
+import { relayBlocked } from "../lib/inbox";
 
 type Item = { kind: "message"; at: string; m: Message } | { kind: "question"; at: string; q: Question };
 
@@ -418,7 +419,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
             </div>
           );
         })}
-        {activity && <ActivityBubble a={activity} />}
+        {activity && <ActivityBubble a={activity} blocked={relayBlocked(thread)} />}
         <div ref={bottomRef} />
       </div>
       {!atBottom && loaded && items.length > 0 && (
@@ -886,7 +887,8 @@ function RelayReportBubble({ m, grouped, showMeta, inspectThread, onReply }: Bub
     requestAnimationFrame(() => ref.current?.scrollIntoView({ block: "nearest" }));
   };
   return (
-    <div ref={ref} id={`message-${m.id}`} className={`msg agent relay-report ${grouped ? "grouped" : ""}`}>
+    <div ref={ref} id={`message-${m.id}`} className={`msg agent relay-report ${m.importance === "important" ? "important" : ""} ${grouped ? "grouped" : ""}`}>
+      {m.importance === "important" && <span className="important-chip">Important</span>}
       <div className={`report-card ${open ? "open" : ""}`}>
         <button type="button" className="report-toggle" aria-expanded={open} onClick={() => (open ? collapse() : setOpen(true))}>
           <span className="report-head">
@@ -1053,10 +1055,12 @@ function TranscriptBubble({ m, grouped, showMeta, inspectThread, onOpen, receipt
 }
 
 /** The agent's live status: "running tests…" with a timer once it has taken a while. */
-function ActivityBubble({ a }: { a: Activity }) {
+function ActivityBubble({ a, blocked }: { a: Activity; blocked?: boolean }) {
   const elapsed = useElapsed(a.since);
   if (a.kind === "waiting") {
-    return <div className="activity-waiting" role="status" aria-live="polite">{a.text === "Waiting for your next message" ? "Ready for your message" : a.text}</div>;
+    // A relayed agent stopped on its screen waits on the user to look: it
+    // reads like a question waiting, not like an agent at rest.
+    return <div className={`activity-waiting${blocked ? " blocked" : ""}`} role="status" aria-live="polite">{a.text === "Waiting for your next message" ? "Ready for your message" : a.text}</div>;
   }
   // Only the text is live: the timer ticks every second and would otherwise
   // be re-announced by a screen reader for as long as the agent works.

@@ -7,7 +7,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-const { agentsDiffer, busyFor, byAttentionThenActivity, heldOrder, inboxViewPath, inView, isWorking, orderHoldMs, parseInboxView, rowState, sameOrder, threadSummary, threadTitle } = await import("../src/lib/inbox.ts");
+const { agentsDiffer, busyFor, byAttentionThenActivity, heldOrder, inboxViewPath, inView, isWorking, orderHoldMs, parseInboxView, relayBlocked, rowState, sameOrder, threadSummary, threadTitle } = await import("../src/lib/inbox.ts");
 
 const now = Date.parse("2026-11-23T12:00:00Z");
 const iso = (ms) => new Date(ms).toISOString();
@@ -26,6 +26,19 @@ const thread = (over = {}) => ({
   ...over,
 });
 const busy = (kind = "working", expiresIn = 60000) => ({ text: "Running tests", kind, at: iso(now - 5000), since: iso(now - 12 * 60000), expires_at: iso(now + expiresIn) });
+
+describe("a relayed agent stopped on its screen", () => {
+  it("is told apart from one that is only ready, by the relay's state", () => {
+    assert.equal(relayBlocked(thread({ meta: { relay: { name: "claude", state: "blocked" } } })), true);
+    assert.equal(relayBlocked(thread({ meta: { relay: { name: "claude", state: "idle" } } })), false);
+    assert.equal(relayBlocked(thread({ meta: { relay: null } })), false);
+    assert.equal(relayBlocked(thread({ meta: {} })), false);
+    assert.equal(relayBlocked(undefined), false);
+  });
+  it("is still not working", () => {
+    assert.equal(isWorking(thread({ meta: { relay: { state: "blocked" } }, activity: busy("waiting") }), now), false);
+  });
+});
 
 describe("row state", () => {
   it("is working only while the agent says so and the status is fresh", () => {

@@ -52,6 +52,7 @@ import {
   inboxViewPath,
   inView,
   isWorking,
+  relayBlocked,
   threadSummary,
   threadTitle,
   type InboxView,
@@ -764,13 +765,16 @@ function ThreadRow({
   const relayed = session ? liveRelay(t) : null;
   const liveActivity = useLiveActivity(archived ? null : t.activity);
   // An agent waiting on the user is not working, and never looks like it.
-  const activity = liveActivity?.kind === "waiting" ? null : liveActivity;
+  // Only a relayed agent stopped on its screen says so here, in amber: it
+  // waits on the user to look.
+  const blocked = !!relayed && relayBlocked(t) && liveActivity?.kind === "waiting";
+  const activity = liveActivity?.kind === "waiting" && !blocked ? null : liveActivity;
   const draft = useStore((s) => s.drafts[t.id]);
   const now = useNow(30000);
   const pressTimer = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false);
   const summary = threadSummary(t);
-  const state = needs ? "needs-you" : activity ? "working" : unread ? "unread" : "";
+  const state = needs ? "needs-you" : activity && !blocked ? "working" : unread ? "unread" : "";
 
   // Long-press (or right-click) opens the row's actions. The click that the
   // finger's lift produces is swallowed once; any later pointer resets that.
@@ -821,11 +825,11 @@ function ThreadRow({
   } else if (activity && !needs) {
     foot = (
       <>
-        <span className={`foot-text live ${activity.kind}`}>
+        <span className={`foot-text live ${activity.kind}${blocked ? " blocked" : ""}`}>
           <span className="live-dot" aria-hidden />
           <span className="live-text">{activity.text}</span>
         </span>
-        <span className="foot-time" title="How long the agent has been busy">
+        <span className="foot-time" title={blocked ? "How long it has been waiting" : "How long the agent has been busy"}>
           {busyFor(activity.since, now)}
         </span>
       </>
