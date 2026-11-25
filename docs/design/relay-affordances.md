@@ -1,6 +1,6 @@
 # Relay threads: affordances worth adding
 
-> Historical note: this predates eagent's single-loop design. Its orchestrator, task workers, narrator and their settings (such as task concurrency and narrator timing) are gone; every eagent session now relays to an external coding agent. Current behaviour is in [integrations.md](../integrations.md).
+> Historical note: this describes eagent as it was when written, with an orchestrator, task workers and a narrator and their settings (such as task concurrency and narrator timing). Newer eagents work differently; FinaleChat renders whatever settings and actions a connector publishes. What FinaleChat relies on is in [integrations.md](../integrations.md).
 
 Scope: relay threads only, where eagent runs Codex or Claude Code for you. The rest of Finalechat stays as it is.
 

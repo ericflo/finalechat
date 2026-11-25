@@ -568,13 +568,14 @@ func TestMessengerNewRelaySession(t *testing.T) {
 	conn.must(200, "POST", "/api/v1/connectors/"+id+"/heartbeat", map[string]any{"instance": instance})
 	descriptor := control.Descriptor{Format: control.Format, SchemaVersion: "eagent/1", AdapterVersion: "1", Fields: []control.Field{}, Actions: []control.Action{{
 		Operation: "session.start", Label: "Start a session", Class: "cost",
-		Parameters: control.Shape{Type: "object", Properties: map[string]control.Shape{"prompt": {Type: "string", MaxLength: 32768}, "cwd": {Type: "string", MaxLength: 4096}, "relay": {Type: "string", Enum: []any{"", "codex", "claude"}}}, Required: []string{"prompt"}},
+		Parameters: control.Shape{Type: "object", Properties: map[string]control.Shape{"prompt": {Type: "string", MaxLength: 32768}, "cwd": {Type: "string", MaxLength: 4096}, "relay": {Type: "string", Enum: []any{"", "codex", "claude", "pi"}}}, Required: []string{"prompt"}},
 	}}}
 	snapshot := control.Snapshot{Version: "v1", Context: "/home/eric/relay", Saved: map[string]any{}, Effective: map[string]any{}, Details: map[string]any{
 		"directories": map[string]any{"root": "/home/eric/relay", "recent": []string{"/home/eric/relay/api"}},
 		"relay_profiles": []map[string]any{
 			{"name": "codex", "agent": "codex", "label": "Codex · GPT-6 Astra xhigh", "model": "gpt-6-astra", "effort": "xhigh"},
 			{"name": "claude", "agent": "claude", "label": "Claude Code · Opus 5.5 xhigh", "model": "opus-5.5", "effort": "xhigh"},
+			{"name": "pi", "agent": "pi", "label": "Pi · openrouter/qwen3-coder high", "model": "openrouter/qwen3-coder", "effort": "high"},
 		},
 	}}
 	published := conn.must(200, "PUT", "/api/v1/connectors/"+id+"/resources/"+grant.Key, map[string]any{"instance": instance, "descriptor": descriptor, "snapshot": snapshot})
@@ -625,7 +626,7 @@ func TestMessengerNewRelaySession(t *testing.T) {
 	// /help names the agents connected projects offer.
 	from0 := g.mark()
 	say(t, psid, "/help")
-	if txt := lastText(t, g, from0); !strings.Contains(txt, "/new ") || !strings.Contains(txt, "codex") || !strings.Contains(txt, "claude") {
+	if txt := lastText(t, g, from0); !strings.Contains(txt, "/new ") || !strings.Contains(txt, "(codex, claude, pi)") || strings.Contains(txt, "eagent") {
 		t.Fatalf("/help: %q", txt)
 	}
 

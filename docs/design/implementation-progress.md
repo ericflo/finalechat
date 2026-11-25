@@ -1,6 +1,6 @@
 # Implementation and validation record
 
-> Historical note: this predates eagent's single-loop design. Its orchestrator, task workers, narrator and their settings (such as task concurrency and narrator timing) are gone; every eagent session now relays to an external coding agent. Current behaviour is in [integrations.md](../integrations.md).
+> Historical note: this describes eagent as it was when written, with an orchestrator, task workers and a narrator and their settings (such as task concurrency and narrator timing). Newer eagents work differently; FinaleChat renders whatever settings and actions a connector publishes. What FinaleChat relies on is in [integrations.md](../integrations.md).
 
 Status: implemented, validated and committed locally. September 8, 2026. The production deployment and existing user services have not been changed.
 
