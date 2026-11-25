@@ -45,7 +45,8 @@ const projectField=(key,label,section,group,schema,extra={})=>({key,label,sectio
 // The project's model is a card named for what it holds ("Model", whose
 // setting is also "Model"). Each model it suggests implies the route it is
 // reached by, like a preset implies its models; on the desktop run the
-// suggestions are also grouped by that route (group_by). The summarizer's
+// suggestions are also grouped by that route (group_by), a base URL with no
+// label of its own, so the picker names each group by its host. The summarizer's
 // own model is offered only once it is dedicated, after the agent
 // republishes.
 const routes={together:{label:'Together AI',url:'https://api.together.xyz/v1',protocol:'openai-chat'},anthropic:{label:'Anthropic',url:'https://api.anthropic.com/v1',protocol:'anthropic'}};
@@ -55,11 +56,10 @@ const projectFixture=grouped=>({
  descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.project/v1',adapter_version:'1',suggestions:{
    presets:[{value:'glm',group:'Together AI',detail:'GLM-5.3 working, DeepSeek V4.1 Flash summarizing',implies:{'/model/model':'zai-org/GLM-5.3','/model/base_url':routes.together.url}},{value:'anthropic-med',group:'Anthropic',detail:'Claude Opus 5.5 working, Claude Haiku 4.5 summarizing',implies:{'/model/model':'claude-opus-5-5','/model/base_url':routes.anthropic.url}}],
    models:projectModels(grouped),
-   ...(grouped?{base_urls:Object.values(routes).map(r=>({value:r.url,label:r.label}))}:{}),
   },fields:[
   projectField('/preset','Preset','Models','Configuration',{type:'string',enum:['glm','anthropic-med']},{suggest:{list:'presets'}}),
   projectField('/model/model','Model','Models','Model',{type:'string',max_length:200},{suggest:grouped?{list:'models',group_by:'/model/base_url'}:{list:'models'}}),
-  projectField('/model/base_url','Base URL','Models','Model',{type:'string',max_length:8192},{advanced:true,...(grouped?{suggest:{list:'base_urls'}}:{})}),
+  projectField('/model/base_url','Base URL','Models','Model',{type:'string',max_length:8192},{advanced:true}),
   projectField('/model/protocol','Protocol','Models','Model',{type:'string',enum:['openai-chat','anthropic']},{advanced:true}),
   projectField('/turn_timeout_minutes','Turn timeout (minutes)','Behavior','Work',{type:'integer',minimum:1,maximum:1440}),
   projectField('/summarizer/mode','Mode','Behavior','Summaries',{type:'string',enum:['inline','dedicated']}),
@@ -72,6 +72,8 @@ Object.assign(project,{id:'project',connector_id:'connector',key:'project-x',lab
 const manifest=fixture?JSON.parse(await readFile(path.join(fixture,'manifest.json'),'utf8')):null;
 const website=fixture?await readFile(path.join(fixture,'settings/index.html'),'utf8'):'';
 const resources={session,project};
+// Whether the agent's own descriptor groups a model by its provider.
+const grouped0=!!fixture&&project.descriptor.fields.some(f=>f.writable&&!f.advanced&&f.suggest?.group_by);
 const freshSession=structuredClone(session.snapshot.saved);
 
 const server=await createServer({root:path.join(root,'web'),configFile:false,plugins:[react()],server:{host:'127.0.0.1',port:0,strictPort:false},logLevel:'warn'});
@@ -243,11 +245,13 @@ try {
     const picker=page.locator('.sf-picker');
     await picker.getByRole('heading',{name:'Model',exact:true}).waitFor();
     await picker.getByRole('searchbox',{name:'Search Model',exact:true}).waitFor();
-    // Grouped by provider, by the suggestions' own groups or by group_by.
-    await picker.locator('.sf-options-title',{hasText:'Anthropic'}).waitFor();
+    // Grouped by provider, by the suggestions' own groups or by group_by;
+    // an unlabeled base URL reads as its host.
+    await picker.locator('.sf-options-title',{hasText:grouped?'api.anthropic.com':'Anthropic'}).waitFor();
+    if(grouped) assert.deepEqual(await picker.locator('.sf-options-title').allTextContents(),['api.together.xyz','api.anthropic.com']);
     await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-project-model-picker.png`});
     await picker.getByRole('button',{name:/^Claude Opus 5\.5/}).click();
-    assert.match(await modelPick.getAttribute('aria-label'),grouped?/^Model: Claude Opus 5\.5 at Anthropic\./:/^Model: Claude Opus 5\.5\./);
+    assert.match(await modelPick.getAttribute('aria-label'),grouped?/^Model: Claude Opus 5\.5 at api\.anthropic\.com\./:/^Model: Claude Opus 5\.5\./);
     const more=page.getByRole('button',{name:/^Show \d+ advanced setting/});
     if(await more.count()) await more.click();
     // Grouped by it, the route is chosen with the model (the "at Anthropic"
@@ -273,6 +277,27 @@ try {
     await card('Summaries').getByLabel('Model',{exact:true}).waitFor({timeout:5000});
     assert.ok(Date.now()-savedAt<5000,'the newly offered setting waited for the periodic refresh');
     await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-project-summaries.png`});
+   }
+   const grouping=fixture&&running?resources.project.descriptor.fields.find(f=>f.writable&&!f.advanced&&f.suggest?.group_by):null;
+   if(grouping) {
+    // FinaleChat's own form on what the agent publishes: a model picked at
+    // another provider (its group_by field) is saved with that provider.
+    const d=resources.project.descriptor,snap=resources.project.snapshot;
+    const now=snap.saved[grouping.suggest.group_by]??snap.effective[grouping.suggest.group_by];
+    const other=d.suggestions[grouping.suggest.list].find(x=>x.group&&x.group!==now&&x.label);
+    const named=[grouping.group,grouping.label.toLowerCase()===String(grouping.group).toLowerCase()?'':grouping.label.toLowerCase()].filter(Boolean).join(' ');
+    const button=page.getByRole('button',{name:new RegExp('^'+named.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+': ')});
+    await button.click();
+    const picker=page.locator('.sf-picker');
+    assert.equal(await picker.locator('.sf-options-title').filter({hasText:/^https?:/}).count(),0,'a group named by a raw address');
+    await picker.getByRole('searchbox').fill(other.value);
+    await picker.locator('.sf-option').filter({hasText:other.value}).first().click();
+    const hostOf=v=>/^https?:\/\//.test(v)?new URL(v).host:v;
+    if(hostOf(now)!==hostOf(other.group)) assert.ok(!(await button.getAttribute('aria-label')).includes(' at '+hostOf(now)),'the old provider still shows');
+    await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-agent-model-picked.png`});
+    await page.getByRole('button',{name:'Save',exact:true}).click();
+    await page.getByText('Saved · new or resumed sessions',{exact:true}).waitFor();
+    assert.deepEqual(commands[commands.length-1].proposal.edits,[{op:'set',key:grouping.key,value:other.value},{op:'set',key:grouping.suggest.group_by,value:other.group}]);
    }
    if(fixture && running) {
     // The agent's own editor, opened on request; one Save still submits.
@@ -304,6 +329,6 @@ try {
    await page.close();
   }
  }
- assert.equal(commands.length,fixture?6:10);assert.deepEqual(errors,[]);
+ assert.equal(commands.length,fixture?(grouped0?8:6):10);assert.deepEqual(errors,[]);
  console.log(`PASS thread settings: session first, project on request${fixture?', agent editor optional':''}; screenshots in ${shots}`);
 } finally {await browser.close();await server.close();}

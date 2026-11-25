@@ -635,7 +635,7 @@ function PickerButton({ model, item, id, list: all }: { model: FormModel; item: 
   const by = item.suggest?.group_by ? model.items.find((i) => i.key === item.suggest!.group_by) : undefined;
   const group = by ? model.state(by.key).value : undefined;
   const hit = suggestion(list, st.value, group);
-  const groupName = by && typeof group === "string" ? labelOf(model, by.key, group) : "";
+  const groupName = by && typeof group === "string" ? groupLabel(model, by.key, group) : "";
   const custom = customLine(model, item);
   const main = custom ? "Custom" : hit?.label || show(st.value);
   const sub = custom ?? [groupName, hit?.label && hit.label !== st.value ? show(st.value) : "", hit?.detail].filter(Boolean).join(" · ");
@@ -672,6 +672,19 @@ function PickerButton({ model, item, id, list: all }: { model: FormModel; item: 
   );
 }
 
+/** A group as the picker names it: the label its field gives the value;
+ * a group that is an address with no label of its own (a provider's base
+ * URL) by its host, "api.anthropic.com". */
+function groupLabel(model: FormModel, key: string, value: string): string {
+  const label = labelOf(model, key, value);
+  if (label !== value || !/^https?:\/\//i.test(value)) return label;
+  try {
+    return new URL(value).host || value;
+  } catch {
+    return value;
+  }
+}
+
 /** The groups a list's values come in, as the list names them. */
 function listGroups(list: Suggestion[]): { value: string; label: string }[] {
   return [...new Set(list.map((s) => s.group ?? ""))].filter(Boolean).map((g) => ({ value: g, label: g }));
@@ -682,7 +695,7 @@ function listGroups(list: Suggestion[]): { value: string; label: string }[] {
 function groupChoices(model: FormModel, key: string, list: Suggestion[]): { value: string; label: string }[] {
   const item = model.items.find((i) => i.key === key);
   const values = [...((item?.schema.enum ?? []).filter((v) => typeof v === "string") as string[]), ...list.map((s) => s.group ?? "")].filter((v, n, all) => v !== "" && all.indexOf(v) === n);
-  return values.map((v) => ({ value: v, label: labelOf(model, key, v) }));
+  return values.map((v) => ({ value: v, label: groupLabel(model, key, v) }));
 }
 
 function PickerSheet({ title, list, current, currentGroup, fallback, groups, allowCustom, defaultRow, customNote, onPick, onClose }: { title: string; list: Suggestion[]; current: string; currentGroup?: string; fallback?: string; groups: { value: string; label: string }[]; allowCustom: boolean; defaultRow?: { on: boolean; detail?: string; pick: () => void }; customNote?: string; onPick: (value: string, group?: string) => void; onClose: () => void }) {
