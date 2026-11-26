@@ -1,5 +1,7 @@
 **Design: durable, versioned session artifacts**
 
+> Historical note: this describes eagent as it was when written, with an orchestrator, task workers and a narrator and their settings (such as task concurrency and narrator timing). Newer eagents work differently; FinaleChat renders whatever settings and actions a connector publishes. What FinaleChat relies on is in [integrations.md](../integrations.md).
+
 Status: implemented locally; see [validation and implementation limits](implementation-progress.md). This replaces the proposed live proxy between FinaleChat and eagent. Paths below refer to this repository and to the sibling [eagent](https://github.com/ericflo/eagent) repository.
 
 The optional [interactive settings extension](interactive-settings.md) adds custom settings artifacts, scoped live bindings and a durable command channel. Historical inspection remains available independently of remote control.

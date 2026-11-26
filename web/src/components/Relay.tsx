@@ -10,12 +10,13 @@ import { IconBell, IconChevron, IconClock, IconCopy, IconCpu, IconExpand, IconRe
 import { relayName, relayProfiles } from "./NewSession";
 import { SettingsForm, startModel, type FormModel } from "./SettingsForm";
 
-// eagent can start Codex or Claude Code in a terminal it owns and pass the
-// user's messages on (a relay). While one runs, eagent keeps thread meta
-// `relay` current; the controls here are its slash commands, sent as
-// ordinary messages so they show in the conversation like anything else.
+// A host agent (eagent) can start a coding agent (any relay profile it
+// publishes) in a terminal it owns and pass the user's messages on (a
+// relay). While one runs, the host keeps thread meta `relay` current; the
+// controls here are its slash commands, sent as ordinary messages so they
+// show in the conversation like anything else.
 
-/** The relay eagent reports on a thread, or null when there is none. */
+/** The relay the host reports on a thread, or null when there is none. */
 export function threadRelay(t: Thread | undefined): ThreadRelay | null {
   const raw = t?.meta.relay;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -44,7 +45,7 @@ export function threadRelay(t: Thread | undefined): ThreadRelay | null {
 
 const receiptStates: readonly string[] = ["sent", "delivered", "held", "eagent", "failed"];
 
-/** eagent's receipts for the user's recent messages, by message id; empty
+/** The host's receipts for the user's recent messages, by message id; empty
  * outside a relay thread. */
 export function relayReceipts(t: Thread | undefined): Record<string, RelayReceipt> {
   const raw = t?.meta.relay_receipts;
@@ -56,7 +57,8 @@ export function relayReceipts(t: Thread | undefined): Record<string, RelayReceip
   return out;
 }
 
-/** "Codex" or "Claude" for the agents eagent relays to, else the name as given. */
+/** "Codex" or "Claude" for older hosts, whose relays carry only the agent's
+ * command name; otherwise the label's head or the name, capitalised ("Pi"). */
 export function agentName(agent: string, fallback = ""): string {
   const a = agent.toLowerCase();
   if (a.startsWith("codex")) return "Codex";
@@ -67,6 +69,17 @@ export function agentName(agent: string, fallback = ""): string {
 
 export function relayAgent(r: ThreadRelay): string {
   return agentName(r.agent || r.name, r.label.split(" · ")[0] || r.name);
+}
+
+/** The host agent's name as the thread gives it ("eagent"), for the route
+ * pip and receipts; "Host" when the thread names none. */
+export function relayHost(t: Thread | undefined): string {
+  return t?.agent?.trim() || "Host";
+}
+
+/** "Codex", "Antigravity or Codex", "Antigravity, Codex or Pi". */
+export function orList(names: string[]): string {
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}` : (names[0] ?? "");
 }
 
 /** Older hosts offered one switch destination for each built-in relay. */
@@ -203,7 +216,7 @@ export function RelaySheet({ thread, relay, onClose, onSend, stopSession }: { th
       {!stopped && <Item icon={IconCpu} label="Model" hint={relay.pending ? `${runs ? `${runs}. ` : ""}Next: ${relay.pending}, when this turn ends` : runs || "Its model and reasoning effort"} onClick={() => setView("model")} />}
       {relay.state === "working" && <Item icon={IconBell} label="Tell me when it's done" hint={relay.notify_done ? "You'll get a buzz" : "One buzz when this turn ends"} disabled={relay.notify_done} onClick={() => send("/notify-done")} />}
       {!stopped && <Item icon={IconTerminal} label="Screen" hint="Show its terminal here" onClick={() => send("/screen")} />}
-      {!stopped && others.length > 0 && <Item icon={IconSwap} label="Switch agent…" hint={`Hand the work to ${others.map((p) => agentName(p)).join(" or ")}`} onClick={() => setView("switch")} />}
+      {!stopped && others.length > 0 && <Item icon={IconSwap} label="Switch agent…" hint={`Hand the work to ${orList(others.map((p) => agentName(p)))}`} onClick={() => setView("switch")} />}
       {!ended(relay) && <Item icon={IconRepeat} label="Autopilot…" hint={relay.autopilot ? `On: ${relayStatus(relay)}` : "Keep it working on its own"} onClick={() => setView("autopilot")} />}
       {relay.attach && <Item icon={IconCopy} label="Copy attach command" onClick={() => void copyAttach()} />}
       {(!stopped || stopSession) && <div className="sheet-sep" role="separator" />}

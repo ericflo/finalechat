@@ -1,6 +1,9 @@
 #!/usr/bin/env node
-// New session in Chromium, phone and desktop, against mocked APIs: with the
-// agent doing the work itself, its declared start options (configuration,
+// New session in Chromium, phone and desktop, against mocked APIs.
+//
+// An older host (its session.start's relay enum still holds "", the host
+// doing the work itself; this fixture mirrors an older eagent's per-role
+// inputs): with the host doing the work itself, its declared start options (configuration,
 // each actor's provider, model and effort) can be set before the first
 // message; a configuration shows what it runs before anything starts, every
 // choice can go back to the default, a model is picked from any provider
@@ -8,6 +11,12 @@
 // session.start. With a relayed agent, its own model and effort are offered
 // instead (inputs whose `when` names that agent), remembered on the device
 // and sent with the relay.
+//
+// A host that always relays (its relay enum lists only profiles, default
+// first): no do-it-yourself choice, the first profile is picked unless
+// another is remembered, every start sends relay, an empty first message
+// is fine, a fourth profile (pi, with provider/model ids) works like any
+// other, and a start that races a republish is retried once.
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -63,6 +72,35 @@ const resource={id:'project',connector_id:'connector',key:'project-x',label:'Dev
  snapshot:{version:'p1',context:'/home/u/Development',saved:{},effective:{},runtime_known:false,details:{directories:{root:'/home/u/Development',recent:[],children:[],siblings:[]},relay_profiles:[{name:'codex',agent:'codex',label:'Codex · GPT-6.2-Astra xhigh',model:'gpt-6.2-astra',effort:'xhigh'},{name:'antigravity',agent:'antigravity',label:'Antigravity',model:'',effort:''}],relays:[]}}};
 const connector={id:'connector',name:'eagent · llmbox · Development',provider:'eagent',state:'active',grants:[],requested_grants:[],last_seen_at:new Date().toISOString(),expires_at:'2030-01-01T00:00:00Z'};
 
+// A host that always relays: profiles only, default first, each with its
+// own model and effort.
+const relayed={prompt:{type:'string',max_length:32768},cwd:{type:'string',max_length:4096},relay:{type:'string',max_length:120,enum:['claude','codex','pi']}};
+const relayedInputs=[];
+for(const [prof,group,list,def] of [['claude','Claude Code','claude_models','claude-opus-5-5'],['codex','Codex','codex_models','gpt-6.2-astra'],['pi','Pi','pi_models','']]){
+ relayed[`relay_${prof}_model`]={type:'string',max_length:200};
+ relayed[`relay_${prof}_effort`]={type:'string',max_length:120,enum:['low','medium','high','xhigh']};
+ relayedInputs.push({name:`relay_${prof}_model`,label:'Model',group,suggest:{list},...(def?{default:def}:{}),when:{relay:[prof]}},{name:`relay_${prof}_effort`,label:'Reasoning effort',group,when:{relay:[prof]}});
+}
+const piModels=[{value:'openrouter/qwen3-coder',label:'Qwen3 Coder',detail:'openrouter'},{value:'anthropic/claude-sonnet-5-5',label:'Claude Sonnet 5.5',detail:'anthropic'}];
+const relayResource={...resource,
+ descriptor:{format:'finalechat.settings/v1',schema_version:'eagent.project/v2',adapter_version:'2',fields:[],
+  actions:[{operation:'session.start',label:'Start a new session',class:'cost',parameters:{type:'object',properties:relayed,required:['prompt']},inputs:relayedInputs}],
+  suggestions:{claude_models:[{value:'claude-opus-5-5',label:'Claude Opus 5.5'}],codex_models:codexModels,pi_models:piModels}},
+ snapshot:{version:'r1',context:'/home/u/Development',saved:{},effective:{},runtime_known:false,details:{directories:{root:'/home/u/Development',recent:[],children:[],siblings:[]},relay_profiles:[
+  {name:'claude',agent:'claude',label:'Claude Code · Opus 5.5 xhigh',model:'claude-opus-5-5',effort:'xhigh'},
+  {name:'codex',agent:'codex',label:'Codex · GPT-6.2-Astra xhigh',model:'gpt-6.2-astra',effort:'xhigh'},
+  {name:'pi',agent:'pi',label:'Pi · openrouter/qwen3-coder high',model:'openrouter/qwen3-coder',effort:'high'}],relays:[]}}};
+let current=resource;
+let conflicts=0;
+let multiHost=false;
+const connector2={id:'connector2',name:'eagent · macbook · Development',provider:'eagent',state:'active',grants:[],requested_grants:[],last_seen_at:new Date().toISOString(),expires_at:'2030-01-01T00:00:00Z'};
+const resource2={...relayResource,id:'project2',connector_id:'connector2',label:'Development',
+ snapshot:{...relayResource.snapshot,version:'m1',context:'/Users/u/Development',details:{directories:{root:'/Users/u/Development',recent:[],children:[],siblings:[]},relay_profiles:[
+  {name:'codex',agent:'codex',label:'Codex · GPT-6.2-Astra xhigh',model:'gpt-6.2-astra',effort:'xhigh'},
+  {name:'pi',agent:'pi',label:'Pi · openrouter/qwen3-coder high',model:'openrouter/qwen3-coder',effort:'high'}],relays:[]}}};
+const offlineConnector={id:'connector-old',name:'eagent · oldbox · Development',provider:'eagent',state:'active',grants:[],requested_grants:[],last_seen_at:'2025-01-01T00:00:00Z',expires_at:'2030-01-01T00:00:00Z'};
+const offlineResource={...relayResource,id:'project-old',connector_id:'connector-old',label:'Development'};
+
 const server=await createServer({root:path.join(root,'web'),configFile:false,plugins:[react()],server:{host:'127.0.0.1',port:0,strictPort:false},logLevel:'warn'});
 await server.listen();const base=server.resolvedUrls.local[0].replace(/\/$/,'');
 const browser=await chromium.launch({headless:true});
@@ -76,11 +114,15 @@ try {
    if(url.origin!==base) throw Error('Unexpected outbound request '+url.origin);
    const json=v=>route.fulfill({json:v});
    if(!p.startsWith('/api/')) return route.continue();
-   if(p==='/api/v1/connectors') return json({connectors:[connector]});
-   if(p==='/api/v1/connectors/connector') return json({connector,online:true,resources:[resource]});
-   if(p==='/api/v1/settings-resources/project') return json({resource,connector,online:true,website:null});
-   if(p==='/api/v1/settings-resources/project/commands') {const body=route.request().postDataJSON();commands.push(body);return json({created:true,command:{id:'c1',resource_id:'project',status:'succeeded',proposal:body.proposal,result:{thread:'ext:eagent:1',session_id:'1',interactive:true}}});}
-   if(p.startsWith('/api/v1/threads/')) return json({thread:{id:'t1',external_id:'eagent:1',title:'Development',agent:'eagent',meta:{},unread_count:0,pending_count:0,created_at:new Date().toISOString()},messages:[],has_more:false,questions:[],artifacts:[],resources:[]});
+   if(p==='/api/v1/connectors') return json({connectors:multiHost?[connector,connector2,offlineConnector]:[connector]});
+   if(p==='/api/v1/connectors/connector') return json({connector,online:true,resources:[current]});
+   if(p==='/api/v1/connectors/connector2') return json({connector:connector2,online:true,resources:[resource2]});
+   if(p==='/api/v1/connectors/connector-old') return json({connector:offlineConnector,online:false,resources:[offlineResource]});
+   if(p==='/api/v1/settings-resources/project') return json({resource:current,connector,online:true,website:null});
+   if(p==='/api/v1/settings-resources/project2') return json({resource:resource2,connector:connector2,online:true,website:null});
+   if(p==='/api/v1/settings-resources/project/commands') {const body=route.request().postDataJSON();commands.push({...body,_resource:'project'});if(conflicts>0){conflicts--;return route.fulfill({status:409,json:{error:{code:'conflict',message:'The settings changed.'}}});}return json({created:true,command:{id:'c1',resource_id:'project',status:'succeeded',proposal:body.proposal,result:{thread:'ext:eagent:1',session_id:'1',interactive:true}}});}
+   if(p==='/api/v1/settings-resources/project2/commands') {const body=route.request().postDataJSON();commands.push({...body,_resource:'project2'});return json({created:true,command:{id:'c2',resource_id:'project2',status:'succeeded',proposal:body.proposal,result:{thread:'ext:eagent:2',session_id:'2',interactive:true}}});}
+   if(p.startsWith('/api/v1/threads/')) return json({thread:{id:p.endsWith('2')?'t2':'t1',external_id:p.endsWith('2')?'eagent:2':'eagent:1',title:'Development',agent:'eagent',meta:{},unread_count:0,pending_count:0,created_at:new Date().toISOString()},messages:[],has_more:false,questions:[],artifacts:[],resources:[]});
    return json({});
   });
   await page.goto(base+'/tests/artifacts.html?draft');
@@ -212,8 +254,80 @@ try {
   await page.getByRole('button',{name:'Start the session'}).click();
   await page.waitForURL(/\/t\/t1/);
   assert.deepEqual(commands.at(-1).proposal.parameters,{prompt:'run tests',relay:'antigravity',relay_antigravity_model:'gemini-4-carbon-high',relay_antigravity_effort:'high'});
+
+  // A host that always relays. What this device remembered from the older
+  // host ("" for the host itself) falls back to the first profile.
+  current=relayResource;
+  await page.goto(base+'/tests/artifacts.html?draft');
+  await page.evaluate(()=>{localStorage.clear();localStorage.setItem('fc.draft.connector.agent','');});
+  await page.reload();
+  const agentPicker=page.getByRole('group',{name:'Agent'});
+  await agentPicker.getByRole('button',{name:'Claude Code',exact:true}).waitFor();
+  assert.deepEqual(await agentPicker.getByRole('button').allTextContents(),['Claude Code','Codex','Pi']);
+  assert.equal(await page.getByRole('button',{name:'eagent',exact:true}).count(),0);
+  assert.equal(await agentPicker.getByRole('button',{name:'Claude Code',exact:true}).getAttribute('aria-pressed'),'true');
+  await page.getByText('eagent starts Claude Code in this folder and passes your messages on.',{exact:true}).waitFor();
+  await page.getByPlaceholder(/^Message Claude Code/).waitFor();
+  await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-relay-only-draft.png`});
+  // An empty first message starts the agent, with relay always sent; a
+  // version race is retried once.
+  conflicts=1;
+  const before=commands.length;
+  await page.getByRole('button',{name:'Start the session'}).click();
+  await page.waitForURL(/\/t\/t1/);
+  assert.equal(commands.length,before+2,'one retry after a conflict');
+  assert.deepEqual(commands.at(-1).proposal.parameters,{prompt:'',relay:'claude'});
+  // Pi: a fourth profile, models named provider/model.
+  await page.goto(base+'/tests/artifacts.html?draft');
+  await agentPicker.getByRole('button',{name:'Pi',exact:true}).click();
+  await page.getByTitle("Pi's model and reasoning effort for this session").click();
+  await page.getByRole('button',{name:/^Pi model:/}).click();
+  await page.locator('.sf-picker').getByRole('button',{name:/^Qwen3 Coder/}).click();
+  await page.getByRole('region',{name:'Pi',exact:true}).getByRole('radio',{name:'high',exact:true}).click();
+  await page.waitForTimeout(400); await page.screenshot({path:`${shots}/${name}-pi-options.png`});
+  await page.getByRole('button',{name:'Done',exact:true}).click();
+  await page.getByLabel('What it will run with').getByText(/openrouter\/qwen3-coder|Qwen3 Coder/).first().waitFor();
+  await page.getByPlaceholder(/^Message Pi/).fill('fix it');
+  await page.getByRole('button',{name:'Start the session'}).click();
+  await page.waitForURL(/\/t\/t1/);
+  assert.deepEqual(commands.at(-1).proposal.parameters,{prompt:'fix it',relay:'pi',relay_pi_model:'openrouter/qwen3-coder',relay_pi_effort:'high'});
+  // The last choice is remembered.
+  await page.goto(base+'/tests/artifacts.html?draft');
+  await agentPicker.getByRole('button',{name:'Pi',exact:true}).waitFor();
+  assert.equal(await agentPicker.getByRole('button',{name:'Pi',exact:true}).getAttribute('aria-pressed'),'true');
+  // Single online host hides the host picker.
+  assert.equal(await page.getByRole('group',{name:'Which host'}).count(),0);
+
+  // Multiple connected hosts: /new shows the host picker at the top (hiding
+  // stale offline connectors), switching preserves the draft message and swaps
+  // agents/folder/target, and the chosen host is remembered next time.
+  multiHost=true;
+  await page.goto(base+'/tests/artifacts.html?draft&any');
+  const hostBtn=page.getByRole('button',{name:/^Host: llmbox · Development\. Change$/});
+  await hostBtn.waitFor();
+  await page.getByPlaceholder(/^Message Pi/).fill('run on macbook');
+  await page.waitForTimeout(300); await page.screenshot({path:`${shots}/${name}-multi-host-draft.png`});
+  await hostBtn.click();
+  const hostSheet=page.getByRole('dialog',{name:'Choose host'});
+  await hostSheet.waitFor();
+  assert.equal(await hostSheet.getByText(/oldbox/).count(),0,'stale offline host stays hidden');
+  await page.waitForTimeout(200); await page.screenshot({path:`${shots}/${name}-host-picker.png`});
+  await hostSheet.getByRole('button',{name:/macbook · Development/}).click();
+  await page.getByRole('button',{name:/^Host: macbook · Development\. Change$/}).waitFor();
+  assert.deepEqual(await agentPicker.getByRole('button').allTextContents(),['Codex','Pi']);
+  assert.equal(await page.locator('textarea').inputValue(),'run on macbook','draft text survives host switch');
+  await page.getByRole('button',{name:'Start the session'}).click();
+  await page.waitForURL(/\/t\/t2/);
+  assert.equal(commands.at(-1)._resource,'project2');
+  assert.deepEqual(commands.at(-1).proposal.parameters,{prompt:'run on macbook',relay:'codex'});
+  // Reopening /new remembers macbook.
+  await page.goto(base+'/tests/artifacts.html?draft&any');
+  await page.getByRole('button',{name:/^Host: macbook · Development\. Change$/}).waitFor();
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'overflow');
+  multiHost=false;
+  current=resource;
   await page.close();
  }
  assert.deepEqual(errors,[]);
- console.log(`PASS new session: options before the first message, typed or picked; screenshots in ${shots}`);
+ console.log(`PASS new session: older host, relay-only host (pi included), and multi-host picker; screenshots in ${shots}`);
 } finally {await browser.close();await server.close();}

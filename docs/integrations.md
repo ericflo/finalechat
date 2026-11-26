@@ -70,7 +70,7 @@ Run `finalechat install antigravity` to register the FinaleChat MCP server with 
 
 In thread settings, select a model variant to set the model and reasoning effort for future sessions. The choices come from `agy models`. To archive a project's native transcript as well, run `finalechat install antigravity --artifacts --project .` in the project. Use `finalechat artifact export antigravity CONVERSATION_ID -o ./archive` for an offline copy.
 
-For an eagent-hosted session, pick **Antigravity** under **New session** or run `eagent relay antigravity`. The relay starts `agy --dangerously-skip-permissions`. Model and effort changes in the relay's thread settings resume the same Antigravity conversation after its current turn.
+For an eagent-hosted session, pick **Antigravity** under **New session** (or `/new antigravity` in Messenger). The relay starts `agy --dangerously-skip-permissions`. Model and effort changes in the relay's thread settings resume the same Antigravity conversation after its current turn.
 
 ## Codex
 
@@ -142,7 +142,7 @@ The distributed CLI remains a single Python 3.9+ file using only the standard li
 
 `make test-browser` runs the artifact SDK, opaque iframe, trusted settings controls and offline corruption checks in Chromium. It starts Vite on a temporary loopback port and mocks every API request, so it needs no account, database or existing server. Install Playwright and its Chromium browser in a separate tools directory, then set `FINALECHAT_PLAYWRIGHT_MODULE` to that installation's `node_modules/playwright/index.mjs`. The test also verifies that iframe staging never submits a command, invalid input clears a previous proposal, long text stays intact, stale edits require explicit review, and delayed acknowledgements preserve newer input.
 
-Eagent publishes a **This session** resource for every running session automatically, from the project's one connector: each actor's model route (provider, model, reasoning effort) plus task concurrency and narrator timing, applied live by the running harness with generation/version checks and native acknowledgements. These settings apply only to that process; resumed sessions load project defaults. When the session stops, eagent drops its grant and the resource leaves the conversation. Session controls cannot be drafted or queued for a later connection.
+Eagent publishes a **This session** resource for every running session automatically, from the project's one connector: the settings its descriptor declares (such as its model route and summarizer), applied live by the running harness with generation/version checks and native acknowledgements. These settings apply only to that process; resumed sessions load project defaults. When the session stops, eagent drops its grant and the resource leaves the conversation. Session controls cannot be drafted or queued for a later connection.
 
 ## Installed-client regression checks
 
@@ -154,7 +154,7 @@ Verified with Claude Code 2.1.263 and Codex 0.153.4. The Claude fixture uses the
 
 | Integration | Remote defaults | Live controls | Kept local or unavailable |
 | --- | --- | --- | --- |
-| eagent | Full shared project editor: routes/models/fallbacks, prompts, bundles, scheduling and mirror/archive preferences | Separately paired task concurrency and narrator timing, acknowledged by the running harness | Credentials, arbitrary files, and hot changes to model routes |
+| eagent | Full shared project editor: routes/models/fallbacks, prompts, bundles, scheduling and mirror/archive preferences | Session-scoped settings its descriptor declares (such as its model route), acknowledged by the running harness | Credentials, arbitrary files, and hot changes to model routes |
 | Claude Code | Declared user/project/project-local model, effort, presentation, permission and sandbox preferences | Saved defaults only; native runtime adoption remains unconfirmed | Credentials, hooks/helper commands, unknown fields and unobservable cloud/MDM policy |
 | Codex | Declared user model, effort, context, presentation, sandbox/approval and history defaults through native APIs | Saved defaults only; no ownership of another desktop/terminal thread | Credentials/MCP helpers, direct project/profile writes and unsupported native values |
 
@@ -170,9 +170,12 @@ under `details.directories`: `root`, `recent`, `children`, `siblings`, or an
 absolute path typed in), its Settings button edits the project's own
 settings, and nothing is created until the first message is sent. When the
 snapshot also lists `details.relay_profiles` (each `{name, agent, label,
-model, effort}`, such as `codex` labelled "Codex · GPT-6 Astra xhigh"), the
-draft offers one chip per profile beside the default, eagent; the app
-remembers the last choice per connector. The **Options** shown are the
+model, effort}`, such as `codex` labelled "Codex · GPT-6 Astra xhigh",
+default first), the draft offers one chip per profile; the app remembers
+the last choice per connector and otherwise picks the first profile. Only
+when the action's `relay` parameter is an enum that includes `""` does the
+draft also offer the integration itself (no relay) as a choice; otherwise
+every start sends `relay`. The **Options** shown are the
 action's inputs that apply to the chip chosen (by their `when` on `relay`),
 so each agent can have its own model and reasoning effort. That
 message is submitted as a trusted command exactly like a settings action:
@@ -186,10 +189,12 @@ integration's mirror creates it.
 credit and runs commands on the machine. Its parameters are `prompt` (at
 most 32,768 characters), an optional `cwd`, an absolute directory the
 session starts in, which the integration checks exists, and an optional
-`relay`, `""` or a relay profile name: eagent then starts that agent (Codex,
-Claude Code) in a terminal it owns and passes the user's messages on, and
-`prompt` may be empty, so the agent starts and waits. What eagent types to
-the agent itself appears in the thread as agent messages with
+`relay`, a relay profile name (or `""`, if the integration lists it, for no
+relay): the integration then starts that agent in a terminal it owns and
+passes the user's messages on, and `prompt` may be empty, so the agent
+starts and waits. A start without `relay` is the integration's default.
+What the integration types to the agent itself appears in the thread as
+agent messages with
 `meta.kind` `relay_send`, which the app folds to one line. The connector executes each command at most
 once: a redelivered command returns the original result, and a claim whose
 local journal is missing is reported as `unknown` rather than started
@@ -221,15 +226,15 @@ ordinary user messages, so they appear in the conversation:
 `/interrupt` (stop the current step) is not in the menu: while `state` is
 `working`, a small stop button sits in the message field, and typing a
 message stays possible beside it. There is no update frequency to set:
-eagent's narrator says what the agent is doing as it goes. Messenger passes
-the commands to the thread unchanged.
+eagent says what the agent is doing as it goes. Messenger passes any slash
+command it does not own to the thread unchanged.
 In a relay thread the composer can also say who a message is for and when:
 `meta["eagent.route"]` is `agent` or `eagent`, and `meta["eagent.delivery"]`
 is `queue`, `interrupt` or `after_turn` (a long press on send offers the
 last two). Each is sent only when the user chose it; without them eagent
 decides. The snapshot's `details.relays` lists the relays running on that
 machine (`{name, target, session, thread, dir, agent, state, created}`,
-`state` `running` or `exited`); the New session draft lists them under
+`state` `working`, `starting`, `blocked`, `idle` or `exited`); the New session draft lists them under
 "Running now", and each opens its `thread`.
 
 `meta.relay` also carries `target` (the terminal it runs in), `attach` (the
@@ -242,8 +247,11 @@ transcript shows the message), `held` (waits for the end of its turn),
 under the message, with Retry on `failed`. Two more agent message kinds:
 `relay_report` is the relayed agent's own final message for a turn,
 verbatim, with `duration_ms`, `tools`, `interrupted` and `images` in its
-meta, which the app folds to "Codex's report" with a Reply that quotes it;
-`relay_screen` is a snapshot of its terminal as a fenced block, shown
+meta, which the app folds to "Codex's report" with a Reply that quotes it.
+A report too long for one post comes as several, each with meta `part`
+(from 1) and `parts` and the turn's figures on the last; the app labels
+each card "part 2 of 3" and leaves out a closing `_(part 2 of 3)_` line.
+A `relay_screen` is a snapshot of its terminal as a fenced block, shown
 unwrapped. Two more commands: `/screen` posts such a snapshot, and
 `/notify-done` arms the buzz (the bell beside the badge sends it). In relay
 threads the composer shows who gets the next message as a small avatar in

@@ -15,7 +15,7 @@ import {
   IconTerminal,
   IconTrash,
 } from "../components/Icons";
-import { ProjectPickerSheet, useSessionStarters } from "../components/NewSession";
+import { useSessionStarters } from "../components/NewSession";
 import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
 import {
@@ -52,6 +52,8 @@ import {
   inboxViewPath,
   inView,
   isWorking,
+  needsUser,
+  relayBlocked,
   threadSummary,
   threadTitle,
   type InboxView,
@@ -82,7 +84,6 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
   const [query, setQuery] = useState("");
   const [showAllPending, setShowAllPending] = useState(false);
   const [rowMenu, setRowMenu] = useState<Thread | null>(null);
-  const [newSession, setNewSession] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
@@ -218,7 +219,7 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
     const latest = all
       // A search looks everywhere, archived threads included.
       .filter((t) => (q ? true : inView(t, view, now, live)))
-      .filter((t) => !needsYou || t.pending_questions > 0)
+      .filter((t) => !needsYou || needsUser(t, now, live))
       .filter(
         (t) =>
           !q ||
@@ -229,7 +230,7 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
           threadSummary(t).toLowerCase().includes(q) ||
           (t.external_id ?? "").toLowerCase().includes(q),
       )
-      .sort(byAttentionThenActivity);
+      .sort((a, b) => byAttentionThenActivity(a, b, now, live));
     orderHold = heldOrder(
       orderHold,
       `${view}|${needsYou ? "needs" : ""}|${q}`,
@@ -411,7 +412,7 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
               {settings.remote_mode ? "Remote on" : "Remote off"}
             </button>
             {starters.length > 0 && (
-              <button type="button" className="icon-btn" aria-label="New session" title="Start a new agent session" onClick={() => (starters.length === 1 && starters[0] ? navigate(`/new/${starters[0].resource.id}`) : setNewSession(true))}>
+              <button type="button" className="icon-btn" aria-label="New session" title="Start a new agent session" onClick={() => navigate(starters.length === 1 && starters[0] ? `/new/${starters[0].resource.id}` : "/new")}>
                 <IconPlus />
               </button>
             )}
@@ -421,7 +422,6 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
           </>
         }
       />
-      {newSession && <ProjectPickerSheet starters={starters} onClose={() => setNewSession(false)} />}
       <div className="page-body">
         <SetupChecklist hasThreads={Object.keys(threads).length > 0} />
 
@@ -463,7 +463,8 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
             </div>
           </>
         ) : (
-          needsYou && (
+          needsYou &&
+          list.length === 0 && (
             <div className="empty compact">
               <div className="glyph ok">
                 <IconCheck />
@@ -764,13 +765,18 @@ function ThreadRow({
   const relayed = session ? liveRelay(t) : null;
   const liveActivity = useLiveActivity(archived ? null : t.activity);
   // An agent waiting on the user is not working, and never looks like it.
-  const activity = liveActivity?.kind === "waiting" ? null : liveActivity;
+  // Only a relayed agent stopped on its screen says so here, in amber: it
+  // waits on the user to look.
+  const blocked = !!relayed && relayBlocked(t) && liveActivity?.kind === "waiting";
+  const activity = liveActivity?.kind === "waiting" && !blocked ? null : liveActivity;
   const draft = useStore((s) => s.drafts[t.id]);
   const now = useNow(30000);
   const pressTimer = useRef<number | undefined>(undefined);
   const suppressClick = useRef(false);
   const summary = threadSummary(t);
-  const state = needs ? "needs-you" : activity ? "working" : unread ? "unread" : "";
+  // A blocked agent waits on the user as a question does: amber marker,
+  // listed under Needs you and sorted with the questions.
+  const state = needs || blocked ? "needs-you" : activity ? "working" : unread ? "unread" : "";
 
   // Long-press (or right-click) opens the row's actions. The click that the
   // finger's lift produces is swallowed once; any later pointer resets that.
@@ -821,11 +827,11 @@ function ThreadRow({
   } else if (activity && !needs) {
     foot = (
       <>
-        <span className={`foot-text live ${activity.kind}`}>
+        <span className={`foot-text live ${activity.kind}${blocked ? " blocked" : ""}`}>
           <span className="live-dot" aria-hidden />
           <span className="live-text">{activity.text}</span>
         </span>
-        <span className="foot-time" title="How long the agent has been busy">
+        <span className="foot-time" title={blocked ? "How long it has been waiting" : "How long the agent has been busy"}>
           {busyFor(activity.since, now)}
         </span>
       </>

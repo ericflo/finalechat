@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Sheet } from "./Common";
 import { IconClose, IconEdit } from "./Icons";
 import { toast, updateThread, useStore } from "../lib/store";
-import { SettingsForm, resourceModel } from "./SettingsForm";
-import { artifactAPI, controlAPI, effectLabel, validateProposal, type ArtifactRevision, type SettingEdit, type SettingsDescriptor, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
+import { SettingsForm, labelInGroup, resourceModel } from "./SettingsForm";
+import { artifactAPI, controlAPI, effectLabel, providerName, validateProposal, type ArtifactRevision, type SettingEdit, type SettingsDescriptor, type ResourceView, type SettingsProposal, type SettingsSurfaceLease, type ThreadSettingsLink } from "../lib/artifacts";
 import { connectArtifactFrame } from "../lib/artifact-bridge";
 import "./thread-settings.css";
 
@@ -35,7 +35,7 @@ export function ThreadSettingsPanel({ thread, onClose }: { thread: string; onClo
     {closing && <div className="ts-discard">You have unsaved changes.<button className="btn small" onClick={() => setClosing(false)}>Keep editing</button><button className="btn small" onClick={onClose}>Discard changes</button></div>}
     {error && <p className="ts-message" role="alert">{error}</p>}
     {links === null && !error && <p className="ts-message">Loading your agent’s settings…</p>}
-    {links?.length === 0 && <div className="ts-empty"><h3>Settings will appear here</h3><p>When your agent connects, you can change its models and behavior right here in the conversation.</p><p>Keep eagent’s server or your native CLI companion running. This panel updates automatically.</p></div>}
+    {links?.length === 0 && <div className="ts-empty"><h3>Settings will appear here</h3><p>When your agent connects, you can change its models and behavior right here in the conversation.</p><p>Keep your agent or the native CLI companion running. This panel updates automatically.</p></div>}
     {!!links?.length && project && <nav className="ts-scope" aria-label="Which settings">
       <button aria-pressed={scope === "session"} disabled={dirty} onClick={() => setScope("session")}>This session</button>
       <button aria-pressed={scope === "project"} disabled={dirty} onClick={() => setScope("project")}>Project defaults</button>
@@ -143,7 +143,6 @@ function ThreadSummaryBlock({ id }: { id: string }) {
   );
 }
 
-const providerName = (p: string) => p === "eagent" ? "eagent" : p === "claude-code" ? "Claude Code" : p === "codex" ? "Codex" : p === "antigravity" ? "Antigravity" : p;
 
 /** One resource's settings in FinaleChat's own form. When the agent also
  * published an editor page for the resource, it can be opened instead; it
@@ -216,9 +215,25 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
       const effects = Array.isArray(command.result?.effects) ? command.result.effects as { effective_when?: string }[] : [];
       const timing = [...new Set(effects.map(e => effectLabel[e.effective_when || ""]?.toLowerCase()).filter(Boolean))];
       setStatus(timing.length ? `Saved · ${timing.join(", ")}` : "Saved");
-      setView(await controlAPI.resource(link.id));
+      const saved = await controlAPI.resource(link.id);
+      if (alive.current) setView(saved);
+      // The agent republishes its settings after it acknowledges the save,
+      // and what they offer can change with it (a setting that only applies
+      // in the mode just chosen); look again shortly until it has.
+      if (saved.resource.snapshot.version === view.resource.snapshot.version) void followRepublish(view.resource.snapshot.version);
     } catch (e) { if (alive.current) { setError(e instanceof Error ? e.message : "Could not save settings."); setStatus(""); } }
     finally { if (alive.current) setBusy(false); }
+  };
+  const followRepublish = async (from: string) => {
+    for (let n = 0; n < 16 && alive.current; n++) {
+      await new Promise(resolve => setTimeout(resolve, 600));
+      if (!alive.current) return;
+      try {
+        const v = await controlAPI.resource(link.id);
+        if (!alive.current) return;
+        if (v.resource.snapshot.version !== from) { setView(v); return; }
+      } catch { /* the 10 s refresh keeps trying */ }
+    }
   };
   const session = link.scope === "session";
   const unavailable = !view?.online || session && !view.resource.snapshot.runtime_known;
@@ -239,22 +254,26 @@ function CurrentSettings({ link, onDirty }: { link: ThreadSettingsLink; onDirty:
   </>;
 }
 
-/** What unsaved edits touch, by card: "Task: model, provider · Work: tasks
- * at once". A preset chosen says what it sets: "Configuration: preset
- * anthropic-high (sets Orchestrator, Task, Narrator)". */
+/** What unsaved edits touch, by card: "Model: model, provider · Work:
+ * timeout". A preset chosen says what it sets: "Configuration: preset
+ * anthropic-high (sets Model, Summaries)". */
 function changeList(descriptor: SettingsDescriptor | undefined, edits: SettingEdit[]): { length: number; summary: string } {
   const fields = descriptor?.fields ?? [];
   const byGroup = new Map<string, string[]>();
   for (const e of edits) {
     const f = fields.find(x => x.key === e.key);
     const group = f?.group ?? "";
-    let label = f ? (f.group && /^[A-Z][a-z]/.test(f.label) ? f.label.charAt(0).toLowerCase() + f.label.slice(1) : f.label) : e.key;
+    let label = f ? labelInGroup(f) : e.key;
     const s = e.op === "set" && f?.suggest ? descriptor?.suggestions?.[f.suggest.list]?.find(x => x.value === e.value) : undefined;
     if (s?.implies) {
-      const sets = [...new Set(fields.filter(g => Object.hasOwn(s.implies!, g.key)).map(g => g.group || g.label))];
-      label += ` ${s.label || s.value}${sets.length ? ` (sets ${sets.join(", ")})` : ""}`;
+      // What it sets in other cards; its own card's settings go with it.
+      const sets = [...new Set(fields.filter(g => Object.hasOwn(s.implies!, g.key) && (!group || g.group !== group)).map(g => g.group || g.label))];
+      label = [label, `${s.label || s.value}${sets.length ? ` (sets ${sets.join(", ")})` : ""}`].filter(Boolean).join(" ");
     }
-    byGroup.set(group, [...(byGroup.get(group) ?? []), label]);
+    const labels = byGroup.get(group) ?? [];
+    if (!labels.includes(label)) labels.push(label);
+    byGroup.set(group, labels);
   }
-  return { length: edits.length, summary: [...byGroup].map(([g, labels]) => (g ? `${g}: ${labels.join(", ")}` : labels.join(", "))).join(" · ") };
+  // "Model" alone when the card's only change is the setting it is named for.
+  return { length: edits.length, summary: [...byGroup].map(([g, labels]) => { const named = labels.filter(Boolean); return g ? (named.length ? `${g}: ${named.join(", ")}` : g) : named.join(", "); }).join(" · ") };
 }

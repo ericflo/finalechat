@@ -1,5 +1,7 @@
 **Design: settings artifacts with a durable command channel**
 
+> Historical note: this describes eagent as it was when written, with an orchestrator, task workers and a narrator and their settings (such as task concurrency and narrator timing). Newer eagents work differently; FinaleChat renders whatever settings and actions a connector publishes. What FinaleChat relies on is in [integrations.md](../integrations.md).
+
 Status: implemented locally; see [validation and implementation limits](implementation-progress.md). Extends [durable session artifacts](session-artifacts.md).
 
 Implementation refinement: the trusted host opens a 30-minute resource-bound editing lease while a settings revision is current. It can keep that same editor active across proactive transcript publications. Newly opened historical documents remain read-only. Commands retain the original source revision and recheck owner, binding, active connector, runtime generation, grants, schema and expected settings version; the iframe never receives the editing lease identifier. This prevents routine archive publication from interrupting a user mid-edit without granting historical pages ambient control.

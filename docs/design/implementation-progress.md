@@ -1,5 +1,7 @@
 # Implementation and validation record
 
+> Historical note: this describes eagent as it was when written, with an orchestrator, task workers and a narrator and their settings (such as task concurrency and narrator timing). Newer eagents work differently; FinaleChat renders whatever settings and actions a connector publishes. What FinaleChat relies on is in [integrations.md](../integrations.md).
+
 Status: implemented, validated and committed locally. September 8, 2026. The production deployment and existing user services have not been changed.
 
 The implementation replaces the proposed localhost proxy with durable session websites and an independently paired settings command channel. See [setup and operating details](../integrations.md), [artifact design](session-artifacts.md), [interactive settings design](interactive-settings.md), and [the API reference](../API.md).

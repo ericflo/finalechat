@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -20,14 +21,14 @@ import (
 )
 
 // command runs a connector command. It reports false for anything it does
-// not own, which then goes to the agent as text (eagent has slash commands
-// of its own).
+// not own, which then goes to the agent as text (agents have slash commands
+// of their own; see isAgentCommand).
 func (c *mchat) command() (bool, error) {
 	word, args, _ := strings.Cut(c.in.text, " ")
 	args = strings.TrimSpace(args)
 	switch strings.ToLower(word) {
 	case "/help", "/?", "/commands":
-		c.say(messengerHelp, nil)
+		c.say(c.help(), nil)
 	case "/ls", "/threads", "/list":
 		return true, c.list()
 	case "/go", "/use", "/focus":
@@ -91,16 +92,32 @@ func (c *mchat) command() (bool, error) {
 	return true, nil
 }
 
-// relayCommands are eagent's controls for an agent it relays to (Codex,
-// Claude Code): /interrupt, /autopilot until 10:00, and so on. Messenger
-// owns none of them, so they reach the thread verbatim as the user's
-// message: never as the answer to a question waiting there, and never as
-// the folder a /new is asking for.
-var relayCommands = map[string]bool{"/interrupt": true, "/restart": true, "/upgrade": true, "/switch": true, "/autopilot": true, "/updates": true, "/stop-relay": true, "/relay": true}
+// slashWordRe is a slash command's first word: /interrupt, /notify-done.
+// A further slash makes it a path (/home/eric), not a command.
+var slashWordRe = regexp.MustCompile(`^/[A-Za-z][A-Za-z0-9_-]*$`)
 
-func isRelayCommand(text string) bool {
+// isAgentCommand reports whether text is a slash command for the thread's
+// agent: any "/word" that Messenger does not own (its own are handled before
+// this is asked), such as an agent's relay controls (/interrupt, /model,
+// /autopilot until 10:00). It reaches the thread verbatim as the user's
+// message, never as the answer to a question waiting there.
+func isAgentCommand(text string) bool {
 	word, _, _ := strings.Cut(strings.TrimSpace(text), " ")
-	return relayCommands[strings.ToLower(word)]
+	return slashWordRe.MatchString(word)
+}
+
+// knownAgentCommands are agent commands that are never taken for a
+// one-segment folder while a /new asks for one ("/screen" is a command,
+// "/srv" a folder). Any "/word" followed by more words is a command there
+// too.
+var knownAgentCommands = map[string]bool{"/interrupt": true, "/restart": true, "/model": true, "/upgrade": true, "/switch": true, "/autopilot": true, "/updates": true, "/stop-relay": true, "/relay": true, "/screen": true, "/notify-done": true}
+
+// isFolderStepCommand reports whether text, sent while /new asks for a
+// folder, is an agent command rather than a path.
+func isFolderStepCommand(text string) bool {
+	text = strings.TrimSpace(text)
+	word, rest, _ := strings.Cut(text, " ")
+	return knownAgentCommands[strings.ToLower(word)] || (isAgentCommand(text) && strings.TrimSpace(rest) != "")
 }
 
 func (c *mchat) goTo(n int) error {
@@ -381,10 +398,11 @@ func (c *mchat) remote(arg string) error {
 }
 
 // Starting a session is a short conversation: which project (when more than
-// one eagent is connected), which directory, then the prompt. "/new <prompt>"
+// one can start sessions), which directory, then the prompt. "/new <prompt>"
 // skips the directory and starts in the project root. A first word naming
 // one of the project's relay profiles ("/new codex fix the flaky test") has
-// eagent start that agent to do the work.
+// the integration start that agent to do the work; without one it starts
+// its default (or does the work itself, if it offers that).
 
 type messengerNew struct {
 	Step     string    `json:"step"` // project, dir, prompt
@@ -479,7 +497,7 @@ func directories(r *store.SettingsResource) (string, []string) {
 }
 
 // relayProfile is an agent the integration can start to do a session's
-// work instead of eagent itself (snapshot.details.relay_profiles).
+// work (snapshot.details.relay_profiles).
 type relayProfile struct{ name, label string }
 
 // splitRelay takes a leading relay profile name off a /new brief.
@@ -507,6 +525,73 @@ var homePrefixRe = regexp.MustCompile(`^/(?:home|Users)/[^/]+`)
 
 func shortDir(p string) string { return homePrefixRe.ReplaceAllString(p, "~") }
 
+func messengerProviderName(p string) string {
+	switch strings.TrimSpace(p) {
+	case "claude-code":
+		return "Claude Code"
+	case "codex":
+		return "Codex"
+	case "antigravity":
+		return "Antigravity"
+	default:
+		return strings.TrimSpace(p)
+	}
+}
+
+// starterQualifier extracts the host/machine name from a connector name such as
+// "eagent · llmbox · Development", dropping the leading provider and trailing
+// project label so multiple machines sharing a project name can be told apart.
+func starterQualifier(connectorName, provider, resourceLabel string) string {
+	raw := strings.Split(connectorName, "·")
+	parts := make([]string, 0, len(raw))
+	for _, p := range raw {
+		if p = strings.TrimSpace(p); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	prov := strings.TrimSpace(provider)
+	provLabel := messengerProviderName(prov)
+	if len(parts) > 0 && (strings.EqualFold(parts[0], prov) || strings.EqualFold(parts[0], provLabel)) {
+		parts = parts[1:]
+	}
+	label := strings.TrimSpace(resourceLabel)
+	if len(parts) > 0 && label != "" && strings.EqualFold(parts[len(parts)-1], label) {
+		parts = parts[:len(parts)-1]
+	}
+	return strings.Join(parts, " · ")
+}
+
+func starterDisplay(st messengerStarter) string {
+	label := strings.TrimSpace(st.resource.Label)
+	qual := starterQualifier(st.connector.Name, st.connector.Provider, label)
+	switch {
+	case qual != "" && label != "":
+		return qual + " · " + label
+	case label != "":
+		return label
+	case qual != "":
+		return qual
+	default:
+		return strings.TrimSpace(st.connector.Name)
+	}
+}
+
+func starterQuickTitle(num int, st messengerStarter, dupLabel bool) string {
+	prefix := strconv.Itoa(num) + " "
+	label := strings.TrimSpace(st.resource.Label)
+	qual := starterQualifier(st.connector.Name, st.connector.Provider, label)
+	full := prefix + starterDisplay(st)
+	if qual != "" && utf8.RuneCountInString(full) > messenger.MaxQuickReplyTitle {
+		if dupLabel {
+			return prefix + qual
+		}
+		if label != "" {
+			return prefix + label
+		}
+	}
+	return full
+}
+
 func (c *mchat) newSession(prompt string) error {
 	all, err := c.s.messengerStarters(c.ctx, c.user.ID)
 	if err != nil {
@@ -520,21 +605,26 @@ func (c *mchat) newSession(prompt string) error {
 		}
 	}
 	if len(starters) == 0 {
-		c.say("No eagent is connected. On the machine, run `eagent connector run` (or `eagent serve`) in the project, then try /new again.", nil)
+		c.say("No agent that can start sessions is connected. Start its connector in the project on that machine, then try /new again.", nil)
 		return nil
 	}
 	if len(starters) == 1 {
 		return c.chooseProject(starters[0], prompt)
+	}
+	labelCounts := map[string]int{}
+	for _, st := range starters {
+		labelCounts[strings.ToLower(strings.TrimSpace(st.resource.Label))]++
 	}
 	var b strings.Builder
 	b.WriteString("Which project?")
 	var quick []messenger.QuickReply
 	ids := make([]string, 0, len(starters))
 	for i, st := range starters {
-		fmt.Fprintf(&b, "\n%d. %s", i+1, st.resource.Label)
+		dup := labelCounts[strings.ToLower(strings.TrimSpace(st.resource.Label))] > 1
+		fmt.Fprintf(&b, "\n%d. %s", i+1, starterDisplay(st))
 		ids = append(ids, st.resource.ID.String())
 		if len(quick) < messenger.MaxQuickReplies {
-			quick = append(quick, messenger.QuickReply{Title: strconv.Itoa(i+1) + " " + st.resource.Label, Payload: "np:" + st.resource.ID.String()})
+			quick = append(quick, messenger.QuickReply{Title: starterQuickTitle(i+1, st, dup), Payload: "np:" + st.resource.ID.String()})
 		}
 	}
 	c.setNew(&messengerNew{Step: "project", Prompt: prompt, Starters: ids})
@@ -545,7 +635,7 @@ func (c *mchat) newSession(prompt string) error {
 func (c *mchat) chooseProject(st messengerStarter, prompt string) error {
 	root, dirs := directories(st.resource)
 	if !st.connector.Online() {
-		c.say(st.resource.Label+" is offline. Start `eagent connector run` (or `eagent serve`) there, then try again.", nil)
+		c.say(starterDisplay(st)+" is offline. Start its connector there, then try again.", nil)
 		c.setNew(nil)
 		return nil
 	}
@@ -640,7 +730,7 @@ func (c *mchat) newTyped(text string) (bool, error) {
 		c.say("Pick one of the numbers above, or /cancel.", nil)
 		return true, nil
 	}
-	if st.Step == "dir" && !isRelayCommand(text) && (strings.HasPrefix(text, "/") || strings.HasPrefix(text, "~")) {
+	if st.Step == "dir" && !isFolderStepCommand(text) && (strings.HasPrefix(text, "/") || strings.HasPrefix(text, "~")) {
 		dir := strings.TrimSpace(text)
 		if strings.HasPrefix(dir, "~") && len(st.Dirs) > 0 {
 			if home := homePrefixRe.FindString(st.Dirs[0]); home != "" {
@@ -685,11 +775,11 @@ func (c *mchat) startSession(resourceID uuid.UUID, cwd string, relay relayProfil
 			continue // the integration republished its settings meanwhile
 		case errors.Is(err, store.ErrConnectorOffline):
 			c.setNew(nil)
-			c.say(r.Label+" is offline. Start `eagent connector run` (or `eagent serve`) there, then /new again.", nil)
+			c.say(r.Label+" is offline. Start its connector there, then /new again.", nil)
 			return nil
 		case errors.Is(err, store.ErrInvalidState), errors.Is(err, store.ErrConflict):
 			c.setNew(nil)
-			c.say("eagent refused the session: "+strings.TrimPrefix(err.Error(), "invalid state: "), nil)
+			c.say("The agent refused the session: "+strings.TrimPrefix(err.Error(), "invalid state: "), nil)
 			return nil
 		default:
 			return err
@@ -729,14 +819,14 @@ func (s *Server) messengerFollowStart(userID uuid.UUID, psid string, commandID u
 			break
 		}
 		if !sleepCtx(ctx, s.messengerPoll) {
-			s.messengerSay(context.Background(), psid, "eagent has not picked up the session yet. It may still start; /ls shows new threads.", nil)
+			s.messengerSay(context.Background(), psid, "The agent has not picked up the session yet. It may still start; /ls shows new threads.", nil)
 			return
 		}
 	}
 	if cmd.Status != "succeeded" {
 		msg, _ := cmd.Result["message"].(string)
 		if msg == "" {
-			msg = "eagent did not start the session (" + cmd.Status + ")."
+			msg = "The agent did not start the session (" + cmd.Status + ")."
 		}
 		s.messengerSay(ctx, psid, msg, nil)
 		return

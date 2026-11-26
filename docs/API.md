@@ -1289,7 +1289,8 @@ remain authorized. Account deletion removes the related audit along with the acc
 | --- | --- |
 | `PUT /threads/{thread}/artifacts/{key}` | Register or rename a session artifact |
 | `GET /threads/{thread}/artifacts` | List a thread’s artifacts |
-| `GET /threads/{thread}/settings-resources` | Discover live settings for a thread |
+| `GET /threads/{thread}/settings` | List this conversation’s settings: its session’s own resource first, then project defaults; only resources whose grant the connector still holds |
+| `GET /threads/{thread}/settings-resources` | Legacy: session resources for a thread, by `details.thread_external_id`. Use `GET /threads/{thread}/settings` |
 | `GET /live-sessions` | Conversations whose session is running now, with the stop each offers |
 | `GET /artifacts/{id}` | Artifact metadata, current manifest and limits |
 | `DELETE /artifacts/{id}` | Delete artifact and all revisions |
@@ -1304,7 +1305,6 @@ remain authorized. Account deletion removes the related audit along with the acc
 | `GET /artifacts/{id}/revisions/{revision}/message` | Locate a chat message for an archived source anchor |
 | `POST /connectors` | Connect an owned installation and receive a scoped credential |
 | `POST /connectors/{connector}/connect` | Connect an existing owned installation; with `requested_grants`, replace its grants (account credential plus the local secret) |
-| `GET /threads/{thread}/settings` | List this conversation’s settings: its session’s own resource first, then project defaults; only resources whose grant the connector still holds |
 | `GET /connectors` | List paired and pending installations |
 | `GET /connectors/{connector}` | Connector pairing state and grants |
 | `POST /connectors/{connector}/approve` | Approve a subset of requested grants |

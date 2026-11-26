@@ -568,13 +568,14 @@ func TestMessengerNewRelaySession(t *testing.T) {
 	conn.must(200, "POST", "/api/v1/connectors/"+id+"/heartbeat", map[string]any{"instance": instance})
 	descriptor := control.Descriptor{Format: control.Format, SchemaVersion: "eagent/1", AdapterVersion: "1", Fields: []control.Field{}, Actions: []control.Action{{
 		Operation: "session.start", Label: "Start a session", Class: "cost",
-		Parameters: control.Shape{Type: "object", Properties: map[string]control.Shape{"prompt": {Type: "string", MaxLength: 32768}, "cwd": {Type: "string", MaxLength: 4096}, "relay": {Type: "string", Enum: []any{"", "codex", "claude"}}}, Required: []string{"prompt"}},
+		Parameters: control.Shape{Type: "object", Properties: map[string]control.Shape{"prompt": {Type: "string", MaxLength: 32768}, "cwd": {Type: "string", MaxLength: 4096}, "relay": {Type: "string", Enum: []any{"", "codex", "claude", "pi"}}}, Required: []string{"prompt"}},
 	}}}
 	snapshot := control.Snapshot{Version: "v1", Context: "/home/eric/relay", Saved: map[string]any{}, Effective: map[string]any{}, Details: map[string]any{
 		"directories": map[string]any{"root": "/home/eric/relay", "recent": []string{"/home/eric/relay/api"}},
 		"relay_profiles": []map[string]any{
 			{"name": "codex", "agent": "codex", "label": "Codex · GPT-6 Astra xhigh", "model": "gpt-6-astra", "effort": "xhigh"},
 			{"name": "claude", "agent": "claude", "label": "Claude Code · Opus 5.5 xhigh", "model": "opus-5.5", "effort": "xhigh"},
+			{"name": "pi", "agent": "pi", "label": "Pi · openrouter/qwen3-coder high", "model": "openrouter/qwen3-coder", "effort": "high"},
 		},
 	}}
 	published := conn.must(200, "PUT", "/api/v1/connectors/"+id+"/resources/"+grant.Key, map[string]any{"instance": instance, "descriptor": descriptor, "snapshot": snapshot})
@@ -622,6 +623,13 @@ func TestMessengerNewRelaySession(t *testing.T) {
 		return claim(from), g.texts(from)
 	}
 
+	// /help names the agents connected projects offer.
+	from0 := g.mark()
+	say(t, psid, "/help")
+	if txt := lastText(t, g, from0); !strings.Contains(txt, "/new ") || !strings.Contains(txt, "(codex, claude, pi)") || strings.Contains(txt, "eagent") {
+		t.Fatalf("/help: %q", txt)
+	}
+
 	params, sent := start("/new codex Fix the flaky test")
 	if params["relay"] != "codex" || params["prompt"] != "Fix the flaky test" || params["cwd"] != nil {
 		t.Fatalf("relay start parameters: %v", params)
@@ -651,10 +659,10 @@ func TestMessengerNewRelaySession(t *testing.T) {
 	b.must(200, "DELETE", "/api/v1/connectors/"+id, nil)
 }
 
-// eagent's relay controls are slash commands Messenger does not own: they
+// An agent's relay controls are slash commands Messenger does not own: they
 // reach the pinned relay thread exactly as typed, even while a question
 // waits there or a /new is asking for a folder, and Messenger's own
-// commands stay its own.
+// commands stay its own. So does any other /word Messenger does not know.
 func TestMessengerRelayCommands(t *testing.T) {
 	b, a := setup(t)
 	g := withMessenger(t)
@@ -687,6 +695,7 @@ func TestMessengerRelayCommands(t *testing.T) {
 	for _, cmd := range []string{
 		"/interrupt", "/autopilot until 10:00", "/autopilot until 10:00 finish the migration, then open a PR", "/autopilot off",
 		"/switch claude", "/updates 15m", "/restart", "/upgrade", "/relay", "/stop-relay",
+		"/model gpt-6-astra high", "/model openrouter/qwen3-coder default", "/screen", "/notify-done", "/switch pi", "/some-new-command now",
 	} {
 		say(t, psid, cmd)
 		m := lastUser()
@@ -721,7 +730,7 @@ func TestMessengerRelayCommands(t *testing.T) {
 	}
 	from = g.mark()
 	say(t, psid, "/help")
-	if txt := lastText(t, g, from); !strings.Contains(txt, "/interrupt, /autopilot, /relay") {
+	if txt := lastText(t, g, from); !strings.Contains(txt, "/new — start a session") || !strings.Contains(txt, "goes to the thread's agent") || strings.Contains(txt, "eagent") || strings.Contains(txt, "/tasks") {
 		t.Fatalf("/help: %q", txt)
 	}
 
@@ -754,9 +763,11 @@ func TestMessengerRelayCommands(t *testing.T) {
 	if body := lastUser()["body"]; body != "dev" {
 		t.Fatalf("/new reached the thread: %v", body)
 	}
-	say(t, psid, "/interrupt")
-	if body := lastUser()["body"]; body != "/interrupt" {
-		t.Fatalf("/interrupt during /new: %v", body)
+	for _, cmd := range []string{"/interrupt", "/model gpt-6-astra high", "/screen", "/notify-done", "/some-new-command now"} {
+		say(t, psid, cmd)
+		if body := lastUser()["body"]; body != cmd {
+			t.Fatalf("%s during /new: %v", cmd, body)
+		}
 	}
 	from = g.mark()
 	say(t, psid, "/home/eric/relay/api")
@@ -967,5 +978,92 @@ func TestMessengerRestrictionAndBundles(t *testing.T) {
 	link, _ = testAPI.store.GetMessengerLink(context.Background(), userID)
 	if _, ok := restrictedUntil(link); ok {
 		t.Fatalf("hold not cleared: %v", link.State)
+	}
+}
+
+// Multiple machines connected in identically named projects are distinguished
+// by host in Messenger's /new project picker and quick replies.
+func TestMessengerNewSessionMultiHostPicker(t *testing.T) {
+	b, a := setup(t)
+	g := withMessenger(t)
+	psid := "psid-" + uuid.NewString()[:8]
+	linkMessenger(t, g, psid)
+
+	connectBox := func(host, root string) (connID, resourceID string, conn *client, inst string) {
+		t.Helper()
+		grant := control.Grant{Key: "project-" + uuid.NewString()[:8], Label: "Development", Scope: "project", Operations: []string{"session.start"}, Classes: []string{"cost"}}
+		out := a.must(201, "POST", "/api/v1/connectors", map[string]any{"name": "eagent · " + host + " · Development", "provider": "eagent", "requested_grants": []control.Grant{grant}})
+		connID = str(sub(out, "connector"), "id")
+		conn = &client{t: t, http: &http.Client{}, token: str(out, "secret")}
+		b.must(200, "POST", "/api/v1/connectors/"+connID+"/approve", map[string]any{"grants": []control.Grant{grant}})
+		inst = "inst-" + uuid.NewString()
+		conn.must(200, "POST", "/api/v1/connectors/"+connID+"/heartbeat", map[string]any{"instance": inst})
+		desc := control.Descriptor{Format: control.Format, SchemaVersion: "eagent.project/v2", AdapterVersion: "2", Actions: []control.Action{{
+			Operation: "session.start", Label: "Start a new session", Class: "cost",
+			Parameters: control.Shape{Type: "object", Properties: map[string]control.Shape{"prompt": {Type: "string", MaxLength: 32768}, "cwd": {Type: "string", MaxLength: 4096}}, Required: []string{"prompt"}},
+		}}}
+		snap := control.Snapshot{Version: "v1", Context: root, Saved: map[string]any{}, Effective: map[string]any{}, Details: map[string]any{
+			"directories": map[string]any{"root": root},
+		}}
+		pub := conn.must(200, "PUT", "/api/v1/connectors/"+connID+"/resources/"+grant.Key, map[string]any{"instance": inst, "descriptor": desc, "snapshot": snap})
+		resourceID = str(sub(pub, "resource"), "id")
+		return connID, resourceID, conn, inst
+	}
+
+	id1, res1, _, _ := connectBox("desktop-linux", "/home/eric/Development")
+	id2, res2, conn2, inst2 := connectBox("macbook-pro", "/Users/eric/Development")
+	defer func() {
+		b.must(200, "DELETE", "/api/v1/connectors/"+id1, nil)
+		b.must(200, "DELETE", "/api/v1/connectors/"+id2, nil)
+	}()
+
+	from := g.mark()
+	say(t, psid, "/new fix tests")
+	msgs := g.texts(from)
+	if len(msgs) == 0 {
+		t.Fatal("expected /new picker message")
+	}
+	picker := msgs[len(msgs)-1]
+	if !strings.HasPrefix(picker.Text, "Which project?") {
+		t.Fatalf("unexpected prompt: %q", picker.Text)
+	}
+	if !strings.Contains(picker.Text, "desktop-linux · Development") || !strings.Contains(picker.Text, "macbook-pro · Development") {
+		t.Fatalf("picker did not distinguish hosts: %q", picker.Text)
+	}
+	quickByPayload := map[string]string{}
+	for _, q := range picker.Quick {
+		quickByPayload[q.Payload] = q.Title
+	}
+	if !strings.Contains(quickByPayload["np:"+res1], "desktop-linux") || !strings.Contains(quickByPayload["np:"+res2], "macbook-pro") {
+		t.Fatalf("quick replies did not keep host names within 20-char cap: %+v", picker.Quick)
+	}
+
+	// Picking macbook-pro dispatches session.start to that connector.
+	fromTap := g.mark()
+	tap(t, psid, quickByPayload["np:"+res2], "np:"+res2)
+	claimed := conn2.must(200, "POST", "/api/v1/connectors/"+id2+"/commands/claim?wait=1", map[string]any{"instance": inst2})
+	cmd, _ := claimed["command"].(map[string]any)
+	if cmd == nil {
+		t.Fatalf("macbook-pro did not receive session.start: %v", claimed)
+	}
+	conn2.must(200, "POST", "/api/v1/commands/"+str(cmd, "id")+"/result", map[string]any{"claim_token": str(cmd, "claim_token"), "instance": inst2, "status": "rejected", "result": map[string]any{"message": "not in tests"}})
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		done := false
+		for _, m := range g.texts(fromTap) {
+			if strings.Contains(m.Text, "not in tests") {
+				done = true
+				break
+			}
+		}
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("command follow-up never finished: %v", g.texts(fromTap))
+		}
+	}
+	params := sub(cmd, "proposal")["parameters"].(map[string]any)
+	if params["prompt"] != "fix tests" {
+		t.Fatalf("unexpected params: %v", params)
 	}
 }

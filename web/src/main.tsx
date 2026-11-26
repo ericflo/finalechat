@@ -83,7 +83,7 @@ function App() {
     return <ErrorBoundary key={resource.id}><ResourceSettingsScreen id={resource.id!} backTo={back && back.startsWith("/") && !back.startsWith("//") ? back : undefined} /></ErrorBoundary>;
   }
   const draft = match("/new/:resource", path);
-  if (draft) return <ErrorBoundary key={draft.resource}><DraftSessionScreen resourceId={draft.resource!} /></ErrorBoundary>;
+  if (draft || path === "/new" || path === "/new/") return <ErrorBoundary key="draft"><DraftSessionScreen resourceId={draft?.resource ?? null} /></ErrorBoundary>;
   const thread = match("/t/:id", path);
   if (thread) {
     return (

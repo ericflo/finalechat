@@ -271,7 +271,7 @@ func (s *Server) messengerUnlinked(ctx context.Context, psid string, in inbound)
 			if user != nil {
 				who = user.Email
 			}
-			s.messengerSay(ctx, psid, "Linked to Finalechat as "+who+". Agent messages and questions now arrive here, and what you write goes to the thread that spoke last.\n\n"+messengerHelp, nil)
+			s.messengerSay(ctx, psid, "Linked to Finalechat as "+who+". Agent messages and questions now arrive here, and what you write goes to the thread that spoke last.\n\n"+s.messengerHelp(ctx, link.UserID), nil)
 			return
 		}
 		if !errors.Is(err, store.ErrNotFound) {
@@ -301,21 +301,47 @@ type mchat struct {
 	in   inbound
 }
 
-const messengerHelp = `Commands:
+const messengerHelpHead = `Commands:
 /ls — threads (#numbers)
 /go 3 — send replies to #3 (/go alone: follow whoever spoke last)
 /where — current thread, status, open question
 /read 3 — recent messages in #3
-/new — start an eagent session
-/new antigravity … — start a relay (also codex or claude, if set up)
-/dismiss — close the open question without answering
+/new — start a session`
+
+const messengerHelpTail = `/dismiss — close the open question without answering
 /more — rest of a long message
 /quiet, /loud — only questions and important messages, or everything
 /pause, /resume — stop or restart the relay (keeps the link)
 /remote on|off — Claude Code or Antigravity waits for your replies
-/interrupt, /autopilot, /relay … — control the agent eagent runs
 /unlink — disconnect this chat
-Swipe-reply to a message to answer its thread. Anything else starting with / goes to the agent.`
+Swipe-reply to a message to answer its thread. Anything else starting with / goes to the thread's agent as typed, never as an answer.`
+
+// help lists Messenger's commands. The agents a session can start with are
+// the ones connected projects publish (relay profiles), so they are named
+// only when there are some.
+func (c *mchat) help() string { return c.s.messengerHelp(c.ctx, c.user.ID) }
+
+func (s *Server) messengerHelp(ctx context.Context, userID uuid.UUID) string {
+	var names []string
+	seen := map[string]bool{}
+	if starters, err := s.messengerStarters(ctx, userID); err == nil {
+		for _, st := range starters {
+			list, _ := st.resource.Snapshot.Details["relay_profiles"].([]any)
+			for _, v := range list {
+				p, _ := v.(map[string]any)
+				if name, _ := p["name"].(string); name != "" && !seen[strings.ToLower(name)] {
+					seen[strings.ToLower(name)] = true
+					names = append(names, name)
+				}
+			}
+		}
+	}
+	text := messengerHelpHead
+	if len(names) > 0 {
+		text += "\n/new " + names[0] + " … — start one with that agent (" + strings.Join(names, ", ") + ")"
+	}
+	return text + "\n" + messengerHelpTail
+}
 
 func (c *mchat) say(text string, quick []messenger.QuickReply) string {
 	return c.s.messengerSay(c.ctx, c.link.PSID, text, quick)
@@ -367,7 +393,7 @@ func (c *mchat) reply(text string) error {
 	if thread == nil || err != nil {
 		return err
 	}
-	if isRelayCommand(text) {
+	if isAgentCommand(text) {
 		return c.post(thread, text)
 	}
 	// An open question in the thread takes the reply as its answer, the way

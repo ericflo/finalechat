@@ -26,9 +26,28 @@ export function isWorking(t: Thread, now: number): boolean {
   return !!a && a.kind !== "waiting" && new Date(a.expires_at).getTime() > now;
 }
 
-export function rowState(t: Thread, now: number): RowState {
+/** Whether the agent a thread relays to is stopped on something on its
+ * screen (thread meta `relay.state` "blocked"): the session waits, but on
+ * the user to look, unlike an agent that is only ready for a message. */
+export function relayBlocked(t: Pick<Thread, "meta"> | undefined): boolean {
+  const relay = t?.meta?.relay;
+  return !!relay && typeof relay === "object" && !Array.isArray(relay) && (relay as Record<string, unknown>).state === "blocked";
+}
+
+/** Whether a thread waits on the user: a question is pending, or the agent
+ * it relays to is stopped on its screen. The relay state counts only while
+ * a session runs in the thread (`live`, by thread id) and its waiting status
+ * is fresh, so a state left behind by a session that ended is not read. */
+export function needsUser(t: Thread, now: number, live: Record<string, unknown> = {}): boolean {
+  if (t.archived_at) return false;
+  if (t.pending_questions > 0) return true;
+  const a = t.activity;
+  return !!live[t.id] && relayBlocked(t) && !!a && a.kind === "waiting" && new Date(a.expires_at).getTime() > now;
+}
+
+export function rowState(t: Thread, now: number, live: Record<string, unknown> = {}): RowState {
   if (t.archived_at) return "idle";
-  if (t.pending_questions > 0) return "needs-you";
+  if (needsUser(t, now, live)) return "needs-you";
   if (isWorking(t, now)) return "working";
   if (t.unread_count > 0) return "unread";
   return "idle";
@@ -53,10 +72,11 @@ export function inView(t: Thread, view: InboxView, now: number, live: Record<str
   return true;
 }
 
-/** Threads with a question waiting come first; then newest activity. */
-export function byAttentionThenActivity(a: Thread, b: Thread): number {
-  const na = !a.archived_at && a.pending_questions > 0 ? 1 : 0;
-  const nb = !b.archived_at && b.pending_questions > 0 ? 1 : 0;
+/** Threads that need the user come first; then newest activity. Without
+ * `now` and `live` only a waiting question counts. */
+export function byAttentionThenActivity(a: Thread, b: Thread, now = 0, live: Record<string, unknown> = {}): number {
+  const na = needsUser(a, now, live) ? 1 : 0;
+  const nb = needsUser(b, now, live) ? 1 : 0;
   if (na !== nb) return nb - na;
   if (a.last_activity_at !== b.last_activity_at) return a.last_activity_at < b.last_activity_at ? 1 : -1;
   return a.id < b.id ? 1 : -1;

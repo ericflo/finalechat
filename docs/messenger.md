@@ -5,7 +5,7 @@ flights are the usual case: Messenger, iMessage and WhatsApp work, the rest
 of the internet does not, and photos usually do not either. The Messenger
 connector lets you run your agents from there. Agent messages and
 questions arrive as Messenger messages. What you write back becomes your
-reply in the right thread, an answer to a question, or a new eagent session.
+reply in the right thread, an answer to a question, or a new session.
 
 To your agents it is the same as the app. A reply from Messenger is your
 own message (`origin: "session"`), and answers go through the normal answer
@@ -40,8 +40,7 @@ Once linked, open the chat with the Page in Messenger.
 | `/go 3`, `/go` | Pin replies to #3; follow whoever spoke last |
 | `/where` | The current thread, what it is doing, and its open question |
 | `/read 3` | The last few messages of #3 (or of the current thread) |
-| `/new` | Start an eagent session: pick the project and folder, then send the first message. `/new fix the flaky test` starts one right away in the project root. `/new codex fix the flaky test` (or `claude`, or any relay profile the project offers) has eagent start that agent to do the work |
-| `/interrupt`, `/autopilot until 10:00`, `/relay` … | eagent's controls for a Codex or Claude it runs; they go to the thread as typed, never as an answer |
+| `/new` | Start a session: pick the project and folder, then send the first message. `/new fix the flaky test` starts one right away in the project root with the project's default agent. A first word naming a relay profile the project offers (`/new <profile> fix the flaky test`) starts that agent; `/help` lists the profile names |
 | `/dismiss` | Close the current thread's open question without answering (also `/skip`) |
 | `/more` | The rest of a long message |
 | `/quiet`, `/loud` | Only questions and important messages, or everything |
@@ -50,9 +49,11 @@ Once linked, open the chat with the Page in Messenger.
 | `/unlink` | Disconnect this chat |
 | `/help` | This list |
 
-Other slash commands, such as eagent's `/status` or `/tasks`, are passed on
-to the agent. `/quit` asks first, because it would stop the session; send
-`/quit!` to go ahead.
+Any other `/word` (an agent's own commands, such as `/interrupt`,
+`/model`, `/screen` or `/autopilot until 10:00`) goes to the thread as
+typed: never as the answer to an open question, and never as the folder a
+`/new` asks for. `/quit` asks first, because it would stop the session;
+send `/quit!` to go ahead.
 
 ### Messenger's rules
 
@@ -64,8 +65,9 @@ to the agent. `/quit` asks first, because it would stop the session; send
   attached to your reply in the thread, where the agent can fetch them.
   The thumbs-up button arrives as 👍. Free in-flight passes usually block
   images in both directions; the text still gets through.
-- **New sessions need a running eagent.** `/new` needs `eagent connector
-  run` (or `eagent serve`) running in the project on your machine. A reply
+- **New sessions need a connected agent.** `/new` needs an agent whose
+  connector offers `session.start` running in the project on your machine
+  (for eagent, `eagent connector run` or `eagent serve`). A reply
   to a session that has finished restarts it the same way.
 
 ## Setting it up

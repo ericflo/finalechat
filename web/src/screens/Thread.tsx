@@ -2,12 +2,13 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { AttachmentList, ImageViewer, UploadTray, type PendingUpload } from "../components/Attachments";
 import { Avatar, ConfirmSheet, CopyButton, Linkified, Sheet, sheetsOpen } from "../components/Common";
 import { IconAlert, IconArchive, IconAttach, IconBell, IconBellOff, IconBolt, IconBranch, IconChevron, IconClock, IconCoins, IconCopy, IconCpu, IconDown, IconEdit, IconFolder, IconMore, IconReply, IconSend, IconServer, IconSettings, IconStop, IconTerminal, IconTrash } from "../components/Icons";
-import { NotifyBell, RelayBadge, RelaySheet, agentName, relayAgent, relayReceipts, threadRelay } from "../components/Relay";
+import { NotifyBell, RelayBadge, RelaySheet, agentName, relayAgent, relayHost, relayReceipts, threadRelay } from "../components/Relay";
 import { api } from "../lib/api";
 import { formatElapsed, useElapsed, useLiveActivity } from "../lib/activity";
 import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
 import { renderMarkdown, renderText } from "../lib/markdown";
+import { reportPart, reportText } from "../lib/reports";
 import { goBack, navigate } from "../lib/router";
 import { AlreadyPostedError, deleteThread, loadOlderMessages, loadThread, markRead, onMessageRemoved, sendMessage, setCurrentThread, setDraft, toast, updateThread, useStore, type ThreadLoad } from "../lib/store";
 import { dayLabel, fullDateTime, sameDay, shortTime } from "../lib/time";
@@ -17,6 +18,7 @@ import { ThreadSettingsPanel } from "../components/ThreadSettings";
 import { SessionMark, StopSessionSheet } from "../components/Session";
 import { ThreadArtifacts } from "./Artifacts";
 import { InspectMessage } from "../components/InspectMessage";
+import { relayBlocked } from "../lib/inbox";
 
 type Item = { kind: "message"; at: string; m: Message } | { kind: "question"; at: string; q: Question };
 
@@ -76,6 +78,8 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
   const stoppable = session?.stop && !stopping ? session : null;
   const receipts = relayReceipts(thread);
   const relayName = relay ? relayAgent(relay) : "";
+  // Who runs the session and relays to that agent, by the thread's own name for it.
+  const host = relayHost(thread);
   // Lets a report's Reply quote it into the composer.
   const composer = useRef<ComposerHandle | null>(null);
 
@@ -266,7 +270,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
 
   // A relay control or retry is an ordinary message: it shows
   // in the conversation (with its receipt), takes the same retry path, and
-  // eagent reads it like anything typed.
+  // the host agent reads it like anything typed.
   const sendRelay = useCallback((text: string, routing?: MessageRouting): Promise<void> => {
     const key = newKey();
     const attempt = (): Promise<void> => {
@@ -412,11 +416,11 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
                   New
                 </div>
               )}
-              {it.kind === "message" ? <MessageBubble m={it.m} grouped={grouped} showMeta={showMeta} inspectThread={hasArtifacts ? thread : undefined} onOpen={openViewer} receipt={receipts[it.m.id]} relayName={relayName} onRetry={retryReceipt} onReply={quoteReply} /> : <QuestionCard q={it.q} highlight={highlightQuestion === it.q.id} />}
+              {it.kind === "message" ? <MessageBubble m={it.m} grouped={grouped} showMeta={showMeta} inspectThread={hasArtifacts ? thread : undefined} onOpen={openViewer} receipt={receipts[it.m.id]} relayName={relayName} hostName={host} onRetry={retryReceipt} onReply={quoteReply} /> : <QuestionCard q={it.q} highlight={highlightQuestion === it.q.id} />}
             </div>
           );
         })}
-        {activity && <ActivityBubble a={activity} />}
+        {activity && <ActivityBubble a={activity} blocked={relayBlocked(thread)} />}
         <div ref={bottomRef} />
       </div>
       {!atBottom && loaded && items.length > 0 && (
@@ -436,6 +440,7 @@ export function ThreadScreen({ id, highlightQuestion, highlightMessage = null, s
         threadId={id}
         ended={sessionEnded(messages, questions, thread)}
         relay={relay}
+        host={host}
         onSending={handleSending}
         onCommand={sendCommand}
         handle={composer}
@@ -756,10 +761,12 @@ type BubbleProps = {
   showMeta: boolean;
   inspectThread?: Thread;
   onOpen: (images: Attachment[], index: number) => void;
-  /** In a relay thread: what eagent knows about this message of the user's. */
+  /** In a relay thread: what the host agent knows about this message of the user's. */
   receipt?: RelayReceipt;
   /** The relayed agent's name ("Codex"), for receipts. */
   relayName?: string;
+  /** The host agent's name (the thread's agent), for receipts. */
+  hostName?: string;
   onRetry?: (m: Message) => void;
   onReply?: (quote: string) => void;
 };
@@ -776,7 +783,7 @@ const MessageBubble = memo(function MessageBubble(props: BubbleProps) {
   return <TranscriptBubble {...props} />;
 });
 
-/** Which of eagent's relay message kinds this is, if any. */
+/** Which of the relay message kinds this is, if any. */
 function relayKind(m: Message): "send" | "report" | "screen" | "" {
   if (m.sender !== "agent") return "";
   if (isRelaySend(m)) return "send";
@@ -785,12 +792,12 @@ function relayKind(m: Message): "send" | "report" | "screen" | "" {
   return "";
 }
 
-/** What eagent itself typed to a relayed agent (Codex, Claude Code). */
+/** What the host agent itself typed to a relayed agent. */
 function isRelaySend(m: Message): boolean {
   return m.sender === "agent" && m.meta.kind === "relay_send" && (m.attachments ?? []).length === 0;
 }
 
-/** Splits eagent's "→ Codex:\n…" into who it went to and what was sent. */
+/** Splits the host's "→ Codex:\n…" into who it went to and what was sent. */
 function relaySendParts(m: Message): { to: string; text: string } {
   const head = /^→ ([^\n]+?):\n/.exec(m.body);
   if (head) return { to: head[1] as string, text: m.body.slice(head[0].length) };
@@ -872,20 +879,26 @@ function reportStats(meta: Record<string, unknown>): string {
 function RelayReportBubble({ m, grouped, showMeta, inspectThread, onReply }: BubbleProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const html = useMemo(() => (open ? renderMarkdown(m.body) : ""), [open, m.body]);
+  // A report too long for one post comes as several; each card says which
+  // part it is, so the body's own closing marker is not shown again.
+  const part = reportPart(m.meta);
+  const text = reportText(m.body, part);
+  const html = useMemo(() => (open ? renderMarkdown(text) : ""), [open, text]);
   const who = agentName(metaText(m.meta.agent) || metaText(m.meta.relay));
   const stats = reportStats(m.meta);
-  const line = leadLine(m.body);
+  const line = leadLine(text);
   const collapse = () => {
     setOpen(false);
     requestAnimationFrame(() => ref.current?.scrollIntoView({ block: "nearest" }));
   };
   return (
-    <div ref={ref} id={`message-${m.id}`} className={`msg agent relay-report ${grouped ? "grouped" : ""}`}>
+    <div ref={ref} id={`message-${m.id}`} className={`msg agent relay-report ${m.importance === "important" ? "important" : ""} ${grouped ? "grouped" : ""}`}>
+      {m.importance === "important" && <span className="important-chip">Important</span>}
       <div className={`report-card ${open ? "open" : ""}`}>
         <button type="button" className="report-toggle" aria-expanded={open} onClick={() => (open ? collapse() : setOpen(true))}>
           <span className="report-head">
             <span className="report-title">{who}&rsquo;s report</span>
+            {part && <span className="report-part">part {part.part} of {part.parts}</span>}
             {stats && <span className={`report-stats${m.meta.interrupted === true ? " interrupted" : ""}`}>{stats}</span>}
             <IconChevron className="relay-chevron" aria-hidden="true" />
           </span>
@@ -910,7 +923,7 @@ function RelayReportBubble({ m, grouped, showMeta, inspectThread, onReply }: Bub
               <IconReply aria-hidden="true" /> Reply
             </button>
           )}
-          <CopyButton text={m.body} className="message-action" label="Copy report" />
+          <CopyButton text={text} className="message-action" label={part ? `Copy part ${part.part} of ${part.parts}` : "Copy report"} />
           {inspectThread && <InspectMessage message={m} thread={inspectThread} />}
         </div>
       </div>
@@ -918,7 +931,7 @@ function RelayReportBubble({ m, grouped, showMeta, inspectThread, onReply }: Bub
   );
 }
 
-/** The text of a screen snapshot: the fenced block eagent posts, without its fences. */
+/** The text of a screen snapshot: the fenced block the host posts, without its fences. */
 function screenText(body: string): string {
   const fenced = /^\s*(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n?\1\s*$/.exec(body);
   const text = fenced ? (fenced[2] as string) : body;
@@ -959,10 +972,11 @@ function RelayScreenBubble({ m, grouped, showMeta, inspectThread }: BubbleProps)
 }
 
 /** Under the user's own message in a relay thread: where it got to. */
-function Receipt({ m, status, agent, onRetry }: { m: Message; status: RelayReceipt; agent: string; onRetry?: (m: Message) => void }) {
+function Receipt({ m, status, agent, host, onRetry }: { m: Message; status: RelayReceipt; agent: string; host: string; onRetry?: (m: Message) => void }) {
   const [retried, setRetried] = useState(false);
   const who = agent || "The agent";
-  const text = { sent: `→ ${who}`, delivered: `✓ ${who} has it`, held: "Held for the end of its turn", eagent: "Kept for eagent", failed: "Not delivered" }[status];
+  // The receipt state "eagent" is protocol: the host kept the message.
+  const text = { sent: `→ ${who}`, delivered: `✓ ${who} has it`, held: "Held for the end of its turn", eagent: `Kept for ${host || "the host"}`, failed: "Not delivered" }[status];
   const canRetry = status === "failed" && !!onRetry && m.body.trim() !== "";
   return (
     <span className={`receipt ${status}`}>
@@ -989,7 +1003,7 @@ function Receipt({ m, status, agent, onRetry }: { m: Message; status: RelayRecei
   );
 }
 
-function TranscriptBubble({ m, grouped, showMeta, inspectThread, onOpen, receipt, relayName, onRetry }: BubbleProps) {
+function TranscriptBubble({ m, grouped, showMeta, inspectThread, onOpen, receipt, relayName, hostName, onRetry }: BubbleProps) {
   const html = useMemo(() => (m.format === "markdown" ? renderMarkdown(m.body) : renderText(m.body)), [m.format, m.body]);
   const kind = typeof m.meta.kind === "string" ? m.meta.kind : "";
   const via = typeof m.meta.via === "string" ? m.meta.via : "";
@@ -1028,7 +1042,7 @@ function TranscriptBubble({ m, grouped, showMeta, inspectThread, onOpen, receipt
         )}
       </div>
       <div className="message-footer">
-      {m.sender === "user" && receipt && <Receipt m={m} status={receipt} agent={relayName ?? ""} onRetry={onRetry} />}
+      {m.sender === "user" && receipt && <Receipt m={m} status={receipt} agent={relayName ?? ""} host={hostName ?? ""} onRetry={onRetry} />}
       {showMeta && (
         <div className="msg-meta" title={fullDateTime(m.created_at)}>
           {kind === "notification" && <span>needs attention</span>}
@@ -1047,10 +1061,12 @@ function TranscriptBubble({ m, grouped, showMeta, inspectThread, onOpen, receipt
 }
 
 /** The agent's live status: "running tests…" with a timer once it has taken a while. */
-function ActivityBubble({ a }: { a: Activity }) {
+function ActivityBubble({ a, blocked }: { a: Activity; blocked?: boolean }) {
   const elapsed = useElapsed(a.since);
   if (a.kind === "waiting") {
-    return <div className="activity-waiting" role="status" aria-live="polite">{a.text === "Waiting for your next message" ? "Ready for your message" : a.text}</div>;
+    // A relayed agent stopped on its screen waits on the user to look: it
+    // reads like a question waiting, not like an agent at rest.
+    return <div className={`activity-waiting${blocked ? " blocked" : ""}`} role="status" aria-live="polite">{a.text === "Waiting for your next message" ? "Ready for your message" : a.text}</div>;
   }
   // Only the text is live: the timer ticks every second and would otherwise
   // be re-announced by a screen reader for as long as the agent works.
@@ -1078,7 +1094,7 @@ function ActivityBubble({ a }: { a: Activity }) {
 /** What the thread can ask of its composer. */
 type ComposerHandle = { quote: (line: string) => void };
 
-function Composer({ threadId, ended, relay, onSending, onCommand, handle }: { threadId: string; ended: boolean; relay: ThreadRelay | null; onSending: (sending: boolean) => void; onCommand: (command: string) => void; handle: React.MutableRefObject<ComposerHandle | null> }) {
+function Composer({ threadId, ended, relay, host, onSending, onCommand, handle }: { threadId: string; ended: boolean; relay: ThreadRelay | null; host: string; onSending: (sending: boolean) => void; onCommand: (command: string) => void; handle: React.MutableRefObject<ComposerHandle | null> }) {
   const attachmentsEnabled = useStore((s) => s.attachmentsEnabled);
   const connection = useStore((s) => s.connection);
   const draft = useStore((s) => s.drafts[threadId] ?? "");
@@ -1096,9 +1112,10 @@ function Composer({ threadId, ended, relay, onSending, onCommand, handle }: { th
   const keyed = useRef<{ payload: string; key: string } | null>(null);
   const sendRef = useRef<(delivery?: EagentDelivery) => void>(() => {});
   const touch = useMemo(() => isTouch(), []);
-  // In a relay thread: who the next message is for (null leaves it to
-  // eagent, which passes it to the agent unless it is meant for eagent),
-  // and a long press on send for when the agent gets it.
+  // In a relay thread: who the next message is for (null leaves it to the
+  // host agent, which passes it on unless it is meant for the host; route
+  // "eagent" is the protocol's word for the host), and a long press on send
+  // for when the agent gets it.
   const live = !!relay && relay.state !== "stopped";
   const agent = relay ? relayAgent(relay) : "";
   // While the agent is in a turn, a stop button sits in the field: it
@@ -1353,8 +1370,8 @@ function Composer({ threadId, ended, relay, onSending, onCommand, handle }: { th
         )}
         <div className={`composer-field${live ? " with-route" : ""}${working ? " with-stop" : ""}`} ref={routeRef}>
           {live && (
-            <button type="button" className="route-pip" aria-label={`To ${toAgent ? agent : "eagent"}. Change who gets it`} aria-haspopup="menu" aria-expanded={routeOpen} title={`To ${toAgent ? agent : "eagent"}`} onClick={() => setRouteOpen((o) => !o)}>
-              <Avatar name={toAgent ? agent : "eagent"} small />
+            <button type="button" className="route-pip" aria-label={`To ${toAgent ? agent : host}. Change who gets it`} aria-haspopup="menu" aria-expanded={routeOpen} title={`To ${toAgent ? agent : host}`} onClick={() => setRouteOpen((o) => !o)}>
+              <Avatar name={toAgent ? agent : host} small />
             </button>
           )}
           {routeOpen && (
@@ -1367,10 +1384,10 @@ function Composer({ threadId, ended, relay, onSending, onCommand, handle }: { th
                 </span>
               </button>
               <button type="button" role="menuitemradio" aria-checked={!toAgent} className={!toAgent ? "active" : ""} onClick={() => pickRoute("eagent")}>
-                <Avatar name="eagent" small />
+                <Avatar name={host} small />
                 <span className="item-text">
-                  <span>eagent</span>
-                  <small>Kept for eagent: status, settings, questions.</small>
+                  <span>{host}</span>
+                  <small>Kept for {host}: status, settings, questions.</small>
                 </span>
               </button>
             </div>
@@ -1378,7 +1395,7 @@ function Composer({ threadId, ended, relay, onSending, onCommand, handle }: { th
           <textarea
             ref={ref}
             rows={1}
-            placeholder={offline ? "Offline. Your reply is kept until you're back." : live ? `Message ${toAgent ? agent : "eagent"}…` : "Reply to the agent…"}
+            placeholder={offline ? "Offline. Your reply is kept until you're back." : live ? `Message ${toAgent ? agent : host}…` : "Reply to the agent…"}
             value={text}
             enterKeyHint={touch ? "enter" : "send"}
             onChange={(e) => update(e.target.value)}
@@ -1415,7 +1432,7 @@ function Composer({ threadId, ended, relay, onSending, onCommand, handle }: { th
         <button
           type="submit"
           className="send-btn"
-          aria-label={toAgent ? `Send to ${agent}` : live ? "Send to eagent" : "Send"}
+          aria-label={toAgent ? `Send to ${agent}` : live ? `Send to ${host}` : "Send"}
           aria-description={toAgent ? "Hold or right-click to interrupt it or wait for its turn" : undefined}
           disabled={!canSend}
           onPointerDown={startPress}
