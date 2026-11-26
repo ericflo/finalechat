@@ -5,7 +5,7 @@ import { createRoot } from "react-dom/client";
 import { GenericSettingsForm, SettingsControls } from "../src/components/IntegrationSettings";
 import { ArtifactScreen } from "../src/screens/Artifacts";
 import { type ResourceView, type SettingsProposal } from "../src/lib/artifacts";
-import { useRoute } from "../src/lib/router";
+import { match, useRoute } from "../src/lib/router";
 import { ResourceSettingsScreen } from "../src/screens/Connectors";
 import { InspectMessage } from "../src/components/InspectMessage";
 import { ThreadScreen } from "../src/screens/Thread";
@@ -67,5 +67,10 @@ function RuntimeFixture() {
   if (route.path.includes("/artifacts/")) return <ArtifactFixture />;
   return <ThreadScreen id="thread" highlightQuestion={null} />;
 }
-function DraftFixture() { const route = useRoute(); return route.path.startsWith("/t/") ? <ThreadScreen id={route.path.slice(3)} highlightQuestion={null} /> : <DraftSessionScreen resourceId="project" />; }
+function DraftFixture() {
+  const route = useRoute();
+  if (route.path.startsWith("/t/")) return <ThreadScreen id={route.path.slice(3)} highlightQuestion={null} />;
+  const m = match("/new/:resource", route.path);
+  return <DraftSessionScreen resourceId={m ? m.resource! : route.search.has("any") ? null : "project"} />;
+}
 createRoot(document.getElementById("root")!).render(initial.has("draft") ? <DraftFixture /> : initial.has("thread") ? <ThreadFixture /> : initial.has("runtime") ? <RuntimeFixture /> : initial.has("navigation") ? <NavigationFixture /> : initial.has("artifact") ? <ArtifactFixture /> : <Controls />);

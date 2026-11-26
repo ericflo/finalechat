@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -524,6 +525,73 @@ var homePrefixRe = regexp.MustCompile(`^/(?:home|Users)/[^/]+`)
 
 func shortDir(p string) string { return homePrefixRe.ReplaceAllString(p, "~") }
 
+func messengerProviderName(p string) string {
+	switch strings.TrimSpace(p) {
+	case "claude-code":
+		return "Claude Code"
+	case "codex":
+		return "Codex"
+	case "antigravity":
+		return "Antigravity"
+	default:
+		return strings.TrimSpace(p)
+	}
+}
+
+// starterQualifier extracts the host/machine name from a connector name such as
+// "eagent · llmbox · Development", dropping the leading provider and trailing
+// project label so multiple machines sharing a project name can be told apart.
+func starterQualifier(connectorName, provider, resourceLabel string) string {
+	raw := strings.Split(connectorName, "·")
+	parts := make([]string, 0, len(raw))
+	for _, p := range raw {
+		if p = strings.TrimSpace(p); p != "" {
+			parts = append(parts, p)
+		}
+	}
+	prov := strings.TrimSpace(provider)
+	provLabel := messengerProviderName(prov)
+	if len(parts) > 0 && (strings.EqualFold(parts[0], prov) || strings.EqualFold(parts[0], provLabel)) {
+		parts = parts[1:]
+	}
+	label := strings.TrimSpace(resourceLabel)
+	if len(parts) > 0 && label != "" && strings.EqualFold(parts[len(parts)-1], label) {
+		parts = parts[:len(parts)-1]
+	}
+	return strings.Join(parts, " · ")
+}
+
+func starterDisplay(st messengerStarter) string {
+	label := strings.TrimSpace(st.resource.Label)
+	qual := starterQualifier(st.connector.Name, st.connector.Provider, label)
+	switch {
+	case qual != "" && label != "":
+		return qual + " · " + label
+	case label != "":
+		return label
+	case qual != "":
+		return qual
+	default:
+		return strings.TrimSpace(st.connector.Name)
+	}
+}
+
+func starterQuickTitle(num int, st messengerStarter, dupLabel bool) string {
+	prefix := strconv.Itoa(num) + " "
+	label := strings.TrimSpace(st.resource.Label)
+	qual := starterQualifier(st.connector.Name, st.connector.Provider, label)
+	full := prefix + starterDisplay(st)
+	if qual != "" && utf8.RuneCountInString(full) > messenger.MaxQuickReplyTitle {
+		if dupLabel {
+			return prefix + qual
+		}
+		if label != "" {
+			return prefix + label
+		}
+	}
+	return full
+}
+
 func (c *mchat) newSession(prompt string) error {
 	all, err := c.s.messengerStarters(c.ctx, c.user.ID)
 	if err != nil {
@@ -543,15 +611,20 @@ func (c *mchat) newSession(prompt string) error {
 	if len(starters) == 1 {
 		return c.chooseProject(starters[0], prompt)
 	}
+	labelCounts := map[string]int{}
+	for _, st := range starters {
+		labelCounts[strings.ToLower(strings.TrimSpace(st.resource.Label))]++
+	}
 	var b strings.Builder
 	b.WriteString("Which project?")
 	var quick []messenger.QuickReply
 	ids := make([]string, 0, len(starters))
 	for i, st := range starters {
-		fmt.Fprintf(&b, "\n%d. %s", i+1, st.resource.Label)
+		dup := labelCounts[strings.ToLower(strings.TrimSpace(st.resource.Label))] > 1
+		fmt.Fprintf(&b, "\n%d. %s", i+1, starterDisplay(st))
 		ids = append(ids, st.resource.ID.String())
 		if len(quick) < messenger.MaxQuickReplies {
-			quick = append(quick, messenger.QuickReply{Title: strconv.Itoa(i+1) + " " + st.resource.Label, Payload: "np:" + st.resource.ID.String()})
+			quick = append(quick, messenger.QuickReply{Title: starterQuickTitle(i+1, st, dup), Payload: "np:" + st.resource.ID.String()})
 		}
 	}
 	c.setNew(&messengerNew{Step: "project", Prompt: prompt, Starters: ids})
@@ -562,7 +635,7 @@ func (c *mchat) newSession(prompt string) error {
 func (c *mchat) chooseProject(st messengerStarter, prompt string) error {
 	root, dirs := directories(st.resource)
 	if !st.connector.Online() {
-		c.say(st.resource.Label+" is offline. Start its connector there, then try again.", nil)
+		c.say(starterDisplay(st)+" is offline. Start its connector there, then try again.", nil)
 		c.setNew(nil)
 		return nil
 	}

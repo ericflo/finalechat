@@ -15,7 +15,7 @@ import {
   IconTerminal,
   IconTrash,
 } from "../components/Icons";
-import { ProjectPickerSheet, useSessionStarters } from "../components/NewSession";
+import { useSessionStarters } from "../components/NewSession";
 import { QuestionCard } from "../components/QuestionCard";
 import { TopBar } from "../components/TopBar";
 import {
@@ -84,7 +84,6 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
   const [query, setQuery] = useState("");
   const [showAllPending, setShowAllPending] = useState(false);
   const [rowMenu, setRowMenu] = useState<Thread | null>(null);
-  const [newSession, setNewSession] = useState(false);
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
@@ -413,7 +412,7 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
               {settings.remote_mode ? "Remote on" : "Remote off"}
             </button>
             {starters.length > 0 && (
-              <button type="button" className="icon-btn" aria-label="New session" title="Start a new agent session" onClick={() => (starters.length === 1 && starters[0] ? navigate(`/new/${starters[0].resource.id}`) : setNewSession(true))}>
+              <button type="button" className="icon-btn" aria-label="New session" title="Start a new agent session" onClick={() => navigate(starters.length === 1 && starters[0] ? `/new/${starters[0].resource.id}` : "/new")}>
                 <IconPlus />
               </button>
             )}
@@ -423,7 +422,6 @@ export function Inbox({ filter, view }: { filter: string | null; view: InboxView
           </>
         }
       />
-      {newSession && <ProjectPickerSheet starters={starters} onClose={() => setNewSession(false)} />}
       <div className="page-body">
         <SetupChecklist hasThreads={Object.keys(threads).length > 0} />
 

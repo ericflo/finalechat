@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { APIError, api } from "../lib/api";
 import { controlAPI, providerName, type Connector, type SettingsCommand, type SettingsResource } from "../lib/artifacts";
 import { navigate } from "../lib/router";
+import { starterDisplayName } from "../lib/starters";
 import { Sheet } from "./Common";
+import { IconCheck } from "./Icons";
 
 /** A settings resource whose connector can start a new agent session. */
 export interface SessionStarter {
@@ -166,32 +168,50 @@ export async function startSession(starter: SessionStarter, prompt: string, cwd:
   throw new Error("The session started, but its thread has not appeared yet. It will show up in the inbox shortly.");
 }
 
-/** Picks the project for a new session when more than one agent can start one. */
-export function ProjectPickerSheet({ starters, onClose }: { starters: SessionStarter[]; onClose: () => void }) {
+/** Picks the connected host/project for a new session when more than one agent
+ * can start one. */
+export function ProjectPickerSheet({
+  starters,
+  current,
+  onSelect,
+  onClose,
+}: {
+  starters: SessionStarter[];
+  current?: string | null;
+  onSelect?: (starter: SessionStarter) => void;
+  onClose: () => void;
+}) {
   return (
-    <Sheet onClose={onClose} label="New session">
+    <Sheet onClose={onClose} label={current ? "Choose host" : "New session"}>
       <div style={{ padding: "4px 6px" }}>
-        <h2 style={{ fontSize: 18, marginBottom: 6 }}>New session</h2>
-        <p style={{ marginBottom: 10 }}>Which project?</p>
-        {starters.map((s) => (
-          <button
-            key={s.resource.id}
-            type="button"
-            className="item"
-            onClick={() => {
-              onClose();
-              navigate(`/new/${s.resource.id}`);
-            }}
-          >
-            <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", minWidth: 0 }}>
-              <span>{s.resource.label}</span>
-              <small style={{ color: "var(--text-3)" }}>
-                {s.connector.name}
-                {s.online ? "" : " · offline"}
-              </small>
-            </span>
-          </button>
-        ))}
+        <h2 style={{ fontSize: 18, marginBottom: 6 }}>{current ? "Choose host" : "New session"}</h2>
+        <p style={{ marginBottom: 10 }}>{current ? "Which connected agent should start this session?" : "Which host?"}</p>
+        {starters.map((s) => {
+          const active = s.resource.id === current;
+          return (
+            <button
+              key={s.resource.id}
+              type="button"
+              className={`item starter-item${active ? " active" : ""}`}
+              aria-current={active ? "true" : undefined}
+              onClick={() => {
+                onClose();
+                if (onSelect) onSelect(s);
+                else navigate(`/new/${s.resource.id}`);
+              }}
+            >
+              <span className={`starter-dot${s.online ? " online" : ""}`} aria-hidden="true" />
+              <span className="starter-item-text">
+                <span>{starterDisplayName(s)}</span>
+                <small>
+                  {s.connector.name}
+                  {s.online ? "" : " · offline"}
+                </small>
+              </span>
+              {active && <IconCheck className="starter-check" aria-hidden="true" />}
+            </button>
+          );
+        })}
       </div>
     </Sheet>
   );

@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Sheet } from "../components/Common";
 import { IconChevron, IconFolder, IconSend, IconSettings } from "../components/Icons";
-import { directoryChoices, relayName, relayProfiles, startSession, starterHost, startsWithoutRelay, useSessionStarters } from "../components/NewSession";
+import { ProjectPickerSheet, directoryChoices, relayName, relayProfiles, startSession, starterHost, startsWithoutRelay, useSessionStarters, type SessionStarter } from "../components/NewSession";
 import { RunningRelays, agentName, runningRelays } from "../components/Relay";
 import { ResourceSettingsSheet } from "../components/ThreadSettings";
 import { SettingsForm, formSummary, startModel, startParameters, type FormModel } from "../components/SettingsForm";
 import { TopBar } from "../components/TopBar";
 import { navigate } from "../lib/router";
+import { pickDefaultStarter, pickableStarters, starterDisplayName } from "../lib/starters";
 
+const STARTER_KEY = "fc.draft.starter";
 const home = (p: string) => p.replace(/^\/(?:home|Users)\/[^/]+/, "~");
 /** "~/x" typed on the phone, read on the machine whose project is root. */
 const fromHome = (p: string, root: string) => {
@@ -17,6 +19,32 @@ const fromHome = (p: string, root: string) => {
 /** "eagent" stays as written; "the agent" starts a sentence as "The agent". */
 const cap = (s: string) => (s.startsWith("the ") ? "T" + s.slice(1) : s);
 const base = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p;
+const readStorage = (key: string): string | null => {
+  if (!key) return null;
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+const writeStorage = (key: string, value: string) => {
+  if (!key) return;
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+};
+const readOptions = (key: string): Record<string, unknown> => {
+  const text = readStorage(key);
+  if (!text) return {};
+  try {
+    const raw: unknown = JSON.parse(text);
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+};
 
 /** An agent and folder a relay session started with from this device. */
 type RecentRelay = { relay: string; dir: string };
@@ -49,18 +77,17 @@ function rememberRecent(key: string, r: RecentRelay) {
  * bottom is all that stays in reach of the thumb, and the first message is
  * what starts the session, born with everything already chosen. Nothing is
  * created until then. */
-export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
+export function DraftSessionScreen({ resourceId }: { resourceId: string | null }) {
   const { starters, loaded } = useSessionStarters();
-  const starter = starters.find((s) => s.resource.id === resourceId);
+  const [rememberedStarter, setRememberedStarter] = useState<string | null>(() => readStorage(STARTER_KEY));
+  const starter = resourceId ? starters.find((s) => s.resource.id === resourceId) : pickDefaultStarter(starters, rememberedStarter);
+  const activeId = starter?.resource.id ?? "";
+  const pickable = useMemo(() => pickableStarters(starters, starter?.resource.id ?? null), [starters, starter?.resource.id]);
   const choices = useMemo(() => (starter ? directoryChoices(starter.resource) : null), [starter]);
-  const key = `fc.draft.${resourceId}.cwd`;
-  const [cwd, setCwd] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  });
+  const key = activeId ? `fc.draft.${activeId}.cwd` : "";
+  const [cwdByKey, setCwdByKey] = useState<{ key: string; value: string | null }>(() => ({ key, value: readStorage(key) }));
+  const cwd = cwdByKey.key === key ? cwdByKey.value : readStorage(key);
+  const [pickingStarter, setPickingStarter] = useState(false);
   const [picking, setPicking] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [text, setText] = useState("");
@@ -79,25 +106,16 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
   // instead of starting another.
   const running = useMemo(() => (starter ? runningRelays(starter.resource) : []), [starter]);
   const agentKey = starter ? `fc.draft.${starter.connector.id}.agent` : "";
-  const remembered = useMemo(() => {
-    try {
-      return agentKey ? (localStorage.getItem(agentKey) ?? "") : "";
-    } catch {
-      return "";
-    }
-  }, [agentKey]);
-  const [picked, setPicked] = useState<string | null>(null);
+  const remembered = useMemo(() => readStorage(agentKey) ?? "", [agentKey]);
+  const [pickedByConn, setPickedByConn] = useState<{ conn: string; name: string } | null>(null);
+  const picked = pickedByConn && pickedByConn.conn === starter?.connector.id ? pickedByConn.name : null;
   // An integration that always relays starts the remembered profile, else
   // the first it lists (its default).
   const relay = profiles.find((p) => p.name === (picked ?? remembered)) ?? (canSelf ? null : (profiles[0] ?? null));
   const who = relay ? relayName(relay) : host;
   const pickAgent = (name: string) => {
-    setPicked(name);
-    try {
-      if (agentKey) localStorage.setItem(agentKey, name);
-    } catch {
-      // ignore
-    }
+    if (starter) setPickedByConn({ conn: starter.connector.id, name });
+    writeStorage(agentKey, name);
   };
   const agents = [...(canSelf ? [{ name: "", short: host, title: `${host} does the work` }] : []), ...profiles.map((p) => ({ name: p.name, short: relayName(p), title: `${host} starts ${p.label} and passes your messages on` }))];
   // Agent and folder pairs this device started relays with, still offered.
@@ -116,22 +134,11 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
   // to; only those are offered.
   const startAction = starter?.resource.descriptor.actions?.find((a) => a.operation === "session.start");
   const optionsKey = starter ? `fc.draft.${starter.connector.id}.options` : "";
-  const [options, setOptions] = useState<Record<string, unknown>>({});
-  useEffect(() => {
-    try {
-      const raw: unknown = optionsKey ? JSON.parse(localStorage.getItem(optionsKey) ?? "{}") : {};
-      setOptions(raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {});
-    } catch {
-      setOptions({});
-    }
-  }, [optionsKey]);
+  const [optionsByKey, setOptionsByKey] = useState<{ key: string; values: Record<string, unknown> }>(() => ({ key: optionsKey, values: readOptions(optionsKey) }));
+  const options = optionsByKey.key === optionsKey ? optionsByKey.values : readOptions(optionsKey);
   const saveOptions = (next: Record<string, unknown>) => {
-    setOptions(next);
-    try {
-      if (optionsKey) localStorage.setItem(optionsKey, JSON.stringify(next));
-    } catch {
-      // ignore
-    }
+    setOptionsByKey({ key: optionsKey, values: next });
+    writeStorage(optionsKey, JSON.stringify(next));
   };
   const [optionsOpen, setOptionsOpen] = useState(false);
   const built = starter && startAction?.inputs?.length ? startModel(starter.resource.descriptor, startAction, options, saveOptions, { relay: relay?.name ?? "" }) : null;
@@ -155,19 +162,26 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
 
   const dir = cwd ?? choices?.root ?? "";
   const choose = (path: string) => {
-    setCwd(path);
+    setCwdByKey({ key, value: path });
     setPicking(false);
-    try {
-      localStorage.setItem(key, path);
-    } catch {
-      // ignore
-    }
+    writeStorage(key, path);
+  };
+  const chooseStarter = (s: SessionStarter) => {
+    setRememberedStarter(s.resource.id);
+    writeStorage(STARTER_KEY, s.resource.id);
+    setPickingStarter(false);
+    setPicking(false);
+    setOptionsOpen(false);
+    setSettingsOpen(false);
+    setError(null);
+    navigate(`/new/${s.resource.id}`, { replace: true });
   };
 
   const send = async () => {
     if (!starter || busy || !ready) return;
     setBusy(true);
     setError(null);
+    writeStorage(STARTER_KEY, starter.resource.id);
     try {
       const threadId = await startSession(starter, text, dir || null, relay, form ? startParameters(form) : {}, setStatus, () => cancelled.current);
       if (relay && dir) rememberRecent(recentKey, { relay: relay.name, dir });
@@ -206,10 +220,36 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
           <div className="empty">
             <h2>Not connected</h2>
             <p>Start the agent&rsquo;s connector in the project and come back.</p>
+            {pickable.length > 0 && (
+              <button type="button" className="btn primary" style={{ marginTop: 12 }} onClick={() => setPickingStarter(true)}>
+                Choose a connected host
+              </button>
+            )}
           </div>
         )}
         {starter && !status && (
           <>
+            {pickable.length > 1 && (
+              <section>
+                <div className="setup-list" role="group" aria-label="Which host">
+                  <button
+                    type="button"
+                    className="setup-row"
+                    aria-label={`Host: ${starterDisplayName(starter)}. Change`}
+                    title={`${starter.connector.name}${starter.online ? "" : " · offline"}. Tap to change.`}
+                    disabled={busy}
+                    onClick={() => setPickingStarter(true)}
+                  >
+                    <span className="k">Host</span>
+                    <span className="v starter-v">
+                      <span className={`starter-dot${starter.online ? " online" : ""}`} aria-hidden="true" />
+                      <span className="starter-name">{starterDisplayName(starter)}</span>
+                    </span>
+                    <IconChevron aria-hidden="true" />
+                  </button>
+                </div>
+              </section>
+            )}
             {!starter.online && <p className="draft-warn">This project&rsquo;s {host} is offline right now. Start it there, then send.</p>}
             {profiles.length > 0 && (
               <section>
@@ -320,8 +360,9 @@ export function DraftSessionScreen({ resourceId }: { resourceId: string }) {
           </form>
         </div>
       )}
+      {pickingStarter && pickable.length > 0 && <ProjectPickerSheet starters={pickable} current={starter?.resource.id ?? null} onSelect={chooseStarter} onClose={() => setPickingStarter(false)} />}
       {picking && choices && <DirectorySheet choices={choices} current={dir} who={relay ? who : null} host={host} onChoose={choose} onClose={() => setPicking(false)} />}
-      {settingsOpen && <ResourceSettingsSheet resourceId={resourceId} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && starter && <ResourceSettingsSheet resourceId={starter.resource.id} onClose={() => setSettingsOpen(false)} />}
       {optionsOpen && form && <StartOptionsSheet form={form} onReset={() => form.reset(form.items.map((i) => i.key))} onClose={() => setOptionsOpen(false)} />}
     </div>
   );

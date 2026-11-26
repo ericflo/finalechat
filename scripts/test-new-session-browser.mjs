@@ -92,6 +92,14 @@ const relayResource={...resource,
   {name:'pi',agent:'pi',label:'Pi · openrouter/qwen3-coder high',model:'openrouter/qwen3-coder',effort:'high'}],relays:[]}}};
 let current=resource;
 let conflicts=0;
+let multiHost=false;
+const connector2={id:'connector2',name:'eagent · macbook · Development',provider:'eagent',state:'active',grants:[],requested_grants:[],last_seen_at:new Date().toISOString(),expires_at:'2030-01-01T00:00:00Z'};
+const resource2={...relayResource,id:'project2',connector_id:'connector2',label:'Development',
+ snapshot:{...relayResource.snapshot,version:'m1',context:'/Users/u/Development',details:{directories:{root:'/Users/u/Development',recent:[],children:[],siblings:[]},relay_profiles:[
+  {name:'codex',agent:'codex',label:'Codex · GPT-6.2-Astra xhigh',model:'gpt-6.2-astra',effort:'xhigh'},
+  {name:'pi',agent:'pi',label:'Pi · openrouter/qwen3-coder high',model:'openrouter/qwen3-coder',effort:'high'}],relays:[]}}};
+const offlineConnector={id:'connector-old',name:'eagent · oldbox · Development',provider:'eagent',state:'active',grants:[],requested_grants:[],last_seen_at:'2025-01-01T00:00:00Z',expires_at:'2030-01-01T00:00:00Z'};
+const offlineResource={...relayResource,id:'project-old',connector_id:'connector-old',label:'Development'};
 
 const server=await createServer({root:path.join(root,'web'),configFile:false,plugins:[react()],server:{host:'127.0.0.1',port:0,strictPort:false},logLevel:'warn'});
 await server.listen();const base=server.resolvedUrls.local[0].replace(/\/$/,'');
@@ -106,11 +114,15 @@ try {
    if(url.origin!==base) throw Error('Unexpected outbound request '+url.origin);
    const json=v=>route.fulfill({json:v});
    if(!p.startsWith('/api/')) return route.continue();
-   if(p==='/api/v1/connectors') return json({connectors:[connector]});
+   if(p==='/api/v1/connectors') return json({connectors:multiHost?[connector,connector2,offlineConnector]:[connector]});
    if(p==='/api/v1/connectors/connector') return json({connector,online:true,resources:[current]});
+   if(p==='/api/v1/connectors/connector2') return json({connector:connector2,online:true,resources:[resource2]});
+   if(p==='/api/v1/connectors/connector-old') return json({connector:offlineConnector,online:false,resources:[offlineResource]});
    if(p==='/api/v1/settings-resources/project') return json({resource:current,connector,online:true,website:null});
-   if(p==='/api/v1/settings-resources/project/commands') {const body=route.request().postDataJSON();commands.push(body);if(conflicts>0){conflicts--;return route.fulfill({status:409,json:{error:{code:'conflict',message:'The settings changed.'}}});}return json({created:true,command:{id:'c1',resource_id:'project',status:'succeeded',proposal:body.proposal,result:{thread:'ext:eagent:1',session_id:'1',interactive:true}}});}
-   if(p.startsWith('/api/v1/threads/')) return json({thread:{id:'t1',external_id:'eagent:1',title:'Development',agent:'eagent',meta:{},unread_count:0,pending_count:0,created_at:new Date().toISOString()},messages:[],has_more:false,questions:[],artifacts:[],resources:[]});
+   if(p==='/api/v1/settings-resources/project2') return json({resource:resource2,connector:connector2,online:true,website:null});
+   if(p==='/api/v1/settings-resources/project/commands') {const body=route.request().postDataJSON();commands.push({...body,_resource:'project'});if(conflicts>0){conflicts--;return route.fulfill({status:409,json:{error:{code:'conflict',message:'The settings changed.'}}});}return json({created:true,command:{id:'c1',resource_id:'project',status:'succeeded',proposal:body.proposal,result:{thread:'ext:eagent:1',session_id:'1',interactive:true}}});}
+   if(p==='/api/v1/settings-resources/project2/commands') {const body=route.request().postDataJSON();commands.push({...body,_resource:'project2'});return json({created:true,command:{id:'c2',resource_id:'project2',status:'succeeded',proposal:body.proposal,result:{thread:'ext:eagent:2',session_id:'2',interactive:true}}});}
+   if(p.startsWith('/api/v1/threads/')) return json({thread:{id:p.endsWith('2')?'t2':'t1',external_id:p.endsWith('2')?'eagent:2':'eagent:1',title:'Development',agent:'eagent',meta:{},unread_count:0,pending_count:0,created_at:new Date().toISOString()},messages:[],has_more:false,questions:[],artifacts:[],resources:[]});
    return json({});
   });
   await page.goto(base+'/tests/artifacts.html?draft');
@@ -283,10 +295,39 @@ try {
   await page.goto(base+'/tests/artifacts.html?draft');
   await agentPicker.getByRole('button',{name:'Pi',exact:true}).waitFor();
   assert.equal(await agentPicker.getByRole('button',{name:'Pi',exact:true}).getAttribute('aria-pressed'),'true');
+  // Single online host hides the host picker.
+  assert.equal(await page.getByRole('group',{name:'Which host'}).count(),0);
+
+  // Multiple connected hosts: /new shows the host picker at the top (hiding
+  // stale offline connectors), switching preserves the draft message and swaps
+  // agents/folder/target, and the chosen host is remembered next time.
+  multiHost=true;
+  await page.goto(base+'/tests/artifacts.html?draft&any');
+  const hostBtn=page.getByRole('button',{name:/^Host: llmbox · Development\. Change$/});
+  await hostBtn.waitFor();
+  await page.getByPlaceholder(/^Message Pi/).fill('run on macbook');
+  await page.waitForTimeout(300); await page.screenshot({path:`${shots}/${name}-multi-host-draft.png`});
+  await hostBtn.click();
+  const hostSheet=page.getByRole('dialog',{name:'Choose host'});
+  await hostSheet.waitFor();
+  assert.equal(await hostSheet.getByText(/oldbox/).count(),0,'stale offline host stays hidden');
+  await page.waitForTimeout(200); await page.screenshot({path:`${shots}/${name}-host-picker.png`});
+  await hostSheet.getByRole('button',{name:/macbook · Development/}).click();
+  await page.getByRole('button',{name:/^Host: macbook · Development\. Change$/}).waitFor();
+  assert.deepEqual(await agentPicker.getByRole('button').allTextContents(),['Codex','Pi']);
+  assert.equal(await page.locator('textarea').inputValue(),'run on macbook','draft text survives host switch');
+  await page.getByRole('button',{name:'Start the session'}).click();
+  await page.waitForURL(/\/t\/t2/);
+  assert.equal(commands.at(-1)._resource,'project2');
+  assert.deepEqual(commands.at(-1).proposal.parameters,{prompt:'run on macbook',relay:'codex'});
+  // Reopening /new remembers macbook.
+  await page.goto(base+'/tests/artifacts.html?draft&any');
+  await page.getByRole('button',{name:/^Host: macbook · Development\. Change$/}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'overflow');
+  multiHost=false;
   current=resource;
   await page.close();
  }
  assert.deepEqual(errors,[]);
- console.log(`PASS new session: older host (does the work itself or relays) and a host that always relays (pi included); screenshots in ${shots}`);
+ console.log(`PASS new session: older host, relay-only host (pi included), and multi-host picker; screenshots in ${shots}`);
 } finally {await browser.close();await server.close();}

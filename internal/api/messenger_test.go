@@ -980,3 +980,90 @@ func TestMessengerRestrictionAndBundles(t *testing.T) {
 		t.Fatalf("hold not cleared: %v", link.State)
 	}
 }
+
+// Multiple machines connected in identically named projects are distinguished
+// by host in Messenger's /new project picker and quick replies.
+func TestMessengerNewSessionMultiHostPicker(t *testing.T) {
+	b, a := setup(t)
+	g := withMessenger(t)
+	psid := "psid-" + uuid.NewString()[:8]
+	linkMessenger(t, g, psid)
+
+	connectBox := func(host, root string) (connID, resourceID string, conn *client, inst string) {
+		t.Helper()
+		grant := control.Grant{Key: "project-" + uuid.NewString()[:8], Label: "Development", Scope: "project", Operations: []string{"session.start"}, Classes: []string{"cost"}}
+		out := a.must(201, "POST", "/api/v1/connectors", map[string]any{"name": "eagent · " + host + " · Development", "provider": "eagent", "requested_grants": []control.Grant{grant}})
+		connID = str(sub(out, "connector"), "id")
+		conn = &client{t: t, http: &http.Client{}, token: str(out, "secret")}
+		b.must(200, "POST", "/api/v1/connectors/"+connID+"/approve", map[string]any{"grants": []control.Grant{grant}})
+		inst = "inst-" + uuid.NewString()
+		conn.must(200, "POST", "/api/v1/connectors/"+connID+"/heartbeat", map[string]any{"instance": inst})
+		desc := control.Descriptor{Format: control.Format, SchemaVersion: "eagent.project/v2", AdapterVersion: "2", Actions: []control.Action{{
+			Operation: "session.start", Label: "Start a new session", Class: "cost",
+			Parameters: control.Shape{Type: "object", Properties: map[string]control.Shape{"prompt": {Type: "string", MaxLength: 32768}, "cwd": {Type: "string", MaxLength: 4096}}, Required: []string{"prompt"}},
+		}}}
+		snap := control.Snapshot{Version: "v1", Context: root, Saved: map[string]any{}, Effective: map[string]any{}, Details: map[string]any{
+			"directories": map[string]any{"root": root},
+		}}
+		pub := conn.must(200, "PUT", "/api/v1/connectors/"+connID+"/resources/"+grant.Key, map[string]any{"instance": inst, "descriptor": desc, "snapshot": snap})
+		resourceID = str(sub(pub, "resource"), "id")
+		return connID, resourceID, conn, inst
+	}
+
+	id1, res1, _, _ := connectBox("desktop-linux", "/home/eric/Development")
+	id2, res2, conn2, inst2 := connectBox("macbook-pro", "/Users/eric/Development")
+	defer func() {
+		b.must(200, "DELETE", "/api/v1/connectors/"+id1, nil)
+		b.must(200, "DELETE", "/api/v1/connectors/"+id2, nil)
+	}()
+
+	from := g.mark()
+	say(t, psid, "/new fix tests")
+	msgs := g.texts(from)
+	if len(msgs) == 0 {
+		t.Fatal("expected /new picker message")
+	}
+	picker := msgs[len(msgs)-1]
+	if !strings.HasPrefix(picker.Text, "Which project?") {
+		t.Fatalf("unexpected prompt: %q", picker.Text)
+	}
+	if !strings.Contains(picker.Text, "desktop-linux · Development") || !strings.Contains(picker.Text, "macbook-pro · Development") {
+		t.Fatalf("picker did not distinguish hosts: %q", picker.Text)
+	}
+	quickByPayload := map[string]string{}
+	for _, q := range picker.Quick {
+		quickByPayload[q.Payload] = q.Title
+	}
+	if !strings.Contains(quickByPayload["np:"+res1], "desktop-linux") || !strings.Contains(quickByPayload["np:"+res2], "macbook-pro") {
+		t.Fatalf("quick replies did not keep host names within 20-char cap: %+v", picker.Quick)
+	}
+
+	// Picking macbook-pro dispatches session.start to that connector.
+	fromTap := g.mark()
+	tap(t, psid, quickByPayload["np:"+res2], "np:"+res2)
+	claimed := conn2.must(200, "POST", "/api/v1/connectors/"+id2+"/commands/claim?wait=1", map[string]any{"instance": inst2})
+	cmd, _ := claimed["command"].(map[string]any)
+	if cmd == nil {
+		t.Fatalf("macbook-pro did not receive session.start: %v", claimed)
+	}
+	conn2.must(200, "POST", "/api/v1/commands/"+str(cmd, "id")+"/result", map[string]any{"claim_token": str(cmd, "claim_token"), "instance": inst2, "status": "rejected", "result": map[string]any{"message": "not in tests"}})
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		done := false
+		for _, m := range g.texts(fromTap) {
+			if strings.Contains(m.Text, "not in tests") {
+				done = true
+				break
+			}
+		}
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("command follow-up never finished: %v", g.texts(fromTap))
+		}
+	}
+	params := sub(cmd, "proposal")["parameters"].(map[string]any)
+	if params["prompt"] != "fix tests" {
+		t.Fatalf("unexpected params: %v", params)
+	}
+}
