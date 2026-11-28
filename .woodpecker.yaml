@@ -4,7 +4,7 @@
 
 steps:
   - name: test-server
-    image: localhost:32000/epsilon-ci-go:main-20261119084320-fb19a1937e22@sha256:0ea790411228b0510099dd16e2986e1ec87ad7a18a3b48cd7196319df447e45b
+    image: localhost:32000/epsilon-ci-go:main-20261128010825-1bc545742cc7@sha256:7687e531e3a6446606b84c648361fb9ff90f167c7057f07b595abcd6184b730e
     commands:
       - export HOME=/tmp/finalechat-home GOCACHE=/tmp/finalechat-go-build GOMODCACHE=/tmp/finalechat-go-mod GOFLAGS=-buildvcs=false
       - mkdir -p "$HOME" "$GOCACHE" "$GOMODCACHE"
@@ -35,7 +35,7 @@ steps:
           capabilities: {drop: [ALL]}
 
   - name: test-web
-    image: localhost:32000/epsilon-ci-node22:main-20261119084320-fb19a1937e22@sha256:a94896daaef04e6099a319f139cebed15dd2e8682a4e3bb6d1b60699b0978986
+    image: localhost:32000/epsilon-ci-node22:main-20261128010825-1bc545742cc7@sha256:0026ca0f91d8119d3ab0e5277984acb8bcb1001e3abaa9adac17e574b3295055
     commands:
       - export HOME=/tmp/finalechat-home npm_config_cache=/tmp/finalechat-npm
       - mkdir -p "$HOME"
@@ -59,7 +59,7 @@ steps:
           capabilities: {drop: [ALL]}
 
   - name: test-cli
-    image: localhost:32000/epsilon-ci-python313:main-20261119084320-fb19a1937e22@sha256:f4ea2756a0a724af8f97cc7b24b45c8e9c8ad20e906f4f4eb00c7f690e1ea6ce
+    image: localhost:32000/epsilon-ci-python313:main-20261128010825-1bc545742cc7@sha256:037fb987ce1f90e8a831cc1009b66b97813dce239b8d4102fd634a48d518ce38
     commands:
       - python3 -m py_compile cli/finalechat
       - python3 cli/finalechat --help >/dev/null
@@ -82,7 +82,7 @@ steps:
           capabilities: {drop: [ALL]}
 
   - name: publish-immutable-image
-    image: localhost:32000/epsilon-buildkit:main-20261119070655-a24d45762658@sha256:85e0c6ae37f5d1f29225442ee1ca8ff626ada7aed01319ca6a3ef627a1f2c3c3
+    image: localhost:32000/epsilon-buildkit:main-20261128010825-1bc545742cc7@sha256:36b2e87404bfc2253c02e54ece0e3ed3eb72aa89f0dfa701d065064a28915ac5
     depends_on: [test-server, test-web, test-cli]
     when:
       - evaluate: 'CI_PIPELINE_EVENT == "push" && CI_COMMIT_BRANCH == CI_REPO_DEFAULT_BRANCH'
